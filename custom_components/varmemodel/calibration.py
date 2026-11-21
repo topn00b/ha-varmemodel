@@ -550,3 +550,40 @@ def fit_cop_loss(steady: Fit, five: dict[int, dict[str, float | None]], comp: li
     eff, st = qa / ea, qs / es
     return Fit(round((1 - eff / st) * 100, 1), n, None, None, steady.t_out_min, steady.t_out_max, "fit",
                {"cop_effective": round(eff, 2), "cop_steady_same_heat": round(st, 2), "value_is": "% lavere COP end stabil drift"})
+
+
+# ---------------------------------------------------------------- COP pr. døgn
+def daily_cop(hours: list[Hour], day_of, steady: Fit | None, days: list[str]) -> dict[str, Any] | None:
+    """Varme ÷ el for de givne døgn (lokal dato via ``day_of(ts)``).
+
+    Giver også COP uden varmt vand og hvad den stabile COP-model forventede for
+    den samme varme, ved timernes ude- og fremløbstemperatur.
+    """
+    hs = [h for h in hours if day_of(h.ts) in days and h.q is not None and h.e is not None]
+    if not hs:
+        return None
+    q = sum(max(h.q, 0.0) for h in hs)
+    e = sum(max(h.e, 0.0) for h in hs)
+    sp = [h for h in hs if not (h.dhw or 0) > 0 and not (h.dhw is None and (h.t_flow or 0) > MAX_FLOW_SPACE_HEATING)]
+    qs = sum(max(h.q, 0.0) for h in sp)
+    es = sum(max(h.e, 0.0) for h in sp)
+    exp = None
+    if steady is not None and steady.value is not None:
+        a, b, c = steady.extra["a"], steady.extra["b"], steady.extra["c"]
+        w = [(h.q, a + b * h.t_out + c * h.t_flow) for h in sp if h.q and h.q > 0.3 and h.t_out is not None and h.t_flow is not None]
+        if w:
+            exp = sum(x for x, _ in w) / sum(x / max(1.2, m) for x, m in w)
+    cop = q / e if e > 0.5 else None
+    cop_sp = qs / es if es > 0.5 else None
+    return {
+        "days": days,
+        "heat_kwh": round(q, 1),
+        "el_kwh": round(e, 1),
+        "cop": None if cop is None else round(cop, 2),
+        "cop_without_dhw": None if cop_sp is None else round(cop_sp, 2),
+        "dhw_hours": sum(1 for h in hs if (h.dhw or 0) > 0),
+        "expected_steady": None if exp is None else round(exp, 2),
+        "vs_steady_pct": None if exp is None or cop_sp is None else round((cop_sp / exp - 1) * 100, 1),
+        "t_out_mean": round(sum(h.t_out for h in hs if h.t_out is not None) / max(1, sum(1 for h in hs if h.t_out is not None)), 1),
+        "hours": len(hs),
+    }

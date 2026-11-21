@@ -121,6 +121,12 @@
       },
       "cop_loss": {
         "name": "Loss from start-up and defrost"
+      },
+      "cop_yesterday": {
+        "name": "COP yesterday"
+      },
+      "cop_week": {
+        "name": "COP last 7 days"
       }
     },
     "button": {

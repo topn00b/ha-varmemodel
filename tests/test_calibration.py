@@ -160,3 +160,17 @@ def test_cop_steady_recovers_coefficients() -> None:
     assert fit.extra["c_source"] == "fit"
     assert abs(fit.extra["c"] + 0.04) < 0.01
     assert abs(fit.value - (4.0 - 0.04 * 35)) < 0.05
+
+
+def test_daily_cop_and_expected_steady() -> None:
+    from custom_components.varmemodel.calibration import Fit, daily_cop
+
+    hours = [Hour(ts=i * 3600, q=3.0, e=1.0, t_out=5.0, t_flow=33.0, dhw=0) for i in range(48)]
+    hours[5].dhw, hours[5].e = 30, 2.0  # én time varmt vand med dårlig COP
+    day_of = lambda ts: "d1" if ts < 24 * 3600 else "d2"  # noqa: E731
+    steady = Fit(3.0, 100, extra={"a": 3.0, "b": 0.0, "c": 0.0})
+    d = daily_cop(hours, day_of, steady, ["d1"])
+    assert d["heat_kwh"] == 72.0 and d["el_kwh"] == 25.0
+    assert d["cop"] == round(72 / 25, 2) and d["cop_without_dhw"] == 3.0
+    assert d["expected_steady"] == 3.0 and d["vs_steady_pct"] == 0.0
+    assert daily_cop(hours, day_of, steady, ["d3"]) is None

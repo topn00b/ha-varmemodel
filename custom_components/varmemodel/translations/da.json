@@ -121,6 +121,12 @@
       },
       "cop_loss": {
         "name": "Tab ved opstart og afrimning"
+      },
+      "cop_yesterday": {
+        "name": "COP i går"
+      },
+      "cop_week": {
+        "name": "COP seneste 7 døgn"
       }
     },
     "button": {

@@ -20,7 +20,7 @@ PRECISION = {"heat_loss": 0, "cop": 2, "cop_steady": 2, "cop_loss": 1, "emission
 
 async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     c = entry.runtime_data
-    async_add_entities([FitSensor(c, k) for k in FIT_KEYS] + [StatusSensor(c)])
+    async_add_entities([FitSensor(c, k) for k in FIT_KEYS] + [DailyCopSensor(c, "yesterday"), DailyCopSensor(c, "week"), StatusSensor(c)])
 
 
 class FitSensor(VarmemodelEntity, SensorEntity):
@@ -84,3 +84,43 @@ class StatusSensor(VarmemodelEntity, SensorEntity):
             "opsamlet_fra": dt_util.as_local(dt_util.utc_from_timestamp(hrs[0])).isoformat() if hrs else None,
             "opsamlede_timer": len(hrs),
         }
+
+
+class DailyCopSensor(VarmemodelEntity, SensorEntity):
+    """Varme ÷ el for i går eller de seneste 7 døgn – det rå regnestykke."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator: VarmemodelCoordinator, period: str) -> None:
+        super().__init__(coordinator, f"cop_{period}")
+        self.period = period
+
+    @property
+    def _d(self) -> dict[str, Any]:
+        return (self.coordinator.daily or {}).get(self.period) or {}
+
+    @property
+    def native_value(self) -> float | None:
+        return self._d.get("cop")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        d = self._d
+        attrs = {
+            "varme_kwh": d.get("heat_kwh"),
+            "el_kwh": d.get("el_kwh"),
+            "cop_uden_varmt_vand": d.get("cop_without_dhw"),
+            "timer_med_varmt_vand": d.get("dhw_hours"),
+            "forventet_stabil_cop": d.get("expected_steady"),
+            "forskel_fra_stabil_pct": d.get("vs_steady_pct"),
+            "ude_snit": d.get("t_out_mean"),
+            "døgn": d.get("days"),
+        }
+        if self.period == "yesterday":
+            attrs["seneste_14_døgn"] = [
+                {"dato": x["days"][0], "varme": x["heat_kwh"], "el": x["el_kwh"], "cop": x["cop"],
+                 "uden_vv": x["cop_without_dhw"], "stabil": x["expected_steady"], "ude": x["t_out_mean"]}
+                for x in (self.coordinator.daily or {}).get("days") or [] if x
+            ]
+        return attrs

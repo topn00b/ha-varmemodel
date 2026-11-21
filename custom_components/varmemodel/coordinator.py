@@ -17,7 +17,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import aggregate as agg
-from .calibration import Fit, Hour, Slot, calibrate, fit_cop_loss, fit_cop_steady, guard, steady_slots
+from .calibration import Fit, Hour, Slot, calibrate, daily_cop, fit_cop_loss, fit_cop_steady, guard, steady_slots
 from .const import (
     BACKFILL_DAYS,
     CALIBRATION_HOUR,
@@ -74,6 +74,7 @@ class VarmemodelCoordinator:
         self.fits: dict[str, dict[str, Any]] = {}
         self.runs: list[dict[str, Any]] = []
         self.slots: dict[str, list[float]] = {}
+        self.daily: dict[str, Any] = {}
         self.mode: str = MODE_CALIBRATED
         self.last_hours: list[Hour] = []
         self.status: str = "waiting"
@@ -99,6 +100,7 @@ class VarmemodelCoordinator:
         self.runs = data.get("runs", [])
         self.mode = data.get("mode", MODE_CALIBRATED)
         self.slots = data.get("slots", {})
+        self.daily = data.get("daily", {})
         if data and data.get("calib_version") != CALIB_VERSION:
             # Ny regnemetode: tallene regnes forfra (opsamlede timer beholdes)
             self.accepted, self.fits, self.runs = {}, {}, []
@@ -122,7 +124,7 @@ class VarmemodelCoordinator:
     async def _save(self) -> None:
         await self.store.async_save(
             {"collected": self.collected, "accepted": self.accepted, "fits": self.fits, "runs": self.runs[-30:], "mode": self.mode,
-             "calib_version": CALIB_VERSION, "slots": self.slots}
+             "calib_version": CALIB_VERSION, "slots": self.slots, "daily": self.daily}
         )
 
     @callback
@@ -226,6 +228,16 @@ class VarmemodelCoordinator:
             return
         now = time.time()
         self.fits = {k: f.as_dict() for k, f in fits.items()}
+        # COP pr. døgn: i går og de seneste 7 hele døgn (lokal tid)
+        day_of = lambda ts: dt_util.as_local(dt_util.utc_from_timestamp(ts)).date().isoformat()  # noqa: E731
+        today = dt_util.now().date()
+        yday = [(today - timedelta(days=1)).isoformat()]
+        week = [(today - timedelta(days=i)).isoformat() for i in range(1, 8)]
+        self.daily = {
+            "yesterday": daily_cop(hours, day_of, fits.get("cop_steady"), yday),
+            "week": daily_cop(hours, day_of, fits.get("cop_steady"), week),
+            "days": [daily_cop(hours, day_of, fits.get("cop_steady"), [(today - timedelta(days=i)).isoformat()]) for i in range(1, 15)],
+        }
         changed = []
         for key in FIT_KEYS:
             self._accept(key, fits[key], now)

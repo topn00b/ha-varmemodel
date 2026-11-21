@@ -35,7 +35,7 @@ async def test_setup_creates_entities(ha: HomeAssistant, entry: MockConfigEntry)
     reg = er.async_get(ha)
     ents = er.async_entries_for_config_entry(reg, entry.entry_id)
     keys = {e.unique_id.removeprefix(entry.entry_id + "_") for e in ents}
-    assert {"heat_loss", "cop", "cop_steady", "cop_loss", "emission", "curve", "cooling", "status", "recalibrate", "mode"} <= keys
+    assert {"heat_loss", "cop", "cop_steady", "cop_loss", "cop_yesterday", "cop_week", "emission", "curve", "cooling", "status", "recalibrate", "mode"} <= keys
 
 
 async def test_calibrate_without_data(ha: HomeAssistant, entry: MockConfigEntry) -> None:

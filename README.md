@@ -12,6 +12,7 @@ Integrationen **styrer ingenting**. Den udgiver tal som sensorer, og hvert tal v
 | Effektiv COP ved 0 °C og 35 °C fremløb | COP = a + b·ude + c·fremløb | Timer hvor kompressoren har kørt hele timen uden varmt vand. **Afrimning tæller med.** Fremløbsleddet c regnes kun ud, hvis fremløbet har varieret mindst 1 grad uafhængigt af udetemperaturen. Ellers bruges en standardværdi, og det står i attributterne. |
 | COP i stabil drift ved 0 °C og 35 °C fremløb | COP = a + b·ude + c·fremløb | 5-minutters portioner: tidligst 10 min efter kompressorstart (eller efter en afrimning) og indtil den afrimer, laver varmt vand eller stopper. Portionerne gemmes i 120 dage, så datagrundlaget vokser. |
 | Tab ved opstart og afrimning | % | Målt COP over al kompressortid mod stabil COP for den samme varme. |
+| COP i går / seneste 7 døgn | varme ÷ el | Det rå regnestykke: kWh varme delt med kWh el. Attributterne viser også COP uden varmt vand, hvad den stabile COP-model forventede for samme vejr og fremløb, og de seneste 14 døgn. |
 | Gulvets afgivelse | kW pr. grad fremløb over rum | 25 %-fraktilen af varme ÷ (fremløb − rum) i driftstimer. |
 | Maks. effekt / laveste målte effekt | kW | 90 %-fraktilen af varmen i fulde driftstimer / 10 %-fraktilen i timer, hvor kompressoren kørte hele timen. Kan kun blive lav, hvis varmepumpen faktisk har kørt lavt. |
 | Varmekurve ved 0 °C | °C, plus hældning | Setpunkt minus kurve-forskydning mod udetemperatur. |
