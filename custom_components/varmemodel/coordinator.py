@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -853,7 +855,8 @@ class VarmemodelCoordinator:
                     margin=min(0.6, max(0.2, float(ex.get("accuracy_6h_k") or 0.3))), neighbours=nbs,
                 ))
             target = (sum(mins) / len(mins) + offset) if mins else 20.5 + boost
-            p = make_plan(hours, model, rooms, target, int(self.conf.get(CONF_MAX_PAUSE) or 0))
+            p = await self.hass.async_add_executor_job(
+                partial(make_plan, hours, model, rooms, target, int(self.conf.get(CONF_MAX_PAUSE) or 0), label=_clock))
             plans[sid] = {"hours": p.hours, "rooms": p.rooms, "demand_kwh": p.demand_kwh, "heat_kwh": p.heat_kwh,
                           "el_kwh": p.el_kwh, "cost_kr": p.cost_kr, "reason": p.reason, "warnings": p.warnings,
                           "target": round(target, 1), "rooms_skipped": skipped, "boost": boost_on}
@@ -863,3 +866,8 @@ class VarmemodelCoordinator:
         self.plan_meta = {"updated": now, "inputs_ok": not missing, "missing": missing, "horizon_h": len(hours),
                           "blocked_known": bool(blocks)}
         self._notify()
+
+
+def _clock(ts: int) -> str:
+    """Lokal klokkeslæt til planens advarsler, fx 'kl. 23'."""
+    return dt_util.as_local(dt_util.utc_from_timestamp(ts)).strftime("kl. %H")

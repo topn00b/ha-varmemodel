@@ -16,6 +16,7 @@ Rene funktioner uden Home Assistant. Alle tal kommer fra kalibreringen:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -97,7 +98,8 @@ def simulate_rooms(rooms: list[PlanRoom], hours: list[PlanHour], q: list[float],
 
 
 def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
-              max_pause: int = 0, past_q: list[float] | None = None) -> Plan:
+              max_pause: int = 0, past_q: list[float] | None = None,
+              label: Callable[[int], str] | None = None) -> Plan:
     """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra."""
     n = len(hours)
     plan = Plan()
@@ -117,7 +119,8 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
         h = hours[i]
         return h.price * (_el(model, h.t_out, p1, target) - _el(model, h.t_out, p0, target))
 
-    def add_cheapest(cands: list[int], amount_left: float) -> bool:
+    def add_cheapest(cands: list[int], amount_left: float) -> float:
+        """Læg en portion i den billigste kandidat-time. Giver mængden tilbage (0 = ingen plads)."""
         best, best_c, best_a = None, float("inf"), 0.0
         for i in cands:
             a = max(STEP, model.p_min) if q[i] == 0 else STEP
@@ -125,9 +128,9 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
             if c < best_c:
                 best, best_c, best_a = i, c, a
         if best is None:
-            return False
+            return 0.0
         q[best] += best_a
-        return True
+        return best_a
 
     # 2) vandfyldning til husets behov
     need = sum(demand)
@@ -138,34 +141,32 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
             plan.warnings.append("behovet kan ikke dækkes i de frie timer")
             break
 
-    # 3) rummene: kommer et rum under min + usikkerhed, lægges varme i den billigste time før.
-    #    Kan det ikke rettes (fx allerede nu i en blokeret time), springes det over, og de andre rum
-    #    tjekkes stadig. Hvert rum kan højst kræve 10 kWh ekstra, så ét svagt rum ikke trækker hele planen.
+    # 3) rummene: kommer et rum under min + usikkerhed, lægges varme i den billigste frie time før.
+    #    Kan en time ikke rettes (fx rød lige nu, eller timerne før er fulde), springes netop den time
+    #    over, og tjekket fortsætter – så der stadig varmes op før næste blokering. Hvert rum kan højst
+    #    kræve 10 kWh ekstra, så ét svagt rum ikke trækker hele planen.
     skip: set[tuple[str, int]] = set()
     extra: dict[str, float] = {}
-    warned: set[str] = set()
-    for _ in range(400):
+    for _ in range(1500):
         sim = simulate_rooms(rooms, hours, q, past_q)
-        worst = None
+        worst: tuple[int, PlanRoom] | None = None
         for r in rooms:
             for i, t in enumerate(sim[r.name]):
                 if t < r.t_min + r.margin and (r.name, i) not in skip:
                     if worst is None or i < worst[0]:
-                        worst = (i, r.name)
+                        worst = (i, r)
                     break
         if worst is None:
             break
-        i_bad, name = worst
-        before = [j for j in free if j <= i_bad]
-        if extra.get(name, 0.0) >= 10.0 or not before or not add_cheapest(before, STEP):
-            # kan ikke rettes: resten af timerne for dette rum accepteres, men der advares
-            for k in range(i_bad, n):
-                skip.add((name, k))
-            if name not in warned:
-                warned.add(name)
-                plan.warnings.append(f"{name} forventes under min. + usikkerhed fra time {i_bad}")
+        i_bad, r = worst
+        if extra.get(r.name, 0.0) >= 10.0:
+            skip.update((r.name, k) for k in range(i_bad, n))
             continue
-        extra[name] = extra.get(name, 0.0) + STEP
+        added = add_cheapest([j for j in free if j <= i_bad], STEP)
+        if added:
+            extra[r.name] = extra.get(r.name, 0.0) + added
+        else:
+            skip.add((r.name, i_bad))
 
     # 4) for lange pauser brydes med pausens billigste frie time
     if max_pause > 0:
@@ -184,8 +185,14 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
                 break
             q[hit] = max(q[hit], model.p_min)
 
-    # 5) resultat time for time
+    # 5) resultat time for time. Der advares kun, når et rum ventes under selve min. (ikke min. + usikkerhed).
     plan.rooms = simulate_rooms(rooms, hours, q, past_q)
+    lab = label or (lambda ts: f"om {(ts - hours[0].ts) // 3600} t")
+    for r in rooms:
+        s = plan.rooms[r.name]
+        k = min(range(n), key=s.__getitem__)
+        if s[k] < r.t_min:
+            plan.warnings.append(f"{r.name} ventes under min.: {s[k]:.1f} °C {lab(hours[k].ts)} (min. {r.t_min:.1f})")
     for i, h in enumerate(hours):
         p = round(q[i], 2)
         flow = target + (p / model.emission_kw_k if p > 0 and model.emission_kw_k > 0 else 0.0)

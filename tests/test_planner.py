@@ -74,7 +74,23 @@ def test_unfixable_room_does_not_stop_other_rooms() -> None:
     cold = PlanRoom("Stue", t_now=19.0, t_min=20.0, heat_now=0.03, heat_delayed=0.02, cool_per_hk=0.005, margin=0.3)
     other = PlanRoom("Gang", t_now=20.4, t_min=20.0, heat_now=0.03, heat_delayed=0.02, cool_per_hk=0.01, margin=0.3)
     hs = hours(n=24, t_out=lambda i: -2.0, blocked=lambda i: i < 3)
-    p = make_plan(hs, M, [cold, other], 20.5)
-    assert any("Stue" in w for w in p.warnings)
-    late = p.rooms["Gang"][6:]
-    assert min(late) >= other.t_min + other.margin - 0.05 or any("Gang" in w for w in p.warnings)
+    both = make_plan(hs, M, [cold, other], 20.5)
+    only_cold = make_plan(hs, M, [cold], 20.5)
+    assert any("Stue" in w for w in both.warnings)
+    assert both.heat_kwh > only_cold.heat_kwh
+
+
+def test_room_checked_again_after_blocked_start() -> None:
+    """Under grænsen i en rød start: tjekket fortsætter, så der varmes før næste røde blok."""
+    room = PlanRoom("Stue", t_now=20.2, t_min=20.0, heat_now=0.03, heat_delayed=0.02, cool_per_hk=0.005, margin=0.3)
+    hs = hours(n=24, price=lambda i: 1.0 if i >= 21 else 3.0, t_out=lambda i: -2.0, blocked=lambda i: i < 3 or 12 <= i < 21)
+    with_room = make_plan(hs, M, [room], 20.5)
+    without = make_plan(hs, M, [], 20.5)
+    assert sum(h["heat_kw"] for h in with_room.hours[3:12]) > sum(h["heat_kw"] for h in without.hours[3:12])
+    assert all(h["heat_kw"] == 0 for h in with_room.hours if h["blocked"])
+
+
+def test_no_warning_when_only_margin_is_touched() -> None:
+    room = PlanRoom("Stue", t_now=20.25, t_min=20.0, heat_now=0.0, heat_delayed=0.0, cool_per_hk=0.0, margin=0.4)
+    p = make_plan(hours(n=6, blocked=lambda i: True), M, [room], 20.5)
+    assert p.warnings == [] or all("Stue" not in w for w in p.warnings)
