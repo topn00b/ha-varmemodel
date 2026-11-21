@@ -151,6 +151,12 @@
       },
       "measures": {
         "name": "Energy measures"
+      },
+      "room_forecast_device": {
+        "name": "Forecast for now"
+      },
+      "room_forecast": {
+        "name": "{room} forecast for now"
       }
     },
     "button": {

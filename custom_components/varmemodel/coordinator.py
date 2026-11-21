@@ -578,6 +578,7 @@ class VarmemodelCoordinator:
             "source": fit.source if fit.value is not None else "beholdt",
             "n": fit.n,
             "r2": None if fit.r2 is None else round(fit.r2, 3),
+            "rmse": None if fit.rmse is None else round(fit.rmse, 4),
             "t_out_min": lo,
             "t_out_max": hi,
             "fitted_at": now if fit.value is not None else (prev or {}).get("fitted_at"),
@@ -792,7 +793,8 @@ class VarmemodelCoordinator:
             name=r["name"] or r["key"], t_now=t_room, t_min=t_min,
             heat_now=float(src.get("now") or 0.0), heat_delayed=float(src.get("delayed") or 0.0),
             cool_per_hk=float(fitd["value"]) / 20, free_per_h=float(ex.get("free_heat_k_per_day") or 0.0) / 24,
-            margin=min(0.6, max(0.2, float(ex.get("accuracy_6h_k") or 0.3))), neighbours=nbs,
+            margin=min(0.6, max(0.2, float(ex.get("accuracy_6h_k") or 0.3))) + (0.2 if (fitd.get("r2") or 0) < 0.3 else 0.0),
+            neighbours=nbs,
         )
 
     def _yesterday(self, day_of: Callable[[int], str], day: str) -> dict[str, dict[str, Any]]:
@@ -973,6 +975,14 @@ class VarmemodelCoordinator:
                 if r["in_plan"] and t_min is not None:
                     rooms.append(pr)
                     mins.append(t_min)
+            # Koldere end det, modellen er målt ved: forsigtig plan (+10 % varmetab, +0,2 °C margen i rummene)
+            cold_lim = (a.get("heat_loss") or {}).get("t_out_min")
+            coldest = min((x.t_out for x in hours), default=None)
+            cold = cold_lim is not None and coldest is not None and coldest < cold_lim - 1
+            if cold:
+                model.heat_loss_w_k *= 1.1
+                for pr in show:
+                    pr.margin += 0.2
             target = (sum(mins) / len(mins) + offset) if mins else 20.5
             p = await self.hass.async_add_executor_job(
                 partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), label=_clock,
@@ -1011,7 +1021,11 @@ class VarmemodelCoordinator:
                     checks[r.name] = {"ventet": f[5], "målt": round(r.t_now, 2), "afvigelse": dev, "grænse": lim,
                                       "status": "ramt" if abs(dev) <= hit else ("over" if dev > 0 else "under"), "flag": abs(dev) > lim}
             self.rooms_check = checks
-            plans[sid] = {"hours": p.hours, "rooms": fc_all, "rooms_planned": [r.name for r in rooms], "demand_kwh": p.demand_kwh, "heat_kwh": p.heat_kwh,
+            if cold:
+                note = f"koldere end det kalibrerede område ({coldest:.0f} °C mod {cold_lim:.0f} °C) – planen er forsigtig"
+                p.warnings.append(note)
+                p.reason += " – " + note
+            plans[sid] = {"hours": p.hours, "rooms": fc_all, "rooms_planned": [r.name for r in rooms], "cautious": cold, "demand_kwh": p.demand_kwh, "heat_kwh": p.heat_kwh,
                           "el_kwh": p.el_kwh, "cost_kr": p.cost_kr, "reason": p.reason, "warnings": p.warnings,
                           "target": round(target, 1), "rooms_skipped": skipped, "boost": boost_on, "boost_until": boost_note,
                           "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE),

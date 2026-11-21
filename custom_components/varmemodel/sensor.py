@@ -37,7 +37,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
             ents += [DailyElSensor(c, s, "yesterday"), DailyElSensor(c, s, "week")]
         async_add_entities(ents, config_subentry_id=sid)
     for r in c.rooms_cfg:
-        rents: list[SensorEntity] = [RoomSensor(c, r)]
+        rents: list[SensorEntity] = [RoomSensor(c, r), RoomForecastSensor(c, r)]
         src = c.room_source(r)
         if (r["valve"] or r["always_open"]) and src is not None and src.kind == SOURCE_HYDRONIC:
             rents.append(RoomHeatSensor(c, r))
@@ -80,6 +80,7 @@ class FitSensor(SourceEntity, SensorEntity):
         f = self.src.fits.get(self.key) or {}
         return {
             "kilde": a.get("source", "ingen data"),
+            "typisk_fejl": a.get("rmse"),
             "begrænsning": a.get("guard"),
             "beregnet_værdi": f.get("value"),
             "målinger": f.get("n"),
@@ -396,3 +397,25 @@ class MeasuresSensor(VarmemodelEntity, SensorEntity):
         from .const import CONF_MEASURES_CALENDAR
 
         return {"kalender": self.coordinator.conf.get(CONF_MEASURES_CALENDAR), "tiltag": self.coordinator.measures or None}
+
+
+class RoomForecastSensor(RoomEntity, SensorEntity):
+    """Det, rummodellen for 6 timer siden forudsagde for nu. Historikken viser, om forudsigelserne holder."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = "°C"
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: VarmemodelCoordinator, room: dict[str, Any]) -> None:
+        super().__init__(coordinator, room, "room_forecast")
+        self.room_name = room.get("name") or room["key"]
+
+    @property
+    def native_value(self) -> float | None:
+        return (self.coordinator.rooms_check.get(self.room_name) or {}).get("ventet")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        k = self.coordinator.rooms_check.get(self.room_name) or {}
+        return {"målt": k.get("målt"), "afvigelse": k.get("afvigelse"), "status": k.get("status"), "grænse": k.get("grænse"), "afviger": k.get("flag")}

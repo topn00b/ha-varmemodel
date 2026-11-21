@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.5.2';
+  const VERSION = '0.5.3';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -670,7 +670,7 @@
         const sc = this.sc(main.name);
         g += BOX(20, 140, 260, 420, main.name, sc.model || 'varmepumpe');
         g += P(150, 200, 236, p.status) + TX(150, 232, p.plan, 'm c', D.differs ? ` style="fill:${YE};font-weight:700"` : '');
-        g += P(150, 260, 236, p.ud) + P(150, 330, 236, p.cop) + P(150, 390, 236, p.flow) + P(150, 470, 236, p.ind);
+        g += P(150, 260, 236, p.ud) + P(150, 345, 236, p.cop) + P(150, 430, 236, p.flow);
         if (D.f.dhw || p.tank) {
           g += BOX(20, 580, 260, 120, 'Varmt vand') + TX(90, 628, 'beholder', 'm c') + TX(215, 628, 'laver nu', 'm c');
           g += (p.tank ? P(90, 656, 110, p.tank) : TX(90, 662, '–', 'c')) + P(215, 656, 130, p.vv) + PATH('M150 560 V580', D.dhw ? 'hot' : 'idle');
@@ -731,7 +731,7 @@
         if (vv) g += BOX(265, 10, 245, 100, 'Varmt vand') + TX(327, 56, 'beholder', 'm c') + TX(447, 56, 'laver nu', 'm c') + (p.tank ? P(327, 84, 105, p.tank) : '') + P(447, 84, 110, p.vv);
         g += BOX(10, 125, 500, 235, `${main.name} · ${sc.model || 'varmepumpe'}`);
         g += P(135, 180, 230, p.status) + TX(135, 212, p.plan, 'm c', D.differs ? ` style="fill:${YE};font-weight:700"` : '');
-        g += P(385, 180, 230, p.ud) + P(135, 250, 230, p.cop) + P(385, 250, 230, p.flow) + P(385, 320, 230, p.ind);
+        g += P(385, 180, 230, p.ud) + P(135, 250, 230, p.cop) + P(385, 250, 230, p.flow);
         const bp = !!c.bypass, bf = !!c.buffer;
         g += PATH('M440 360 V776', 'hot', true) + PATH('M80 780 V364', 'cold', true);
         if (bp) {

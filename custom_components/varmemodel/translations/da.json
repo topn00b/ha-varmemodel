@@ -151,6 +151,12 @@
       },
       "measures": {
         "name": "Energitiltag"
+      },
+      "room_forecast_device": {
+        "name": "Forudsagt for nu"
+      },
+      "room_forecast": {
+        "name": "{room} forudsagt for nu"
       }
     },
     "button": {
