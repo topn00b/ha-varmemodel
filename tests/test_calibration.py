@@ -112,7 +112,7 @@ def test_cooling_time_constant() -> None:
 
 def test_calibrate_returns_all_keys() -> None:
     res = calibrate(synth())
-    assert set(res) == {"heat_loss", "cop", "emission", "max_power", "min_power", "curve", "defrost", "cooling"}
+    assert set(res) == {"heat_loss", "cop", "emission", "max_power", "min_power", "curve", "defrost", "cooling", "wind_effect"}
     assert res["emission"].value is not None
 
 
@@ -174,3 +174,40 @@ def test_daily_cop_and_expected_steady() -> None:
     assert d["cop"] == round(72 / 25, 2) and d["cop_without_dhw"] == 3.0
     assert d["expected_steady"] == 3.0 and d["vs_steady_pct"] == 0.0
     assert daily_cop(hours, day_of, steady, ["d3"]) is None
+
+
+def test_weather_recovers_wind_and_sun() -> None:
+    from custom_components.varmemodel.calibration import fit_weather
+
+    rnd = random.Random(7)
+    hours = []
+    w_true, s_true = 0.03, 0.8  # 3 % pr. m/s, 0,8 kW sol ved klar himmel
+    for i in range(24 * 90):
+        day = i // 24
+        t_out = 5 + 4 * math.sin(day / 5) + rnd.gauss(0, 0.3)
+        wind = max(0.0, 4 + 3 * math.sin(day / 3.3) + rnd.gauss(0, 0.5))
+        cloud = rnd.choice([10, 50, 95])
+        uv = 1.0 if 8 <= i % 24 < 16 else 0.0
+        sun = (1 - cloud / 100) if uv else 0.0
+        q = max(0.0, H_TRUE / 1000 * (20.5 - t_out) * (1 + w_true * wind) - 0.2 - s_true * sun + rnd.gauss(0, 0.03))
+        hours.append(Hour(ts=i * 3600, q=q, t_out=t_out, t_in=20.5, wind=wind, cloud=cloud, uv=uv, wind_u=0.0, wind_v=wind))
+    f = fit_weather(hours)
+    assert f.source == "fit"
+    assert abs(f.value - w_true * 100) < 0.6
+    assert abs(f.extra["sun_kw_clear"] - s_true) < 0.15
+
+
+def test_weather_waits_for_data() -> None:
+    from custom_components.varmemodel.calibration import fit_weather
+
+    f = fit_weather([Hour(ts=i * 3600, q=1.0, t_out=5.0, t_in=20.0) for i in range(24 * 60)])
+    assert f.value is None and "vejrdata" in f.note
+
+
+def test_wind_sector_from_vector() -> None:
+    from custom_components.varmemodel.calibration import wind_sector
+
+    assert wind_sector(0.0, 5.0) == "N"  # vind fra nord
+    assert wind_sector(5.0, 0.0) == "Ø"
+    assert wind_sector(-3.5, -3.5) == "SV"
+    assert wind_sector(0.1, 0.1) is None

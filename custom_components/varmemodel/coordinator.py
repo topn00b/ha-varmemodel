@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timedelta
 import logging
+from math import cos, radians, sin
 import time
 from typing import Any
 
@@ -38,6 +39,7 @@ from .const import (
     CONF_RETURN,
     CONF_SETPOINT,
     CONF_SETPOINT_ATTR,
+    CONF_WEATHER,
     CONF_WINDOW_DAYS,
     DEFAULT_WINDOW_DAYS,
     DOMAIN,
@@ -163,11 +165,17 @@ class VarmemodelCoordinator:
         end = agg.hour_start(now)
         done = [int(k) for k in self.collected]
         start = max(done) + agg.HOUR if done else end - BACKFILL_DAYS * 86400
+        if self._id(CONF_WEATHER):
+            # Vejr tilføjet efter opstart: hent vejret ind for de timer, der mangler det
+            missing = [int(k) for k, v in self.collected.items() if "ws" not in v and int(k) >= end - BACKFILL_DAYS * 86400]
+            if missing:
+                start = min(start, min(missing))
         start = max(start, end - BACKFILL_DAYS * 86400)
         if start >= end:
             return
         rows = await get_instance(self.hass).async_add_executor_job(self._collect_sync, start, end)
-        self.collected.update({str(k): v for k, v in rows.items()})
+        for k, v in rows.items():
+            self.collected.setdefault(str(k), {}).update(v)
         cutoff = now - COLLECT_KEEP_DAYS * 86400
         self.collected = {k: v for k, v in self.collected.items() if int(k) >= cutoff}
 
@@ -200,6 +208,27 @@ class VarmemodelCoordinator:
                     v = _num(s.attributes.get(attr)) if attr else _num(s.state)
                 pts.append((s.last_updated.timestamp(), None if v is None else v - zero))
             return pts
+
+        if eid := self._id(CONF_WEATHER):
+            ws, wu, wv, cc, uv = [], [], [], [], []
+            for st in changes(eid):
+                a = st.attributes
+                t = st.last_updated.timestamp()
+                speed = _num(a.get("wind_speed"))
+                if speed is not None:
+                    unit = str(a.get("wind_speed_unit") or "km/h")
+                    speed = speed / 3.6 if unit == "km/h" else speed * 0.44704 if unit == "mph" else speed / 1.944 if unit == "kn" else speed
+                bearing = _num(a.get("wind_bearing"))
+                ws.append((t, speed))
+                # Vinden kommer FRA bearing; vektoren peger mod hvor den kommer fra
+                wu.append((t, None if speed is None or bearing is None else speed * sin(radians(bearing))))
+                wv.append((t, None if speed is None or bearing is None else speed * cos(radians(bearing))))
+                cc.append((t, _num(a.get("cloud_coverage"))))
+                uv.append((t, _num(a.get("uv_index"))))
+            for key, series in (("ws", ws), ("wu", wu), ("wv", wv), ("cc", cc), ("uv", uv)):
+                for h, v in agg.step_mean(series, start, end).items():
+                    if h in out:
+                        out[h][key] = v
 
         if eid := self._id(CONF_SETPOINT):
             for h, v in agg.step_mean(attr_series(eid, self.conf.get(CONF_SETPOINT_ATTR) or None, 0.0, False), start, end).items():
@@ -313,6 +342,11 @@ class VarmemodelCoordinator:
                     defrost=c.get("df_n"),
                     setpoint=c.get("sp"),
                     offset=c.get("off"),
+                    wind=c.get("ws"),
+                    wind_u=c.get("wu"),
+                    wind_v=c.get("wv"),
+                    cloud=c.get("cc"),
+                    uv=c.get("uv"),
                 )
             )
         # Målefejl (spring i måleren) sorteres fra

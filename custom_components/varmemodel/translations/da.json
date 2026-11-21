@@ -20,7 +20,8 @@
           "curve_offset": "Kurve-forskydning (entitet)",
           "curve_offset_attribute": "Kurve-forskydning: attribut (tom = tilstand)",
           "curve_offset_zero": "Kurve-forskydning: værdi der betyder 0",
-          "window_days": "Dage med data i kalibreringen"
+          "window_days": "Dage med data i kalibreringen",
+          "weather": "Vejr (vind, skydække, UV)"
         },
         "data_description": {
           "electricity_energy": "Skal have langtidsstatistik.",
@@ -31,7 +32,8 @@
           "dhw": "Timer med varmt vand holdes ude af rumopvarmningen.",
           "flow_setpoint": "Fx varmepumpens vand-setpunkt. Bruges til at finde varmekurven.",
           "curve_offset": "Fx den entitet, hvis måltemperatur forskyder kurven.",
-          "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0."
+          "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0.",
+          "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud."
         }
       }
     },
@@ -59,7 +61,8 @@
           "curve_offset": "Kurve-forskydning (entitet)",
           "curve_offset_attribute": "Kurve-forskydning: attribut (tom = tilstand)",
           "curve_offset_zero": "Kurve-forskydning: værdi der betyder 0",
-          "window_days": "Dage med data i kalibreringen"
+          "window_days": "Dage med data i kalibreringen",
+          "weather": "Vejr (vind, skydække, UV)"
         },
         "data_description": {
           "electricity_energy": "Skal have langtidsstatistik.",
@@ -70,7 +73,8 @@
           "dhw": "Timer med varmt vand holdes ude af rumopvarmningen.",
           "flow_setpoint": "Fx varmepumpens vand-setpunkt. Bruges til at finde varmekurven.",
           "curve_offset": "Fx den entitet, hvis måltemperatur forskyder kurven.",
-          "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0."
+          "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0.",
+          "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud."
         }
       }
     },
@@ -127,6 +131,9 @@
       },
       "cop_week": {
         "name": "COP seneste 7 døgn"
+      },
+      "wind_effect": {
+        "name": "Vind: ekstra varmetab pr. m/s"
       }
     },
     "button": {

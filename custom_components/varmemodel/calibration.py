@@ -43,6 +43,11 @@ class Hour:
     defrost: float | None = None
     setpoint: float | None = None
     offset: float | None = None
+    wind: float | None = None  # m/s, middel
+    wind_u: float | None = None  # vindvektor øst-vest (m/s), til middelretning
+    wind_v: float | None = None  # vindvektor nord-syd (m/s)
+    cloud: float | None = None  # skydække %, middel
+    uv: float | None = None  # UV-indeks, middel (> 0 = dagslys)
 
 
 @dataclass
@@ -414,7 +419,10 @@ def fit_cooling(hours: list[Hour], min_run: int = 3, min_runs: int = 3) -> Fit:
 # ---------------------------------------------------------------- samlet
 def calibrate(hours: list[Hour]) -> dict[str, Fit]:
     pmax, pmin = fit_power(hours)
+    wind = fit_weather(hours)
+    wind.extra["sectors"] = fit_wind_sectors(hours)
     return {
+        "wind_effect": wind,
         "heat_loss": fit_heat_loss(hours),
         "cop": fit_cop(hours),
         "emission": fit_emission(hours),
@@ -587,3 +595,91 @@ def daily_cop(hours: list[Hour], day_of, steady: Fit | None, days: list[str]) ->
         "t_out_mean": round(sum(h.t_out for h in hs if h.t_out is not None) / max(1, sum(1 for h in hs if h.t_out is not None)), 1),
         "hours": len(hs),
     }
+
+
+# ---------------------------------------------------------------- vejr: vind og sol
+SECTORS = ["N", "NØ", "Ø", "SØ", "S", "SV", "V", "NV"]
+
+
+def wind_sector(u: float, v: float) -> str | None:
+    """Retning vinden kommer FRA, ud fra middel-vindvektoren (u = fra øst, v = fra nord)."""
+    from math import atan2, degrees, hypot
+
+    if hypot(u, v) < 0.5:
+        return None
+    b = (degrees(atan2(u, v)) + 360) % 360
+    return SECTORS[int(((b + 22.5) % 360) // 45)]
+
+
+def sun_factor(h: Hour) -> float | None:
+    """1 = klar himmel i dagslys, 0 = nat eller helt overskyet."""
+    if h.cloud is None or h.uv is None:
+        return None
+    return (1 - h.cloud / 100) if h.uv > 0 else 0.0
+
+
+def fit_weather(hours: list[Hour], block_hours: int = 48, min_blocks: int = 15, min_wind_sd: float = 1.0) -> Fit:
+    """Varmetab med vind og sol: varme = H·ΔT·(1 + w·vind) − G − S·sol (48-timers blokke).
+
+    Værdien er w i % ekstra varmetab pr. m/s vind. Solens gratis varme S (kW ved
+    klar himmel i dagslys) ligger i attributterne.
+    """
+    known = [h.t_in for h in hours if h.t_in is not None]
+    t_in_typ = median(known) if known else None
+    blocks: dict[int, list[Hour]] = {}
+    for h in hours:
+        if h.q is None or h.t_out is None or h.wind is None or sun_factor(h) is None or (h.t_in is None and t_in_typ is None):
+            continue
+        blocks.setdefault(h.ts // (block_hours * 3600), []).append(h)
+    rows, y, winds, touts = [], [], [], []
+    for hs in blocks.values():
+        if len(hs) < block_hours * 0.9:
+            continue
+        dt = [(h.t_in if h.t_in is not None else t_in_typ) - h.t_out for h in hs]
+        q = sum(max(h.q, 0.0) for h in hs if not (h.dhw or 0) >= 30) / len(hs)
+        w = sum(h.wind for h in hs) / len(hs)
+        sun = sum(sun_factor(h) for h in hs) / len(hs)
+        d = sum(dt) / len(dt)
+        rows.append([d, d * w, -1.0, -sun])
+        y.append(q)
+        winds.append(w)
+        touts += [h.t_out for h in hs]
+    lo, hi = _range(touts)
+    if len(rows) < min_blocks:
+        return Fit(None, len(rows), t_out_min=lo, t_out_max=hi, note=f"samler vejrdata – kræver {min_blocks} blokke à {block_hours} t")
+    mw = sum(winds) / len(winds)
+    sd = sqrt(sum((w - mw) ** 2 for w in winds) / len(winds))
+    if sd < min_wind_sd:
+        return Fit(None, len(rows), t_out_min=lo, t_out_max=hi, note="for lidt variation i vindstyrke endnu")
+    res = ols(rows, y)
+    if not res:
+        return Fit(None, len(rows), t_out_min=lo, t_out_max=hi, note="kunne ikke tilpasses")
+    (h_, hw, g, sg), (se_h, se_hw, _, se_s) = res
+    if h_ <= 0:
+        return Fit(None, len(rows), t_out_min=lo, t_out_max=hi, note="ingen sammenhæng")
+    pred = [sum(b * x for b, x in zip((h_, hw, g, sg), r)) for r in rows]
+    r2, rmse = _r2_rmse(y, pred)
+    return Fit(
+        round(hw / h_ * 100, 2), len(rows), r2, rmse and round(rmse, 3), lo, hi, "fit",
+        {"heat_loss_calm_w_k": round(h_ * 1000, 1), "wind_pct_se": round(se_hw / h_ * 100, 2),
+         "sun_kw_clear": round(sg, 2), "sun_kw_se": round(se_s, 2), "gains_w": round(g * 1000, 0),
+         "wind_mean_ms": round(mw, 1), "value_is": "% ekstra varmetab pr. m/s vind"},
+    )
+
+
+def fit_wind_sectors(hours: list[Hour], min_hours: int = 6) -> dict[str, Any]:
+    """Afkøling i pauser uden varme pr. vindretning (grader i timen ved 20 graders forskel)."""
+    by: dict[str, list[float]] = {}
+    sh = sorted(hours, key=lambda h: h.ts)
+    for a, b in zip(sh, sh[1:]):
+        if b.ts - a.ts != 3600 or None in (a.q, b.q, a.t_in, b.t_in, b.t_out, b.wind_u, b.wind_v):
+            continue
+        if a.q > 0.05 or b.q > 0.05:
+            continue
+        dt = (a.t_in + b.t_in) / 2 - b.t_out
+        sec = wind_sector(b.wind_u, b.wind_v)
+        if dt < 5 or sec is None:
+            continue
+        by.setdefault(sec, []).append((a.t_in - b.t_in) / dt * 20)
+    return {k: {"hours": len(v), "k_per_hour_at_20k": round(median(v), 3) if len(v) >= min_hours else None}
+            for k, v in sorted(by.items(), key=lambda kv: SECTORS.index(kv[0]))}

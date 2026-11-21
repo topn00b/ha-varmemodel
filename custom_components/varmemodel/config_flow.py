@@ -26,6 +26,7 @@ from .const import (
     CONF_RETURN,
     CONF_SETPOINT,
     CONF_SETPOINT_ATTR,
+    CONF_WEATHER,
     CONF_WINDOW_DAYS,
     DEFAULT_NAME,
     DEFAULT_WINDOW_DAYS,
@@ -35,13 +36,14 @@ from .const import (
 ENERGY = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="energy"))
 TEMP = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature"))
 TEMPS = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature", multiple=True))
+WEATHER = selector.EntitySelector(selector.EntitySelectorConfig(domain="weather"))
 BINARY = selector.EntitySelector(selector.EntitySelectorConfig(domain="binary_sensor"))
 ANY = selector.EntitySelector(selector.EntitySelectorConfig(domain=["climate", "sensor", "number", "input_number", "water_heater"]))
 TEXT = selector.TextSelector()
 ZERO = selector.NumberSelector(selector.NumberSelectorConfig(min=-50, max=100, step=0.5, mode=selector.NumberSelectorMode.BOX))
 DAYS = selector.NumberSelector(selector.NumberSelectorConfig(min=14, max=365, step=1, mode=selector.NumberSelectorMode.BOX))
 
-ENTITY_KEYS = (CONF_HEAT, CONF_ELECTRICITY, CONF_OUTDOOR, CONF_FLOW, CONF_RETURN, CONF_COMPRESSOR, CONF_DEFROST, CONF_DHW, CONF_SETPOINT, CONF_OFFSET)
+ENTITY_KEYS = (CONF_WEATHER, CONF_HEAT, CONF_ELECTRICITY, CONF_OUTDOOR, CONF_FLOW, CONF_RETURN, CONF_COMPRESSOR, CONF_DEFROST, CONF_DHW, CONF_SETPOINT, CONF_OFFSET)
 
 
 def _schema(d: dict[str, Any], with_name: bool) -> vol.Schema:
@@ -61,6 +63,7 @@ def _schema(d: dict[str, Any], with_name: bool) -> vol.Schema:
         opt(CONF_COMPRESSOR, BINARY),
         opt(CONF_DEFROST, BINARY),
         opt(CONF_DHW, BINARY),
+        opt(CONF_WEATHER, WEATHER),
         opt(CONF_SETPOINT, ANY),
         opt(CONF_SETPOINT_ATTR, TEXT),
         opt(CONF_OFFSET, ANY),

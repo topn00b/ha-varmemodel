@@ -17,6 +17,7 @@ Integrationen **styrer ingenting**. Den udgiver tal som sensorer, og hvert tal v
 | Maks. effekt / laveste målte effekt | kW | 90 %-fraktilen af varmen i fulde driftstimer / 10 %-fraktilen i timer, hvor kompressoren kørte hele timen. Kan kun blive lav, hvis varmepumpen faktisk har kørt lavt. |
 | Varmekurve ved 0 °C | °C, plus hældning | Setpunkt minus kurve-forskydning mod udetemperatur. |
 | Afrimninger pr. kompressortime | i alt og pr. udetemperatur og effekt | Talt time for time. Kun rapport. |
+| Vind: ekstra varmetab pr. m/s | % | Varmetab med vind og sol: varme = H·ΔT·(1 + w·vind) − G − S·sol over 48-timers blokke. Attributterne viser solens gratis varme ved klar himmel, varmetabet i stille vejr og afkølingen i pauser pr. vindretning. Kræver vejr-entitet og ca. 30 dages opsamlede vejrdata. |
 | Afkølingstid | timer | Hvor hurtigt rummene falder i pauser uden varme. |
 | Kalibrering | status | ok, delvis, for få data, fastfrosset eller fejl. |
 
@@ -47,12 +48,13 @@ Du vælger selv dine sensorer. Kun el, udetemperatur og rumtemperaturer er påkr
 | Rumtemperaturer | `sensor.rum_1`, `sensor.rum_2` | varmetab, afgivelse, afkøling |
 | Fremløb / retur | `sensor.fremlob`, `sensor.retur` | COP, afgivelse |
 | Kompressor / afrimning / varmt vand | `binary_sensor.kompressor` … | fulde driftstimer, afrimninger, varmt vand |
+| Vejr | `weather.hjem` | vind, vindretning, skydække og UV time for time |
 | Fremløbs-setpunkt (entitet + evt. attribut) | `climate.vand`, attribut `temperature` | varmekurven |
 | Kurve-forskydning (entitet + attribut + nulpunkt) | `climate.varmepumpe`, `temperature`, 17 | varmekurven |
 
 Sensorer med energi og temperatur skal have langtidsstatistik (`state_class`). Det tjekker opsætningen.
 
-On/off-sensorer (kompressor, afrimning, varmt vand) gemmer Home Assistant ikke som langtidsstatistik. Integrationen opsummerer dem derfor selv time for time og gemmer dem i 120 dage. Ved første opstart fyldes de seneste 14 dage op fra historikken.
+On/off-sensorer (kompressor, afrimning, varmt vand) og vejrets attributter gemmer Home Assistant ikke som langtidsstatistik. Integrationen opsummerer dem derfor selv time for time og gemmer dem i 120 dage. Ved første opstart fyldes de seneste 14 dage op fra historikken.
 
 ## Diagnostik
 

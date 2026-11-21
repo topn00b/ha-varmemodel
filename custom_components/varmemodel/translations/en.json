@@ -20,7 +20,8 @@
           "curve_offset": "Curve offset (entity)",
           "curve_offset_attribute": "Curve offset: attribute (empty = state)",
           "curve_offset_zero": "Curve offset: value meaning 0",
-          "window_days": "Days of data used for calibration"
+          "window_days": "Days of data used for calibration",
+          "weather": "Weather (wind, cloud cover, UV)"
         },
         "data_description": {
           "electricity_energy": "Must have long-term statistics.",
@@ -31,7 +32,8 @@
           "dhw": "Hours with hot water are excluded from space heating.",
           "flow_setpoint": "E.g. the water setpoint. Used to fit the heating curve.",
           "curve_offset": "E.g. the entity whose target shifts the curve.",
-          "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0."
+          "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0.",
+          "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated."
         }
       }
     },
@@ -59,7 +61,8 @@
           "curve_offset": "Curve offset (entity)",
           "curve_offset_attribute": "Curve offset: attribute (empty = state)",
           "curve_offset_zero": "Curve offset: value meaning 0",
-          "window_days": "Days of data used for calibration"
+          "window_days": "Days of data used for calibration",
+          "weather": "Weather (wind, cloud cover, UV)"
         },
         "data_description": {
           "electricity_energy": "Must have long-term statistics.",
@@ -70,7 +73,8 @@
           "dhw": "Hours with hot water are excluded from space heating.",
           "flow_setpoint": "E.g. the water setpoint. Used to fit the heating curve.",
           "curve_offset": "E.g. the entity whose target shifts the curve.",
-          "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0."
+          "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0.",
+          "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated."
         }
       }
     },
@@ -127,6 +131,9 @@
       },
       "cop_week": {
         "name": "COP last 7 days"
+      },
+      "wind_effect": {
+        "name": "Wind: extra heat loss per m/s"
       }
     },
     "button": {

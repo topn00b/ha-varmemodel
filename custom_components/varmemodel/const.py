@@ -20,6 +20,7 @@ CONF_OFFSET = "curve_offset"
 CONF_OFFSET_ATTR = "curve_offset_attribute"
 CONF_OFFSET_ZERO = "curve_offset_zero"
 CONF_WINDOW_DAYS = "window_days"
+CONF_WEATHER = "weather"
 
 DEFAULT_NAME = "Varmepumpe"
 DEFAULT_WINDOW_DAYS = 60
@@ -41,6 +42,7 @@ FIT_KEYS: dict[str, str | None] = {
     "curve": "°C",
     "defrost": None,
     "cooling": "h",
+    "wind_effect": "%",
 }
 
 # Øges når selve regnemetoden ændres: så regnes tallene forfra uden ±10 %-grænsen
