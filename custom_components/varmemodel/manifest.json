@@ -13,5 +13,9 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/topn00b/ha-varmemodel/issues",
   "requirements": [],
-  "version": "0.5.0"
+  "version": "0.5.1",
+  "after_dependencies": [
+    "frontend",
+    "http"
+  ]
 }

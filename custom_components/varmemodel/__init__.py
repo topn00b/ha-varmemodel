@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     CONF_LEGACY_IDS,
@@ -24,6 +27,32 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.BUTTON, Platform.NUMBER, Platform.SELECT, Platform.SENSOR]
 
 type VarmemodelConfigEntry = ConfigEntry[VarmemodelCoordinator]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+CARDS_URL = "/varmemodel/varmemodel-cards.js"
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Gør Varmemodels kort (anlæg, rum, varmekilder, energitiltag, hus) tilgængelige i brugerfladen."""
+    if getattr(hass, "http", None) is None:
+        return True
+    try:
+        from homeassistant.components.frontend import add_extra_js_url
+        from homeassistant.components.http import StaticPathConfig
+
+        path = Path(__file__).parent / "frontend" / "varmemodel-cards.js"
+        version = (await hass.async_add_executor_job(_manifest_version))
+        await hass.http.async_register_static_paths([StaticPathConfig(CARDS_URL, str(path), True)])
+        add_extra_js_url(hass, f"{CARDS_URL}?v={version}")
+    except Exception:  # noqa: BLE001 – kortene må aldrig stoppe integrationen
+        _LOGGER.exception("Kunne ikke registrere Varmemodels kort")
+    return True
+
+
+def _manifest_version() -> str:
+    import json
+
+    return json.loads((Path(__file__).parent / "manifest.json").read_text(encoding="utf-8")).get("version", "0")
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

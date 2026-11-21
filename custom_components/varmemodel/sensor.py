@@ -149,7 +149,7 @@ class DailyElSensor(SourceEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         d = (self.src.daily or {}).get(self.period) or {}
         b = self.src.el_backup or {}
-        return {"ude_snit": d.get("t_out_mean"), "døgn": d.get("days"),
+        return {"ude_snit": d.get("t_out_mean"), "døgn": d.get("days"), "følere": _sensors(self.src),
                 "supplerende_måler_faktor": b.get("factor"), "supplerende_måler_timer_brugt": b.get("used_hours"),
                 "supplerende_måler_timer_overlap": b.get("overlap_hours")}
 
@@ -181,6 +181,7 @@ class StatusSensor(VarmemodelEntity, SensorEntity):
             "begrænsede_tal": last.get("limited") or [],
             "opsamlet_fra": _ts_local(hrs[0]) if hrs else None,
             "opsamlede_timer": len(hrs),
+            "følere": {"ude": c.conf.get("outdoor_temp"), "vejr": c.conf.get("weather")},
         }
 
 
@@ -275,6 +276,11 @@ class RoomHeatSensor(RoomEntity, SensorEntity):
         }
 
 
+def _sensors(src: SourceState) -> dict[str, Any]:
+    """Varmekildens målinger fra opsætningen (entiteter og deres attribut-/nulpunkt-felter)."""
+    return {k: v for k, v in src.conf.items() if k not in ("name", "source_type", "legacy_ids") and v not in (None, "", [])}
+
+
 def _now_hour(plan: dict[str, Any]) -> dict[str, Any] | None:
     import time as _t
 
@@ -323,6 +329,8 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "plan": [{"t": _ts_local(x["ts"]), **{k: x[k] for k in ("heat_kw", "flow", "shift", "price", "t_out", "blocked", "cost")}} for x in hrs],
             "rooms_forecast": p.get("rooms"),
             "rooms_check": self.coordinator.rooms_check or None,
+            "rooms_planned": p.get("rooms_planned"),
+            "følere": _sensors(self.src),
             "boost_until": p.get("boost_until"), "boost_delta": p.get("boost_delta"), "red_allowance": p.get("red_allowance"),
             "max_pause": p.get("max_pause"), "comfort_offset": p.get("comfort_offset"),
             "history": [{"t": _ts_local(int(k)), "plan": v["p"], "price": v["pr"], "blocked": v["b"]}

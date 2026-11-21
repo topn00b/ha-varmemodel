@@ -39,7 +39,7 @@ from .calibration import (
     sun_factor,
 )
 from .inputs import blocked_hours, hourly_forecast, hourly_prices
-from .planner import PlanHour, PlanRoom, SourceModel, make_plan
+from .planner import PlanHour, PlanRoom, SourceModel, make_plan, simulate_rooms
 from .const import (
     BACKFILL_DAYS,
     CALIB_VERSION,
@@ -774,6 +774,27 @@ class VarmemodelCoordinator:
             for k, a in acc.items()
         }
 
+    def _plan_room(self, r: dict[str, Any], s: SourceState, t_min: float) -> PlanRoom | None:
+        """Rummets model til planen og forudsigelsen (None hvis rummet mangler måling eller model for kilden)."""
+        t_room = self._state_num(r["key"])
+        fitd = self.rooms.get(r["key"]) or {}
+        ex = fitd.get("extra") or {}
+        src = (ex.get("sources") or {}).get(s.name)
+        if t_room is None or not src or fitd.get("value") is None:
+            return None
+        nbs = []
+        for nb_name, nb in (ex.get("neighbours") or {}).items():
+            nb_eid = next((n for n in r.get("neighbours") or [] if self._label(n) == nb_name), None)
+            tn = self._state_num(nb_eid)
+            if tn is not None:
+                nbs.append((float(nb.get("per_h_k") or 0.0), tn))
+        return PlanRoom(
+            name=r["name"] or r["key"], t_now=t_room, t_min=t_min,
+            heat_now=float(src.get("now") or 0.0), heat_delayed=float(src.get("delayed") or 0.0),
+            cool_per_hk=float(fitd["value"]) / 20, free_per_h=float(ex.get("free_heat_k_per_day") or 0.0) / 24,
+            margin=min(0.6, max(0.2, float(ex.get("accuracy_6h_k") or 0.3))), neighbours=nbs,
+        )
+
     def _yesterday(self, day_of: Callable[[int], str], day: str) -> dict[str, dict[str, Any]]:
         """Gårsdagen time for time: det planlagte (ved timens start) mod det, der faktisk skete."""
         out: dict[str, dict[str, Any]] = {}
@@ -936,33 +957,22 @@ class VarmemodelCoordinator:
                 emission_kw_k=v("emission", 0.25), curve_c0=v("curve", 34.0),
                 curve_slope=float(((a.get("curve") or {}).get("extra") or {}).get("slope", -0.6)),
             )
-            rooms: list[PlanRoom] = []
+            rooms: list[PlanRoom] = []  # rum med komfortgulv: styrer planen
+            show: list[PlanRoom] = []  # alle varmekildens rum: forudsiges og vises
             mins: list[float] = []
             skipped: list[str] = []
             for r in self.rooms_cfg:
-                if not r["in_plan"] or self.room_source(r) is not s:
+                if self.room_source(r) is not s:
                     continue
-                t_room = self._state_num(r["key"])
                 t_min = self._state_num(r["min_entity"]) if r["min_entity"] else (_num(r["min"]) if r["min"] is not None else None)
-                fitd = self.rooms.get(r["key"]) or {}
-                ex = fitd.get("extra") or {}
-                src = (ex.get("sources") or {}).get(s.name)
-                if t_room is None or t_min is None or not src or fitd.get("value") is None:
+                pr = self._plan_room(r, s, t_min if t_min is not None else -99.0)
+                if pr is None:
                     skipped.append(r["name"] or r["key"])
                     continue
-                mins.append(t_min)
-                nbs = []
-                for nb_name, nb in (ex.get("neighbours") or {}).items():
-                    nb_eid = next((n for n in r.get("neighbours") or [] if self._label(n) == nb_name), None)
-                    tn = self._state_num(nb_eid)
-                    if tn is not None:
-                        nbs.append((float(nb.get("per_h_k") or 0.0), tn))
-                rooms.append(PlanRoom(
-                    name=r["name"] or r["key"], t_now=t_room, t_min=t_min,
-                    heat_now=float(src.get("now") or 0.0), heat_delayed=float(src.get("delayed") or 0.0),
-                    cool_per_hk=float(fitd["value"]) / 20, free_per_h=float(ex.get("free_heat_k_per_day") or 0.0) / 24,
-                    margin=min(0.6, max(0.2, float(ex.get("accuracy_6h_k") or 0.3))), neighbours=nbs,
-                ))
+                show.append(pr)
+                if r["in_plan"] and t_min is not None:
+                    rooms.append(pr)
+                    mins.append(t_min)
             target = (sum(mins) / len(mins) + offset) if mins else 20.5
             p = await self.hass.async_add_executor_job(
                 partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), label=_clock,
@@ -975,20 +985,33 @@ class VarmemodelCoordinator:
                                 "pr": x["price"], "b": x["blocked"], "s": x["shift"]}
             for k in [k for k in log if int(k) < h0 - 3 * 86400]:
                 del log[k]
-            if p.rooms and str(h0) not in self.fc_log:
-                self.fc_log[str(h0)] = {name: v[:8] for name, v in p.rooms.items()}
+            # Forudsigelse for alle rum: varmekildens rum med planens varme, luft-luft-kilders rum med
+            # samme tilførsel som de seneste 24 timer (de har ingen plan endnu)
+            fc_all = simulate_rooms(show, hours, [x["heat_kw"] for x in p.hours]) if show else {}
+            for s2 in self.sources.values():
+                if s2.kind == SOURCE_HYDRONIC:
+                    continue
+                air = [x for r in self.rooms_cfg if self.room_source(r) is s2 and (x := self._plan_room(r, s2, -99.0)) is not None]
+                if air:
+                    recent = [v for hr in s2.last_hours[-24:] if (v := self._source_input(s2, hr)) is not None]
+                    avg = sum(recent) / len(recent) if recent else 0.0
+                    fc_all.update(simulate_rooms(air, hours, [avg] * len(hours), [avg] * 6))
+                    show += air
+            if fc_all and str(h0) not in self.fc_log:
+                self.fc_log[str(h0)] = {name: v[:8] for name, v in fc_all.items()}
             for k in [k for k in self.fc_log if int(k) < h0 - 8 * 3600]:
                 del self.fc_log[k]
             checks: dict[str, dict[str, Any]] = {}
             old_fc = self.fc_log.get(str(h0 - 6 * 3600)) or {}
-            for r in rooms:
+            for r in show:
                 f = old_fc.get(r.name) or []
                 if len(f) > 5:
                     dev = round(r.t_now - f[5], 2)
-                    lim = round(max(0.3, 2 * r.margin), 2)
-                    checks[r.name] = {"ventet": f[5], "målt": round(r.t_now, 2), "afvigelse": dev, "grænse": lim, "flag": abs(dev) > lim}
+                    hit, lim = max(0.15, r.margin), round(max(0.3, 2 * r.margin), 2)
+                    checks[r.name] = {"ventet": f[5], "målt": round(r.t_now, 2), "afvigelse": dev, "grænse": lim,
+                                      "status": "ramt" if abs(dev) <= hit else ("over" if dev > 0 else "under"), "flag": abs(dev) > lim}
             self.rooms_check = checks
-            plans[sid] = {"hours": p.hours, "rooms": p.rooms, "demand_kwh": p.demand_kwh, "heat_kwh": p.heat_kwh,
+            plans[sid] = {"hours": p.hours, "rooms": fc_all, "rooms_planned": [r.name for r in rooms], "demand_kwh": p.demand_kwh, "heat_kwh": p.heat_kwh,
                           "el_kwh": p.el_kwh, "cost_kr": p.cost_kr, "reason": p.reason, "warnings": p.warnings,
                           "target": round(target, 1), "rooms_skipped": skipped, "boost": boost_on, "boost_until": boost_note,
                           "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE),

@@ -116,6 +116,76 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 
 Til planlægning bruges COP-formlen fra *COP i stabil drift*, men højere effekt eller fremløb må aldrig gøre COP bedre: et positivt effektled holdes fast ved referenceeffekten (det skyldes typisk koldt gulv efter pauser, ikke effekten selv).
 
+## Kort til dashboardet
+
+Integrationen leverer fem kort, som selv finder Varmemodels entiteter (Hus → varmekilde → rum). Tilføj dem med *Tilføj kort* eller i YAML:
+
+| Kort | Viser |
+|---|---|
+| `custom:varmemodel-anlaeg-card` | anlægget nu: varmekilde, kredsløb, rum, planen på en tidslinje og afvigelser |
+| `custom:varmemodel-rum-card` | rummene: målt, forudsagt for 6 timer siden (ramt, over eller under), de næste timer og rummodellens tal |
+| `custom:varmemodel-kilde-card` | varmekildernes tal: effektivitet, COP for 14 døgn, bygning og anlæg |
+| `custom:varmemodel-tiltag-card` | energitiltag: hvilke rum taber varmen hurtigst, vaner, vind og før/efter |
+| `custom:varmemodel-hus-card` | status, planen og planens indstillinger |
+
+**Pålidelighed:** sikre tal står som de er, foreløbige har »≈« foran, usikre er nedtonede, manglende er »–«. Tryk på et tal for detaljer. Følere, der falder kortvarigt ud, vises med seneste kendte værdi i op til 30 min.
+
+**Anlægskortet** tegnes efter dit anlæg. Alt er valgfrit:
+
+```yaml
+type: custom:varmemodel-anlaeg-card
+buffer: true          # buffertank i returen
+bypass: true          # kortslutning (T-stykke) mellem fremløb og retur
+dry_run: true         # planen styrer ikke endnu
+zone: sensor.price_level        # prisniveau (rød/gul/grøn)
+price: sensor.electricity_price # elpris nu
+extra:                # op til to ekstra temperaturer i ude-boksen
+  - name: Kælder
+    entity: sensor.basement_temperature
+notes:                # tekst fra en entitet, fx et udluftningsråd
+  - entity: sensor.airing_advice
+    attribute: text
+flags:                # vises i prisfeltet, når entiteten har tilstanden
+  - entity: input_boolean.circulation_stopped
+    state: "on"
+    text: Cirkulation stoppet
+alerts:               # egne afvigelser
+  - entity: automation.heating
+    state: "off"
+    text: Varmeautomatikken er slukket
+actions:              # knapper (slår til/fra)
+  - entity: input_boolean.im_cold
+    name: Jeg fryser
+sources:
+  Heat pump:          # varmekildens navn i Varmemodel
+    climate: climate.heat_pump
+    heat_power: sensor.heat_power       # varmeeffekt nu (kW eller W)
+    el_power: sensor.heat_pump_power    # eleffekt nu (kW eller W)
+    flow_rate: sensor.flow_rate         # L/min
+    tank: sensor.hot_water_temperature
+    pump: input_select.pump_curve       # cirkulationspumpe efter kortslutningen
+    pump_running: binary_sensor.pump_running
+    a: sensor.pipe_heat_pump_out        # følere: A varmepumpe ud, B manifold ind,
+    b: sensor.pipe_manifold_in          #         C manifold retur, D varmepumpe ind
+    c: sensor.pipe_manifold_return
+    d: sensor.pipe_heat_pump_in
+  Air to air:
+    climate: climate.air_to_air
+    el_power: sensor.air_to_air_power
+```
+
+Live COP vises kun i stabil drift (kompressoren har kørt i 10 min., ingen afrimning eller varmt vand) og sammenlignes med den forventede fra *COP i stabil drift*. Er den mere end 0,5 under i 30 min., markeres det.
+
+**Rumkortet** grupperer efter varmekilde eller efter dine egne grupper:
+
+```yaml
+type: custom:varmemodel-rum-card
+compact: true
+groups:
+  - name: Stueplan
+    rooms: [Stue, Køkken]
+```
+
 ## Sådan læser du tallene
 
 Alle tal er **målt i dit eget hus**. De bliver bedre, jo længere integrationen har kørt, og hvert tal fortæller selv, hvor sikkert det er.

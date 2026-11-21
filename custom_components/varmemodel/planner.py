@@ -203,7 +203,7 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
         s = plan.rooms[r.name]
         k = min(range(n), key=lambda j: s[j] - limit(r, j))
         if s[k] < limit(r, k):
-            plan.warnings.append(f"{r.name} ventes under min.: {s[k]:.1f} °C {lab(hours[k].ts)} (grænse {limit(r, k):.1f})")
+            plan.warnings.append(f"{r.name}: {s[k]:.1f} °C {lab(hours[k].ts)} er under planens grænse ({limit(r, k):.1f})")
     for i, h in enumerate(hours):
         p = round(q[i], 2)
         flow = target + (p / model.emission_kw_k if p > 0 and model.emission_kw_k > 0 else 0.0)
