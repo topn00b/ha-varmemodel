@@ -17,7 +17,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import aggregate as agg
-from .calibration import Fit, Hour, calibrate, guard
+from .calibration import Fit, Hour, Slot, calibrate, fit_cop_loss, fit_cop_steady, guard, steady_slots
 from .const import (
     BACKFILL_DAYS,
     CALIBRATION_HOUR,
@@ -73,6 +73,7 @@ class VarmemodelCoordinator:
         self.accepted: dict[str, dict[str, Any]] = {}
         self.fits: dict[str, dict[str, Any]] = {}
         self.runs: list[dict[str, Any]] = []
+        self.slots: dict[str, list[float]] = {}
         self.mode: str = MODE_CALIBRATED
         self.last_hours: list[Hour] = []
         self.status: str = "waiting"
@@ -97,6 +98,7 @@ class VarmemodelCoordinator:
         self.fits = data.get("fits", {})
         self.runs = data.get("runs", [])
         self.mode = data.get("mode", MODE_CALIBRATED)
+        self.slots = data.get("slots", {})
         if data and data.get("calib_version") != CALIB_VERSION:
             # Ny regnemetode: tallene regnes forfra (opsamlede timer beholdes)
             self.accepted, self.fits, self.runs = {}, {}, []
@@ -120,7 +122,7 @@ class VarmemodelCoordinator:
     async def _save(self) -> None:
         await self.store.async_save(
             {"collected": self.collected, "accepted": self.accepted, "fits": self.fits, "runs": self.runs[-30:], "mode": self.mode,
-             "calib_version": CALIB_VERSION}
+             "calib_version": CALIB_VERSION, "slots": self.slots}
         )
 
     @callback
@@ -215,6 +217,8 @@ class VarmemodelCoordinator:
             hours = await get_instance(self.hass).async_add_executor_job(self._hours_sync)
             self.last_hours = hours
             fits = await self.hass.async_add_executor_job(calibrate, hours)
+            steady, loss = await get_instance(self.hass).async_add_executor_job(self._steady_sync)
+            fits["cop_steady"], fits["cop_loss"] = steady, loss
         except Exception as err:  # noqa: BLE001 – vis fejlen i status i stedet for at stoppe
             _LOGGER.exception("Kalibrering fejlede")
             self.status, self.status_note = "error", str(err)
@@ -301,3 +305,38 @@ class VarmemodelCoordinator:
             )
         # Målefejl (spring i måleren) sorteres fra
         return [h for h in hours if not ((h.q or 0) > 15 or (h.e or 0) > 8 or (h.q or 0) < -0.5)]
+
+    # ------------------------------------------------------------ COP i stabil drift
+    def _steady_sync(self) -> tuple[Fit, Fit]:
+        """5-minutters portioner fra de seneste 14 dage lægges til de gemte; COP regnes på alle."""
+        heat, el, out, flow = (self._id(k) for k in (CONF_HEAT, CONF_ELECTRICITY, CONF_OUTDOOR, CONF_FLOW))
+        comp_id = self._id(CONF_COMPRESSOR)
+        if not (heat and el and out and flow and comp_id):
+            note = "kræver varme, el, ude, fremløb og kompressor"
+            return Fit(None, 0, note=note), Fit(None, 0, note=note)
+        end = dt_util.utcnow()
+        start = end - timedelta(days=BACKFILL_DAYS)
+        stats = statistics_during_period(
+            self.hass, start, end, {heat, el, out, flow}, "5minute", {"energy": "kWh", "temperature": "°C"}, {"change", "mean"}
+        )
+        five: dict[int, dict[str, float | None]] = {}
+        for sid, key, field in ((heat, "q", "change"), (el, "e", "change"), (out, "t_out", "mean"), (flow, "t_flow", "mean")):
+            for x in stats.get(sid, []):
+                five.setdefault(int(_ts(x["start"])), {})[key] = _num(x.get(field))
+
+        def ivs(key: str) -> list[tuple[float, float]]:
+            eid = self._id(key)
+            if not eid:
+                return []
+            res = history.get_significant_states(self.hass, start, end, [eid], include_start_time_state=True, significant_changes_only=False)
+            ch = [(s.last_changed.timestamp(), s.state == "on") for s in res.get(eid, []) if isinstance(s, State) and s.state not in ("unknown", "unavailable")]
+            return agg.intervals(ch, end.timestamp())
+
+        comp, defrost, dhw = ivs(CONF_COMPRESSOR), ivs(CONF_DEFROST), ivs(CONF_DHW)
+        for sl in steady_slots(five, comp, defrost, dhw):
+            self.slots[str(sl.ts)] = [round(sl.q, 4), round(sl.e, 4), round(sl.t_out, 2), round(sl.t_flow, 2), sl.run_min]
+        cutoff = end.timestamp() - COLLECT_KEEP_DAYS * 86400
+        self.slots = {k: v for k, v in self.slots.items() if int(k) >= cutoff}
+        all_slots = [Slot(int(k), *v) for k, v in self.slots.items()]
+        steady = fit_cop_steady(all_slots)
+        return steady, fit_cop_loss(steady, five, comp, dhw)

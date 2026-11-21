@@ -33,6 +33,8 @@ MODE_FROZEN = "frozen"
 FIT_KEYS: dict[str, str | None] = {
     "heat_loss": "W/K",
     "cop": None,
+    "cop_steady": None,
+    "cop_loss": "%",
     "emission": "kW/K",
     "max_power": "kW",
     "min_power": "kW",

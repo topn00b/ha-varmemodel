@@ -15,7 +15,7 @@ from .const import FIT_KEYS
 from .coordinator import VarmemodelCoordinator
 from .entity import VarmemodelEntity
 
-PRECISION = {"heat_loss": 0, "cop": 2, "emission": 3, "max_power": 2, "min_power": 2, "curve": 1, "defrost": 2, "cooling": 0}
+PRECISION = {"heat_loss": 0, "cop": 2, "cop_steady": 2, "cop_loss": 1, "emission": 3, "max_power": 2, "min_power": 2, "curve": 1, "defrost": 2, "cooling": 0}
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:

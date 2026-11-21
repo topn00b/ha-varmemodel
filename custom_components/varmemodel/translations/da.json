@@ -85,7 +85,7 @@
         "name": "Varmetab"
       },
       "cop": {
-        "name": "COP ved 0 °C og 35 °C fremløb"
+        "name": "Effektiv COP ved 0 °C og 35 °C fremløb"
       },
       "emission": {
         "name": "Gulvets afgivelse"
@@ -115,6 +115,12 @@
           "frozen": "Fastfrosset",
           "error": "Fejl"
         }
+      },
+      "cop_steady": {
+        "name": "COP i stabil drift ved 0 °C og 35 °C fremløb"
+      },
+      "cop_loss": {
+        "name": "Tab ved opstart og afrimning"
       }
     },
     "button": {

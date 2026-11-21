@@ -128,3 +128,35 @@ def test_guard_limits_and_cold_weather() -> None:
     assert v == 100.0
     v, note = guard(50.0, None, (0.0, 1.0), (None, None))
     assert v == 50.0 and note == "ny"
+
+
+def test_steady_slots_skip_start_and_stop_at_defrost() -> None:
+    from custom_components.varmemodel.calibration import steady_slots
+
+    t0 = 1_700_000_100  # ikke på en 5-minutters grænse
+    five = {t: {"q": 0.3, "e": 0.1, "t_out": 5.0, "t_flow": 33.0} for t in range(1_699_999_800, t0 + 7200, 300)}
+    comp = [(t0, t0 + 3600)]
+    defrost = [(t0 + 2400, t0 + 2700)]
+    sl = steady_slots(five, comp, defrost, [])
+    # Første portion starter tidligst 10 min efter start, og ingen portion overlapper afrimningen
+    assert sl[0].ts >= t0 + 600
+    assert all(not (s.ts < t0 + 2700 and s.ts + 300 > t0 + 2400) for s in sl)
+    # Efter afrimningen ventes igen 10 minutter
+    after = [s for s in sl if s.ts >= t0 + 2700]
+    assert after and after[0].ts >= t0 + 2700 + 600
+
+
+def test_cop_steady_recovers_coefficients() -> None:
+    from custom_components.varmemodel.calibration import Slot, fit_cop_steady
+
+    rnd = random.Random(3)
+    slots = []
+    for i in range(600):
+        u = rnd.uniform(-3, 10)
+        f = 30 + rnd.uniform(-3, 6) - 0.5 * u
+        cop = 4.0 + 0.15 * u - 0.04 * f + rnd.gauss(0, 0.05)
+        slots.append(Slot(i * 300, cop * 0.1, 0.1, u, f, 20.0))
+    fit = fit_cop_steady(slots)
+    assert fit.extra["c_source"] == "fit"
+    assert abs(fit.extra["c"] + 0.04) < 0.01
+    assert abs(fit.value - (4.0 - 0.04 * 35)) < 0.05

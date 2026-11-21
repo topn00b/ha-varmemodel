@@ -85,7 +85,7 @@
         "name": "Heat loss"
       },
       "cop": {
-        "name": "COP at 0 °C and 35 °C flow"
+        "name": "Effective COP at 0 °C and 35 °C flow"
       },
       "emission": {
         "name": "Floor emission"
@@ -115,6 +115,12 @@
           "frozen": "Frozen",
           "error": "Error"
         }
+      },
+      "cop_steady": {
+        "name": "Steady-state COP at 0 °C and 35 °C flow"
+      },
+      "cop_loss": {
+        "name": "Loss from start-up and defrost"
       }
     },
     "button": {

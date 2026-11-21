@@ -82,3 +82,18 @@ def _add_val(acc: dict[int, list[float]], a: float, b: float, v: float | None) -
         s[0] += v * (nxt - t)
         s[1] += nxt - t
         t = nxt
+
+
+def intervals(changes: list[tuple[float, bool]], end: float) -> list[tuple[float, float]]:
+    """Perioder hvor en on/off-serie var tændt."""
+    out: list[tuple[float, float]] = []
+    cur: float | None = None
+    for t, on in sorted(changes):
+        if on and cur is None:
+            cur = t
+        elif not on and cur is not None:
+            out.append((cur, t))
+            cur = None
+    if cur is not None:
+        out.append((cur, end))
+    return out

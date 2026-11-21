@@ -444,3 +444,109 @@ def guard(new: float | None, prev: float | None, new_range: tuple[float | None, 
     if lo <= new <= hi:
         return new, "koldere vejr" if colder else "ok"
     return round(max(lo, min(hi, new)), 6), f"begrænset til ±{round(lim * 100)} %"
+
+
+# ---------------------------------------------------------------- COP i stabil drift (5-minutters portioner)
+@dataclass
+class Slot:
+    """Fem minutters drift efter mindst 10 minutter med kompressoren i gang."""
+
+    ts: int
+    q: float
+    e: float
+    t_out: float
+    t_flow: float
+    run_min: float
+
+
+def steady_slots(
+    five: dict[int, dict[str, float | None]],
+    comp: list[tuple[float, float]],
+    defrost: list[tuple[float, float]],
+    dhw: list[tuple[float, float]],
+    wait: int = 600,
+    min_e: float = 0.02,
+) -> list[Slot]:
+    """Byg portioner: start 10 min efter kompressorstart (eller efter en afrimning),
+    tag 5 minutter ad gangen, indtil den afrimer, laver varmt vand eller stopper.
+
+    ``five`` er {portionens start: {"q", "e", "t_out", "t_flow"}} fra 5-minutters statistik.
+    """
+    def hit(a: float, b: float, ivs: list[tuple[float, float]]) -> bool:
+        return any(x < b and y > a for x, y in ivs)
+
+    segs: list[tuple[float, float]] = []
+    for a, b in comp:
+        st = a
+        for x, y in sorted(d for d in defrost if d[0] < b and d[1] > a):
+            segs.append((st, x))
+            st = y
+        segs.append((st, b))
+    out: list[Slot] = []
+    for a, b in segs:
+        t = int(-(-(a + wait) // 300) * 300)
+        while t + 300 <= b:
+            if hit(t, t + 300, defrost) or hit(t, t + 300, dhw):
+                break
+            r = five.get(t) or {}
+            q, e, u, f = r.get("q"), r.get("e"), r.get("t_out"), r.get("t_flow")
+            if None not in (q, e, u, f) and e >= min_e and q > 0:
+                out.append(Slot(t, q, e, u, f, round((t - a) / 60, 1)))
+            t += 300
+    return out
+
+
+def fit_cop_steady(slots: list[Slot], min_n: int = 100) -> Fit:
+    """COP i stabil drift = a + b·ude + c·fremløb (uden opstart og afrimning)."""
+    s = [x for x in slots if COP_LIMITS[0] <= x.q / x.e <= COP_LIMITS[1]]
+    lo, hi = _range([x.t_out for x in s])
+    if len(s) < min_n:
+        return Fit(None, len(s), t_out_min=lo, t_out_max=hi, note="for få 5-minutters portioner i stabil drift")
+    y = [x.q / x.e for x in s]
+    res = ols([[1.0, x.t_out, x.t_flow] for x in s], y)
+    if not res:
+        return Fit(None, len(s), t_out_min=lo, t_out_max=hi, note="kunne ikke tilpasses")
+    (a, b, c), (_, sb, sc) = res
+    c_source = "fit"
+    if not (c < 0 and sc < abs(c) / 2):
+        c, c_source = PRIOR_COP_PER_K_FLOW / 2, "prior"
+        r2 = ols([[1.0, x.t_out] for x in s], [v - c * x.t_flow for v, x in zip(y, s)])
+        if r2:
+            (a, b), _ = r2
+    pred = [a + b * x.t_out + c * x.t_flow for x in s]
+    r2v, rmse = _r2_rmse(y, pred)
+    return Fit(
+        round(a + c * 35.0, 3), len(s), r2v, rmse and round(rmse, 3), lo, hi, "fit",
+        {"a": round(a, 4), "b": round(b, 4), "c": round(c, 4), "c_source": c_source, "c_se": round(sc, 4),
+         "per_k_flow_pct": round(-c / (a + b * 5 + c * 33) * 100, 1),
+         "formula": "COP = a + b·ude + c·fremløb", "value_is": "COP i stabil drift ved 0 °C ude og 35 °C fremløb",
+         "method": "5-minutters portioner fra 10 min efter start til afrimning, varmt vand eller stop"},
+    )
+
+
+def fit_cop_loss(steady: Fit, five: dict[int, dict[str, float | None]], comp: list[tuple[float, float]],
+                 dhw: list[tuple[float, float]]) -> Fit:
+    """Tab ved opstart og afrimning: målt COP over al kompressortid mod stabil COP for samme varme."""
+    if steady.value is None:
+        return Fit(None, 0, note="kræver COP i stabil drift")
+    a, b, c = steady.extra["a"], steady.extra["b"], steady.extra["c"]
+    qa = ea = qs = es = 0.0
+    n = 0
+    for x, y in comp:
+        t = int(x // 300 * 300)
+        while t < y:
+            r = five.get(t) or {}
+            q, e, u, f = r.get("q"), r.get("e"), r.get("t_out"), r.get("t_flow")
+            if None not in (q, e) and not any(p < t + 300 and k > t for p, k in dhw):
+                qa += q
+                ea += e
+                n += 1
+                if None not in (u, f) and q > 0:
+                    qs += q
+                    es += q / max(1.2, a + b * u + c * f)
+            t += 300
+    if ea <= 1 or es <= 0:
+        return Fit(None, n, note="for lidt kompressortid")
+    eff, st = qa / ea, qs / es
+    return Fit(round((1 - eff / st) * 100, 1), n, None, None, steady.t_out_min, steady.t_out_max, "fit",
+               {"cop_effective": round(eff, 2), "cop_steady_same_heat": round(st, 2), "value_is": "% lavere COP end stabil drift"})
