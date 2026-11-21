@@ -263,3 +263,19 @@ def test_room_model_adds_recent_source_when_it_matters() -> None:
     assert f.source == "fit"
     assert "Ny" in f.extra["sources"] and f.extra["sources_added_recent"] == ["Ny"]
     assert abs(f.extra["sources"]["Ny"]["total"] - 0.08) < 0.03
+
+
+def test_room_model_adds_recent_neighbour() -> None:
+    """En nabozone med kort historik tages med, når den tydeligt påvirker rummet."""
+    from custom_components.varmemodel.calibration import RoomHour, fit_room
+
+    rnd = random.Random(9)
+    t, hours, n = 20.0, [], 24 * 50
+    for i in range(n):
+        t_out = 4 + 3 * math.sin(i / 60)
+        nb = 23 + 3 * math.sin(i / 7)
+        q = 4.0 if (i % 24) < 8 else 0.0
+        t = t + 0.01 * q + 0.004 * (t_out - t) + 0.05 * (nb - t) + rnd.gauss(0, 0.01)
+        hours.append(RoomHour(ts=i * 3600, t_room=t, t_out=t_out, q=q, neighbours={"Trappe": nb if i >= n - 24 * 8 else None}))
+    f = fit_room(hours)
+    assert f.source == "fit" and "Trappe" in (f.extra["neighbours"] or {})

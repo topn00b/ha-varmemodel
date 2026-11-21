@@ -69,10 +69,10 @@ Tilføj hvert rum som et underpunkt (*Tilføj rum* på integrationen):
 |---|---|---|
 | Navn | Stue | enhedens navn |
 | Temperaturføler | `sensor.rum_1` | rummodellen |
-| Min.-temperatur (entitet eller fast) | `input_number.rum_1_min` | planlægningen (0.3) |
+| Min.-temperatur (entitet eller fast) | `input_number.rum_1_min` | planlægningen |
 | Telestat / ventil | `binary_sensor.rum_1_ventil` | fordeling af husets varme på rummene |
 | Kredsen er altid åben | til/fra | fx et badeværelse uden telestat |
-| Relativ kredsstørrelse | 1 | 2 hvis rummet har dobbelt så mange slynger |
+| Relativ kredsstørrelse | 1 | kredsens andel af varmen, når den er åben. Brug helst flowet fra fordelerens flowmåler (L/min) eller slangens længde i meter – samme enhed for alle rum |
 | Varmekilde | Luft-vand | den varmekilde, som rummets termostat eller telestat styrer (planen og fordelingen af varme bruger den; modellen lærer stadig af alle kilder) |
 | Andre varmekilder | | kilder der også varmer rummet direkte. Rummet lærer kun af sin egen og disse kilder; varme fra andre rum læres via nabozoner (kilder der kører på samme tider kan ikke skilles ad af data alene) |
 | Tæller med i planen | til/fra | rum der vises og læres, men ikke styres efter (fx en kælder) |
@@ -80,12 +80,73 @@ Tilføj hvert rum som et underpunkt (*Tilføj rum* på integrationen):
 
 Hvert rum får sin egen enhed med **Afkøling** (med hvor mange grader rummet får pr. kWh fra hver varmekilde, og hvor meget naboerne betyder) (se ovenfor) og, hvis der er telestat eller altid åben kreds, **Varme** i kWh pr. døgn (snit af 7 døgn). Varmen er husets målte varme fordelt time for time efter kredsstørrelse × minutter åben, mens kompressoren kørte. Attributterne viser andel af gulvvarmen, timer åben med varme og **brat afkøling pr. døgn** (døre, udluftning).
 
+## Sådan læser du tallene
+
+Alle tal er **målt i dit eget hus**. De bliver bedre, jo længere integrationen har kørt, og hvert tal fortæller selv, hvor sikkert det er.
+
+### Hvornår kan man stole på et tal?
+
+Hver sensor har attributter, der viser datagrundlaget:
+
+| Attribut | Betydning | Tommelfingerregel |
+|---|---|---|
+| `målinger` / `blokke` | hvor mange timer, portioner eller blokke tallet bygger på | under ca. 50 = foreløbigt |
+| `forklaringsgrad` (R²) | hvor stor en del af udsvingene modellen forklarer (0–1) | over 0,6 = godt, under 0,3 = usikkert |
+| `præcision_6_timer` | rummets typiske fejl, når det forudsiges 6 timer frem (°C) | under ±0,3 °C = godt |
+| `ude_fra` / `ude_til` | udetemperatur-området tallet er målt i | gælder ikke uden for området – fx før første frost |
+| `begrænsning` | om ±10 %-grænsen har bremset tallet i nat | »begrænset« = tallet er på vej mod en ny værdi |
+| `kilde` | `fit` = beregnet i nat, `beholdt` = sidste gode værdi | |
+| `note` | hvorfor et tal mangler, fx »for få blokke endnu« | |
+
+### Varmekilde: luft-vand
+
+| Sensor | Enhed | Sådan læses den | Typisk |
+|---|---|---|---|
+| **Varmetab** | W/K | Husets varmetab pr. grad mellem inde og ude. 100 W/K betyder 2,4 kWh varme i døgnet pr. grad. **Lavere er bedre.** Falder tallet efter fx efterisolering, virkede det. Attributten `gains_w` er gratis varme (mennesker, el-apparater, sol) i W. | 60–250 W/K |
+| **COP i stabil drift** | – | Varme ÷ el, når varmepumpen kører stabilt – ved 0 °C ude, 35 °C fremløb og 4 kW, så tallet kan sammenlignes over tid. Attributterne `a`, `b`, `c`, `d` er formlen: COP = a + b·ude + c·fremløb + d·effekt. `per_k_flow_pct` = hvor mange % COP stiger pr. grad lavere fremløb. `c_source` = `prior`: fremløbets virkning er endnu ikke målbar, og en standardværdi bruges. | 2–4 |
+| **Effektiv COP** | – | Som ovenfor, men over hele timer inkl. opstart og afrimning. | lidt under stabil |
+| **Tab ved opstart og afrimning** | % | Hvor meget lavere den faktiske COP er end i stabil drift. Stiger typisk i frostvejr. Negativt = støj. | 0–15 % |
+| **COP i går** / **seneste 7 døgn** | – | Det rå regnestykke: kWh varme ÷ kWh el. Attributterne viser COP uden varmt vand og `forventet_stabil_cop`. `forskel_fra_stabil_pct` = hvor meget dårligere dagen var end stabil drift. `seneste_14_døgn` er en liste til grafer. | 2–5 |
+| **Gulvets afgivelse** | kW/K | Hvor mange kW gulvet afgiver pr. grad fremløb over rumtemperaturen. Højt = gulvet kan klare sig med lavt fremløb. | 0,1–0,5 |
+| **Maks. effekt** / **Laveste målte effekt** | kW | Største og mindste varmeeffekt, varmepumpen har leveret i fulde driftstimer. Den laveste viser, hvor lavt den kan modulere, før den begynder at starte og stoppe. | |
+| **Varmekurve ved 0 °C** | °C | Fremløbet ved 0 °C ude uden kurve-forskydning. `slope` = ændring pr. grad ude (negativ). | 30–40 °C |
+| **Afrimninger pr. kompressortime** | – | Gennemsnit. `per_bin` viser det fordelt på udetemperatur og høj/lav effekt – lav effekt afrimer typisk sjældnere. | 0–1,5 |
+| **Afkølingstid** | timer | Husets tidskonstant: hvor længe det tager at tabe varmen uden opvarmning. Lang = tungt hus med stor varmekapacitet. | 50–500 t |
+| **Vind: ekstra varmetab pr. m/s** | % | Hvor mange % varmetabet stiger pr. m/s vind. `sun_kw_clear` = solens gratis varme ved klar himmel. `sectors` = afkøling pr. vindretning – hvilken side af huset er mest utæt. Kræver ca. 30 dages vejrdata. | 1–5 %/(m/s) |
+
+### Varmekilde: luft-luft
+
+| Sensor | Enhed | Sådan læses den |
+|---|---|---|
+| **El i går** / **El pr. døgn, 7 døgn** | kWh | Elforbruget. `supplerende_måler_faktor` = hvor meget den supplerende måler skaleres for at ramme hovedmåleren (fx 1,3 = skyen måler 30 % for lavt). |
+
+Varmen fra en luft-luft-varmepumpe kan ikke måles direkte. Rummene lærer i stedet, hvor mange grader de får pr. kWh el (se *Varmes af* herunder).
+
+### Rum
+
+| Sensor / attribut | Enhed | Sådan læses den |
+|---|---|---|
+| **Afkøling** | °C/t | Hvor mange grader rummet falder i timen uden varme ved 20 graders forskel til ude. **Lavere er bedre.** Tallet falder, når rummet isoleres eller tætnes. Det er tallet, du skal se på før og efter et energitiltag. |
+| `varmekilder_grader_pr_kwh` | °C/kWh | Hvor mange grader rummet stiger pr. kWh fra hver varmekilde (luft-luft: pr. kWh el). Højt = kilden varmer rummet godt. `varmekilder_detaljer` deler det op i *nu* og *forsinket* (gulvvarme afgiver varmen over flere timer). |
+| `nabozoner` | °C/t ved 5 °C forskel | Hvor meget en nabozone trækker rummet mod sin temperatur. Fx 0,10 = er kælderen 5 °C varmere, stiger rummet 0,1 °C i timen af den grund. |
+| `gratis_varme_grader_pr_døgn` | °C/døgn | Varme fra mennesker, madlavning og el-apparater. |
+| `sol_grader_pr_klar_time` | °C | Solens bidrag i en klar time. |
+| `tidskonstant_timer` | timer | Rummets egen afkølingstid. |
+| `udeladt_udluftning` | blokke | Blokke uden for modellen pga. brat fald (udluftning, døre). |
+| **Varme** | kWh/døgn | Rummets del af den vandbårne varme (snit af 7 døgn), fordelt efter telestatens åbningstid × kredsstørrelse. **Kun så præcis som kredsstørrelserne** – angiv flow eller længde. `andel_af_gulvvarmen_pct` er rummets andel, `brat_afkøling_pr_døgn` er døre og udluftning. |
+
+### Eksempler
+
+- **Efterisolering af et rum:** Notér rummets *Afkøling* før. Efter 2–3 uger skal tallet være lavere ved samme `forklaringsgrad`.
+- **En dør der står åben:** Høj `brat_afkøling_pr_døgn` i et rum peger på en dør eller vane.
+- **Lavere fremløb:** *COP i stabil drift* `per_k_flow_pct` viser gevinsten pr. grad.
+- **En varm kælder:** En nabozone med stor værdi betyder, at varmen går mellem rummene.
+
 ## Diagnostik
 
 Diagnostikfilen indeholder kalibreringen og de brugte timer med tid som "timer før seneste time". Den indeholder ingen entitets-id'er.
 
 ## Planer
 
-- **0.2:** Planlæggeren: de billigste timer og kurve-forskydningen for det næste døgn, ud fra tallene her.
-- **0.3:** Gulvkomfort, sikkerhedsnet og en blueprint til at udføre planen.
-- **0.4:** Varmekilde nummer to (luft-luft).
+- **0.4:** Planlæggeren for hele huset: hvilken varmekilde skal varme hvilket rum hvornår, ud fra pris, vejrudsigt og rummenes forudsigelser – udgivet som entiteter en automation kan følge.
+- **0.5:** Gulvkomfort, sikkerhedsnet og en blueprint til at udføre planen.

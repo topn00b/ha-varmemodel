@@ -778,9 +778,10 @@ def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: i
     use_sun = sum(1 for h in hs if h.sun is not None) > len(hs) * 0.5
     nkeys = sorted({k for h in hs for k in (h.neighbours or {})})
     ncover = {k: sum(1 for cur, _ in cands if all((h.neighbours or {}).get(k) is not None for h in cur)) / max(1, len(cands)) for k in nkeys}
-    nuse = [k for k in nkeys if ncover[k] >= min_coverage]
+    ndense = [k for k in nkeys if ncover[k] >= min_coverage]
+    nsparse = sorted((k for k in nkeys if k not in ndense and ncover[k] > 0), key=lambda k: -ncover[k])
 
-    def fit(use: list[str]) -> dict[str, Any] | None:
+    def fit(use: list[str], nuse: list[str]) -> dict[str, Any] | None:
         rows, y, touts = [], [], []
         for cur, prev in cands:
             if any(_inp(h, k) is None for k in use for h in cur + prev):
@@ -814,14 +815,14 @@ def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: i
         beta, se = res
         pred = [sum(bb * x for bb, x in zip(beta, r)) for r in rows2]
         r2, rmse = _r2_rmse(y2, pred)
-        return {"use": use, "beta": beta, "se": se, "n": len(rows2), "r2": r2, "rmse": rmse, "outliers": len(rows) - len(keep),
+        return {"use": use, "nuse": nuse, "beta": beta, "se": se, "n": len(rows2), "r2": r2, "rmse": rmse, "outliers": len(rows) - len(keep),
                 "touts": touts}
 
-    best = fit(dense) if dense else None
+    best = fit(dense, ndense) if dense else None
     added: list[str] = []
     for k in sparse:
         base_use = (best or {}).get("use", dense)
-        cand = fit(base_use + [k])
+        cand = fit(base_use + [k], (best or {}).get("nuse", ndense))
         if cand is None:
             continue
         i = 2 * cand["use"].index(k)
@@ -830,7 +831,19 @@ def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: i
         if best is None or (tot > 0 and tot / se_tot >= 2):
             best = cand
             added.append(k)
+    # Nabozoner med kortere historik tages med, når de har en tydelig virkning (mindst 2 standardfejl)
+    for k in nsparse:
+        if best is None:
+            break
+        cand = fit(best["use"], best["nuse"] + [k])
+        if cand is None:
+            continue
+        j = 2 * len(cand["use"]) + 2 + (1 if use_sun else 0) + cand["nuse"].index(k)
+        if cand["se"][j] > 0 and abs(cand["beta"][j] / cand["se"][j]) >= 2:
+            best = cand
+            added.append(k)
     use = (best or {}).get("use", [])
+    nuse = (best or {}).get("nuse", [])
     skipped = [k for k in keys if k not in use]
     base_extra = {"aired_blocks_skipped": aired_blocks, "sources_too_little_data": skipped}
     if best is None:
