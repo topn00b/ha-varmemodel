@@ -35,6 +35,8 @@ from .calibration import (
     steady_slots,
     sun_factor,
 )
+from .inputs import blocked_hours, hourly_forecast, hourly_prices
+from .planner import PlanHour, PlanRoom, SourceModel, make_plan
 from .const import (
     BACKFILL_DAYS,
     CALIB_VERSION,
@@ -75,6 +77,15 @@ from .const import (
     CONF_UNIT_TEMP_ATTR,
     CONF_WEATHER,
     CONF_WINDOW_DAYS,
+    CONF_PRICE_ENTITY,
+    CONF_PRICE_ATTR,
+    CONF_BLOCK_ENTITY,
+    CONF_BLOCK_CODES,
+    CONF_MAX_PAUSE,
+    CONF_COMFORT_OFFSET,
+    CONF_BOOST_ENTITY,
+    CONF_BOOST_DELTA,
+    PLAN_HORIZON_H,
     DEFAULT_WINDOW_DAYS,
     DOMAIN,
     FIT_KEYS,
@@ -151,6 +162,8 @@ class VarmemodelCoordinator:
         self.status: str = "waiting"
         self.status_note: str = ""
         self._room_t: dict[int, dict[str, float | None]] = {}
+        self.plans: dict[str, dict[str, Any]] = {}
+        self.plan_meta: dict[str, Any] = {"updated": None, "inputs_ok": False, "missing": ["ikke planlagt endnu"]}
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[CALLBACK_TYPE] = []
         self._build_sources()
@@ -234,6 +247,8 @@ class VarmemodelCoordinator:
         self._unsubs.append(
             async_track_time_change(self.hass, self._on_night, hour=CALIBRATION_HOUR, minute=CALIBRATION_MINUTE, second=0)
         )
+        self._unsubs.append(async_track_time_change(self.hass, self._on_replan, minute=[2, 17, 32, 47], second=0))
+        self._unsubs.append(async_call_later(self.hass, 45, self._on_replan))
         last = self.runs[-1]["at"] if self.runs else 0
         if time.time() - last > 86400:
             self._unsubs.append(async_call_later(self.hass, 120, self._on_start_delay))
@@ -720,3 +735,131 @@ class VarmemodelCoordinator:
                 "valve_data": valve_seen, "source": hyd.name}
             for k, a in acc.items()
         }
+
+    # ------------------------------------------------------------ planlægning
+    async def _on_replan(self, _now: datetime) -> None:
+        try:
+            await self.async_replan()
+        except Exception as err:  # noqa: BLE001 – planen må aldrig vælte integrationen
+            _LOGGER.exception("Planlægning fejlede")
+            self.plan_meta = {"updated": time.time(), "inputs_ok": False, "missing": [f"fejl: {err}"]}
+            self._notify()
+
+    def _parse_local(self, s: str) -> datetime | None:
+        d = dt_util.parse_datetime(s)
+        if d is None:
+            return None
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=dt_util.get_default_time_zone())
+        return d
+
+    def _state_num(self, eid: str | None) -> float | None:
+        if not eid:
+            return None
+        st = self.hass.states.get(eid)
+        return _num(st.state) if st else None
+
+    async def async_replan(self) -> None:
+        """Ny plan for hver vandbåren varmekilde ud fra priser, røde timer, vejrudsigt og rummene."""
+        missing: list[str] = []
+        now = time.time()
+        h0 = int(now // 3600 * 3600)
+        price_eid = self._id(CONF_PRICE_ENTITY)
+        prices: dict[int, float] = {}
+        if price_eid and (st := self.hass.states.get(price_eid)):
+            prices = hourly_prices(dict(st.attributes), self.conf.get(CONF_PRICE_ATTR) or None, self._parse_local)
+            if h0 not in prices:
+                # Listen starter ofte med næste time: brug den nærmeste kendte pris for den aktuelle time
+                later = sorted(t for t in prices if t > h0)
+                if later:
+                    prices[h0] = prices[later[0]]
+                elif (cur := _num(st.state)) is not None:
+                    prices[h0] = cur
+        if not prices:
+            missing.append("priser")
+        blocks: dict[int, bool] = {}
+        if (beid := self._id(CONF_BLOCK_ENTITY)) and (bst := self.hass.states.get(beid)):
+            codes = [c.strip() for c in str(self.conf.get(CONF_BLOCK_CODES) or "r").split(",") if c.strip()]
+            blocks = blocked_hours(bst.state, dict(bst.attributes), codes, self._parse_local)
+        fc: dict[int, float] = {}
+        if w := self._id(CONF_WEATHER):
+            try:
+                resp = await self.hass.services.async_call("weather", "get_forecasts", {"type": "hourly"}, target={"entity_id": w},
+                                                          blocking=True, return_response=True)
+                fc = hourly_forecast(((resp or {}).get(w) or {}).get("forecast") or [], self._parse_local)
+            except Exception:  # noqa: BLE001
+                missing.append("vejrudsigt")
+        t_now = self._state_num(self._id(CONF_OUTDOOR))
+        hours: list[PlanHour] = []
+        for k in range(PLAN_HORIZON_H):
+            ts = h0 + k * 3600
+            if ts not in prices:
+                break
+            t_out = fc.get(ts, t_now if t_now is not None else 5.0)
+            hours.append(PlanHour(ts=ts, price=prices[ts], t_out=t_out, blocked=bool(blocks.get(ts, False))))
+        boost_on = False
+        if (be := self._id(CONF_BOOST_ENTITY)) and (bs := self.hass.states.get(be)):
+            boost_on = bs.state == "on"
+        boost = float(self.conf.get(CONF_BOOST_DELTA) or 0) if boost_on else 0.0
+        offset = float(self.conf.get(CONF_COMFORT_OFFSET) if self.conf.get(CONF_COMFORT_OFFSET) is not None else 1.0)
+        plans: dict[str, dict[str, Any]] = {}
+        for sid, s in self.sources.items():
+            if s.kind != SOURCE_HYDRONIC:
+                continue
+            a = s.accepted
+
+            def v(key: str, default: float) -> float:
+                x = (a.get(key) or {}).get("value")
+                return float(x) if x is not None else default
+
+            st_extra = (a.get("cop_steady") or {}).get("extra") or {}
+            model = SourceModel(
+                heat_loss_w_k=v("heat_loss", 90.0),
+                gains_w=float(((a.get("heat_loss") or {}).get("extra") or {}).get("gains_w") or 0.0),
+                p_max=v("max_power", 6.0), p_min=min(v("min_power", 2.0), v("max_power", 6.0) * 0.8),
+                # Til planlægning må høj effekt eller højt fremløb aldrig gøre COP bedre (fysik). Et positivt
+                # effektled i kalibreringen skyldes koldt gulv efter pauser (lav retur), ikke effekten selv.
+                # Er effektleddet positivt, holdes det fast ved 4 kW (kalibreringens referenceeffekt), så niveauet passer.
+                cop=(float(st_extra.get("a", 3.0)) + max(float(st_extra.get("d", 0.0)), 0.0) * 4.0, float(st_extra.get("b", 0.15)),
+                     min(float(st_extra.get("c", -0.04)), 0.0), min(float(st_extra.get("d", 0.0)), 0.0)),
+                emission_kw_k=v("emission", 0.25), curve_c0=v("curve", 34.0),
+                curve_slope=float(((a.get("curve") or {}).get("extra") or {}).get("slope", -0.6)),
+            )
+            rooms: list[PlanRoom] = []
+            mins: list[float] = []
+            skipped: list[str] = []
+            for r in self.rooms_cfg:
+                if not r["in_plan"] or self.room_source(r) is not s:
+                    continue
+                t_room = self._state_num(r["key"])
+                t_min = self._state_num(r["min_entity"]) if r["min_entity"] else (_num(r["min"]) if r["min"] is not None else None)
+                fitd = self.rooms.get(r["key"]) or {}
+                ex = fitd.get("extra") or {}
+                src = (ex.get("sources") or {}).get(s.name)
+                if t_room is None or t_min is None or not src or fitd.get("value") is None:
+                    skipped.append(r["name"] or r["key"])
+                    continue
+                mins.append(t_min + boost)
+                nbs = []
+                for nb_name, nb in (ex.get("neighbours") or {}).items():
+                    nb_eid = next((n for n in r.get("neighbours") or [] if self._label(n) == nb_name), None)
+                    tn = self._state_num(nb_eid)
+                    if tn is not None:
+                        nbs.append((float(nb.get("per_h_k") or 0.0), tn))
+                rooms.append(PlanRoom(
+                    name=r["name"] or r["key"], t_now=t_room, t_min=t_min + boost,
+                    heat_now=float(src.get("now") or 0.0), heat_delayed=float(src.get("delayed") or 0.0),
+                    cool_per_hk=float(fitd["value"]) / 20, free_per_h=float(ex.get("free_heat_k_per_day") or 0.0) / 24,
+                    margin=min(1.0, max(0.2, 1.65 * float(ex.get("accuracy_6h_k") or 0.3))), neighbours=nbs,
+                ))
+            target = (sum(mins) / len(mins) + offset) if mins else 20.5 + boost
+            p = make_plan(hours, model, rooms, target, int(self.conf.get(CONF_MAX_PAUSE) or 0))
+            plans[sid] = {"hours": p.hours, "rooms": p.rooms, "demand_kwh": p.demand_kwh, "heat_kwh": p.heat_kwh,
+                          "el_kwh": p.el_kwh, "cost_kr": p.cost_kr, "reason": p.reason, "warnings": p.warnings,
+                          "target": round(target, 1), "rooms_skipped": skipped, "boost": boost_on}
+        self.plans = plans
+        if len(hours) < 6:
+            missing.append("for få timer med pris")
+        self.plan_meta = {"updated": now, "inputs_ok": not missing, "missing": missing, "horizon_h": len(hours),
+                          "blocked_known": bool(blocks)}
+        self._notify()

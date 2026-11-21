@@ -82,3 +82,14 @@ HYDRONIC_KEYS = (
     "electricity_energy", "heat_energy", "flow_temp", "return_temp", "compressor", "defrost", "dhw",
     "flow_setpoint", "flow_setpoint_attribute", "curve_offset", "curve_offset_attribute", "curve_offset_zero",
 )
+
+# Planlægger (huset)
+CONF_PRICE_ENTITY = "price_entity"
+CONF_PRICE_ATTR = "price_attribute"
+CONF_BLOCK_ENTITY = "block_entity"
+CONF_BLOCK_CODES = "block_codes"
+CONF_MAX_PAUSE = "max_pause"
+CONF_COMFORT_OFFSET = "comfort_offset"
+CONF_BOOST_ENTITY = "boost_entity"
+CONF_BOOST_DELTA = "boost_delta"
+PLAN_HORIZON_H = 36

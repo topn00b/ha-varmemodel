@@ -80,6 +80,32 @@ Tilføj hvert rum som et underpunkt (*Tilføj rum* på integrationen):
 
 Hvert rum får sin egen enhed med **Afkøling** (med hvor mange grader rummet får pr. kWh fra hver varmekilde, og hvor meget naboerne betyder) (se ovenfor) og, hvis der er telestat eller altid åben kreds, **Varme** i kWh pr. døgn (snit af 7 døgn). Varmen er husets målte varme fordelt time for time efter kredsstørrelse × minutter åben, mens kompressoren kørte. Attributterne viser andel af gulvvarmen, timer åben med varme og **brat afkøling pr. døgn** (døre, udluftning).
 
+## Planlæggeren
+
+For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hvert kvarter. Planen **styrer ingenting** – den udgives som sensorer, som en automation kan følge.
+
+**Husets indstillinger** (*Konfigurer* på integrationen):
+
+| Felt | Eksempel | Betydning |
+|---|---|---|
+| Elpris | `sensor.pris` | entitet med en liste af tid og pris pr. time eller kvarter, helst inkl. afgifter |
+| Blokerede timer | `sensor.zoner` + kode `r` | timer hvor der aldrig varmes, fx dyreste pris. Format »TIMEINDEKS\|koder« eller en liste |
+| Maks. pause uden gulvvarme | 6 | længste pause (timer) uden for blokerede timer – gulvene må ikke blive kolde |
+| Komfort over min. | 1 | hvor meget over rummenes min. planen sigter efter |
+| »Jeg fryser« | `input_boolean.jeg_fryser` + 1 °C | hæver rummenes mål, så planen lægger mere varme – aldrig i blokerede timer |
+
+**Sådan regnes planen:**
+
+1. **Behov** pr. time = varmetab × (mål − forventet ude) − gratis varme.
+2. Varmen lægges i portioner i de timer, hvor den koster mindst el (pris ÷ COP). COP falder med fremløbet, så jævn, lav drift vinder, når priserne er nogenlunde ens. Hver time med varme får mindst den laveste effekt, varmepumpen kan holde.
+3. **Rummene forudsiges** time for time med rummodellerne (varme nu og forsinket, afkøling, gratis varme, nabozoner). Kommer et rum under min. + sin usikkerhed, lægges der varme i den billigste time før.
+4. For lange pauser brydes med den billigste time.
+5. **Fremløb** = mål + effekt ÷ gulvets afgivelse, og **kurve-forskydning** = fremløb − varmekurven.
+
+**Sensorer pr. varmekilde:** *Plan nu* (varme / slukket / blokeret, med effekt, fremløb, forskydning, pris, grund, næste start/stop, hele planen og rummenes forudsigelse i attributterne), *Plan fremløb*, *Plan kurve-forskydning* og *Plan pris* (forventet elpris for perioden).
+
+Til planlægning bruges COP-formlen fra *COP i stabil drift*, men højere effekt eller fremløb må aldrig gøre COP bedre: et positivt effektled holdes fast ved referenceeffekten (det skyldes typisk koldt gulv efter pauser, ikke effekten selv).
+
 ## Sådan læser du tallene
 
 Alle tal er **målt i dit eget hus**. De bliver bedre, jo længere integrationen har kørt, og hvert tal fortæller selv, hvor sikkert det er.
@@ -148,5 +174,5 @@ Diagnostikfilen indeholder kalibreringen og de brugte timer med tid som "timer f
 
 ## Planer
 
-- **0.4:** Planlæggeren for hele huset: hvilken varmekilde skal varme hvilket rum hvornår, ud fra pris, vejrudsigt og rummenes forudsigelser – udgivet som entiteter en automation kan følge.
+- **0.4 (her):** Planlæggeren for vandbårne varmekilder. Senere: luft-luft i planen.
 - **0.5:** Gulvkomfort, sikkerhedsnet og en blueprint til at udføre planen.

@@ -9,11 +9,21 @@
           "outdoor_temp": "Udetemperatur",
           "weather": "Vejr (vind, skydække, UV)",
           "indoor_temps": "Rumtemperaturer (kun hvis du ikke opretter rum)",
-          "window_days": "Dage med data i kalibreringen"
+          "window_days": "Dage med data i kalibreringen",
+          "price_entity": "Elpris (entitet med timepriser)",
+          "price_attribute": "Elpris: attribut med listen (tom = find selv)",
+          "block_entity": "Blokerede timer (tidsplan)",
+          "block_codes": "Koder der betyder blokeret (kommasepareret)",
+          "max_pause": "Maks. pause uden gulvvarme (timer, 0 = ingen)",
+          "comfort_offset": "Komfort over min. (°C)",
+          "boost_entity": "»Jeg fryser« (entitet)",
+          "boost_delta": "»Jeg fryser« hæver målet med (°C)"
         },
         "data_description": {
           "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud.",
-          "indoor_temps": "Husets indetemperatur er ellers snittet af de rum, der tæller med i planen."
+          "indoor_temps": "Husets indetemperatur er ellers snittet af de rum, der tæller med i planen.",
+          "block_entity": "Fx en zone-tidsplan. Format: »TIMEINDEKS|koder« (timer siden 1970 UTC, én kode pr. time) eller en liste med tid og værdi.",
+          "price_entity": "Prisen bør være inkl. afgifter. Listen skal have tid (start/t/time) og pris (el/value/price) pr. time eller kvarter."
         }
       }
     },
@@ -30,11 +40,21 @@
           "outdoor_temp": "Udetemperatur",
           "weather": "Vejr (vind, skydække, UV)",
           "indoor_temps": "Rumtemperaturer (kun hvis du ikke opretter rum)",
-          "window_days": "Dage med data i kalibreringen"
+          "window_days": "Dage med data i kalibreringen",
+          "price_entity": "Elpris (entitet med timepriser)",
+          "price_attribute": "Elpris: attribut med listen (tom = find selv)",
+          "block_entity": "Blokerede timer (tidsplan)",
+          "block_codes": "Koder der betyder blokeret (kommasepareret)",
+          "max_pause": "Maks. pause uden gulvvarme (timer, 0 = ingen)",
+          "comfort_offset": "Komfort over min. (°C)",
+          "boost_entity": "»Jeg fryser« (entitet)",
+          "boost_delta": "»Jeg fryser« hæver målet med (°C)"
         },
         "data_description": {
           "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud.",
-          "indoor_temps": "Husets indetemperatur er ellers snittet af de rum, der tæller med i planen."
+          "indoor_temps": "Husets indetemperatur er ellers snittet af de rum, der tæller med i planen.",
+          "block_entity": "Fx en zone-tidsplan. Format: »TIMEINDEKS|koder« (timer siden 1970 UTC, én kode pr. time) eller en liste med tid og værdi.",
+          "price_entity": "Prisen bør være inkl. afgifter. Listen skal have tid (start/t/time) og pris (el/value/price) pr. time eller kvarter."
         }
       }
     },
@@ -112,6 +132,24 @@
       },
       "el_week": {
         "name": "El pr. døgn, 7 døgn"
+      },
+      "plan_now": {
+        "name": "Plan nu",
+        "state": {
+          "heat": "Varme",
+          "off": "Slukket",
+          "blocked": "Blokeret",
+          "unknown": "Ukendt"
+        }
+      },
+      "plan_flow": {
+        "name": "Plan fremløb"
+      },
+      "plan_shift": {
+        "name": "Plan kurve-forskydning"
+      },
+      "plan_cost": {
+        "name": "Plan pris"
       }
     },
     "button": {

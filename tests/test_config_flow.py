@@ -30,7 +30,7 @@ async def test_create_house(ha: HomeAssistant) -> None:
     assert r["type"] is FlowResultType.FORM
     r = await ha.config_entries.flow.async_configure(r["flow_id"], {"name": "Hus", "outdoor_temp": "sensor.ude"})
     assert r["type"] is FlowResultType.CREATE_ENTRY
-    assert r["data"] == {"name": "Hus", "outdoor_temp": "sensor.ude", "window_days": 60}
+    assert {"name": "Hus", "outdoor_temp": "sensor.ude", "window_days": 60}.items() <= r["data"].items()
 
 
 async def test_rejects_sensor_without_statistics(ha: HomeAssistant) -> None:

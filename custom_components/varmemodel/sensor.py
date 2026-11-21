@@ -31,6 +31,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
         if s.kind == SOURCE_HYDRONIC:
             ents += [FitSensor(c, s, k) for k in FIT_KEYS]
             ents += [DailyCopSensor(c, s, "yesterday"), DailyCopSensor(c, s, "week")]
+            ents += [PlanNowSensor(c, s), PlanValueSensor(c, s, "plan_flow", "flow", "°C", 1),
+                     PlanValueSensor(c, s, "plan_shift", "shift", None, 0), PlanCostSensor(c, s)]
         else:
             ents += [DailyElSensor(c, s, "yesterday"), DailyElSensor(c, s, "week")]
         async_add_entities(ents, config_subentry_id=sid)
@@ -268,3 +270,90 @@ class RoomHeatSensor(RoomEntity, SensorEntity):
             "varmekilde": r.get("source"),
             "metode": "den vandbårne varme fordelt efter kredsstørrelse × minutter åben mens kompressoren kørte",
         }
+
+
+def _now_hour(plan: dict[str, Any]) -> dict[str, Any] | None:
+    import time as _t
+
+    h0 = int(_t.time() // 3600 * 3600)
+    return next((h for h in plan.get("hours") or [] if h["ts"] == h0), None)
+
+
+class PlanNowSensor(SourceEntity, SensorEntity):
+    """Hvad planen siger lige nu: varme, slukket eller blokeret. Hele planen ligger i attributterne."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["heat", "off", "blocked", "unknown"]
+    _unrecorded_attributes = frozenset({"plan", "rooms_forecast"})
+
+    def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
+        super().__init__(coordinator, s, "plan_now")
+
+    @property
+    def _plan(self) -> dict[str, Any]:
+        return self.coordinator.plans.get(self.src.sid) or {}
+
+    @property
+    def native_value(self) -> str:
+        h = _now_hour(self._plan)
+        if h is None:
+            return "unknown"
+        return "blocked" if h["blocked"] else ("heat" if h["heat_kw"] > 0 else "off")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        p, m = self._plan, self.coordinator.plan_meta
+        h = _now_hour(p) or {}
+        hrs = p.get("hours") or []
+        nxt_on = next((x["ts"] for x in hrs if x["heat_kw"] > 0 and x["ts"] > (h.get("ts") or 0)), None)
+        nxt_off = next((x["ts"] for x in hrs if x["heat_kw"] == 0 and x["ts"] > (h.get("ts") or 0)), None)
+        upd = m.get("updated")
+        return {
+            "heat_kw": h.get("heat_kw"), "flow": h.get("flow"), "shift": h.get("shift"), "price": h.get("price"),
+            "t_out": h.get("t_out"), "cop": h.get("cop"),
+            "reason": p.get("reason"), "warnings": p.get("warnings") or None, "target": p.get("target"),
+            "boost": p.get("boost"), "rooms_skipped": p.get("rooms_skipped") or None,
+            "demand_kwh": p.get("demand_kwh"), "heat_kwh": p.get("heat_kwh"), "el_kwh": p.get("el_kwh"), "cost_kr": p.get("cost_kr"),
+            "next_on": _ts_local(nxt_on), "next_off": _ts_local(nxt_off),
+            "updated": _ts_local(upd), "valid_until": _ts_local(upd + 2700) if upd else None,
+            "inputs_ok": m.get("inputs_ok"), "missing": m.get("missing") or None, "horizon_h": m.get("horizon_h"),
+            "plan": [{"t": _ts_local(x["ts"]), **{k: x[k] for k in ("heat_kw", "flow", "shift", "price", "t_out", "blocked", "cost")}} for x in hrs],
+            "rooms_forecast": p.get("rooms"),
+        }
+
+
+class PlanValueSensor(SourceEntity, SensorEntity):
+    """Planens fremløb eller kurve-forskydning i denne time (tom når planen ikke varmer)."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState, key: str, field: str, unit: str | None, prec: int) -> None:
+        super().__init__(coordinator, s, key)
+        self.field = field
+        self._attr_native_unit_of_measurement = unit
+        self._attr_suggested_display_precision = prec
+
+    @property
+    def native_value(self) -> float | None:
+        h = _now_hour(self.coordinator.plans.get(self.src.sid) or {})
+        return h.get(self.field) if h else None
+
+
+class PlanCostSensor(SourceEntity, SensorEntity):
+    """Planens forventede elpris for hele planperioden."""
+
+    _attr_native_unit_of_measurement = "kr"
+    _attr_suggested_display_precision = 0
+
+    def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
+        super().__init__(coordinator, s, "plan_cost")
+
+    @property
+    def native_value(self) -> float | None:
+        return (self.coordinator.plans.get(self.src.sid) or {}).get("cost_kr")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        p = self.coordinator.plans.get(self.src.sid) or {}
+        return {"heat_kwh": p.get("heat_kwh"), "el_kwh": p.get("el_kwh"), "demand_kwh": p.get("demand_kwh"),
+                "horizon_h": self.coordinator.plan_meta.get("horizon_h")}

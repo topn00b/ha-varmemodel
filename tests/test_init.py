@@ -235,3 +235,39 @@ async def test_device_tree(ha: HomeAssistant) -> None:
     room_sid = next(s for s, x in e.subentries.items() if x.subentry_type == "room")
     house, src, room = devs[e.entry_id], devs[f"{e.entry_id}_{hyd_id}"], devs[f"{e.entry_id}_{room_sid}"]
     assert house.name == "Hus" and src.via_device_id == house.id and room.via_device_id == src.id
+
+
+async def test_replan_with_prices_blocks_and_rooms(ha: HomeAssistant) -> None:
+    """Planen bygges af prisliste, rød-tidsplan og rummene; blokerede timer varmes aldrig."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0 + (k % 6) * 0.3} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.5", {"timer": items})
+    ha.states.async_set("sensor.zoner", f"{h0 // 3600}|" + "gggg" + "rrrrrr" + "g" * 20)
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.rum_1", "20.5", {"state_class": "measurement"})
+    ha.states.async_set("input_number.min_1", "20")
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2,
+                        data={**HOUSE, "price_entity": "sensor.pris", "block_entity": "sensor.zoner", "block_codes": "r"},
+                        subentries_data=[_sub(HYD, "source")])
+    e.add_to_hass(ha)
+    hyd = next(iter(e.subentries))
+    from homeassistant.config_entries import ConfigSubentry
+    ha.config_entries.async_add_subentry(e, ConfigSubentry(data={"name": "Stue", "temperature": "sensor.rum_1", "minimum_entity": "input_number.min_1",
+                                                                 "heat_source": hyd}, subentry_type="room", title="Stue", unique_id=None))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c.rooms["sensor.rum_1"] = {"value": 0.1, "extra": {"sources": {"Luft-vand": {"now": 0.03, "delayed": 0.02}}, "accuracy_6h_k": 0.2}}
+    await c.async_replan()
+    p = c.plans[hyd]
+    assert c.plan_meta["inputs_ok"] is True or c.plan_meta["missing"] == ["vejrudsigt"]
+    assert len(p["hours"]) == 24
+    assert all(h["heat_kw"] == 0 for h in p["hours"][4:10])
+    assert p["heat_kwh"] > 0 and "Stue" in p["rooms"]
+    await ha.async_block_till_done()
+    st = next(s for s in ha.states.async_all("sensor") if s.entity_id.endswith("plan_now"))
+    assert st.state in ("heat", "off")

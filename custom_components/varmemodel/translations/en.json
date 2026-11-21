@@ -9,11 +9,21 @@
           "outdoor_temp": "Outdoor temperature",
           "weather": "Weather (wind, cloud cover, UV)",
           "indoor_temps": "Room temperatures (only if you don't add rooms)",
-          "window_days": "Days of data used for calibration"
+          "window_days": "Days of data used for calibration",
+          "price_entity": "Electricity price (entity with hourly prices)",
+          "price_attribute": "Price: attribute holding the list (empty = auto)",
+          "block_entity": "Blocked hours (schedule)",
+          "block_codes": "Codes meaning blocked (comma separated)",
+          "max_pause": "Max pause without floor heating (hours, 0 = none)",
+          "comfort_offset": "Comfort above minimum (°C)",
+          "boost_entity": "\"I'm cold\" (entity)",
+          "boost_delta": "\"I'm cold\" raises the target by (°C)"
         },
         "data_description": {
           "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated.",
-          "indoor_temps": "Otherwise the indoor temperature is the average of the rooms included in the plan."
+          "indoor_temps": "Otherwise the indoor temperature is the average of the rooms included in the plan.",
+          "block_entity": "E.g. a zone schedule. Format: \"HOURINDEX|codes\" (hours since 1970 UTC, one code per hour) or a list with time and value.",
+          "price_entity": "The price should include tariffs. The list needs time (start/t/time) and price (el/value/price) per hour or quarter."
         }
       }
     },
@@ -30,11 +40,21 @@
           "outdoor_temp": "Outdoor temperature",
           "weather": "Weather (wind, cloud cover, UV)",
           "indoor_temps": "Room temperatures (only if you don't add rooms)",
-          "window_days": "Days of data used for calibration"
+          "window_days": "Days of data used for calibration",
+          "price_entity": "Electricity price (entity with hourly prices)",
+          "price_attribute": "Price: attribute holding the list (empty = auto)",
+          "block_entity": "Blocked hours (schedule)",
+          "block_codes": "Codes meaning blocked (comma separated)",
+          "max_pause": "Max pause without floor heating (hours, 0 = none)",
+          "comfort_offset": "Comfort above minimum (°C)",
+          "boost_entity": "\"I'm cold\" (entity)",
+          "boost_delta": "\"I'm cold\" raises the target by (°C)"
         },
         "data_description": {
           "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated.",
-          "indoor_temps": "Otherwise the indoor temperature is the average of the rooms included in the plan."
+          "indoor_temps": "Otherwise the indoor temperature is the average of the rooms included in the plan.",
+          "block_entity": "E.g. a zone schedule. Format: \"HOURINDEX|codes\" (hours since 1970 UTC, one code per hour) or a list with time and value.",
+          "price_entity": "The price should include tariffs. The list needs time (start/t/time) and price (el/value/price) per hour or quarter."
         }
       }
     },
@@ -112,6 +132,24 @@
       },
       "el_week": {
         "name": "Electricity per day, 7 days"
+      },
+      "plan_now": {
+        "name": "Plan now",
+        "state": {
+          "heat": "Heat",
+          "off": "Off",
+          "blocked": "Blocked",
+          "unknown": "Unknown"
+        }
+      },
+      "plan_flow": {
+        "name": "Plan flow temperature"
+      },
+      "plan_shift": {
+        "name": "Plan curve offset"
+      },
+      "plan_cost": {
+        "name": "Plan cost"
       }
     },
     "button": {
