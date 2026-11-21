@@ -1,6 +1,10 @@
 {
   "domain": "varmemodel",
   "name": "Varmemodel",
+  "after_dependencies": [
+    "frontend",
+    "http"
+  ],
   "codeowners": [
     "@topn00b"
   ],
@@ -13,9 +17,5 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/topn00b/ha-varmemodel/issues",
   "requirements": [],
-  "version": "0.5.1",
-  "after_dependencies": [
-    "frontend",
-    "http"
-  ]
+  "version": "0.5.1"
 }
