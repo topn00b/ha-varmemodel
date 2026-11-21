@@ -215,20 +215,20 @@ class VarmemodelCoordinator:
         if eid := self._id(CONF_WEATHER):
             ws, wu, wv, cc, uv, rh = [], [], [], [], [], []
             for st in changes(eid):
-                a = st.attributes
+                wa = st.attributes
                 t = st.last_updated.timestamp()
-                speed = _num(a.get("wind_speed"))
+                speed = _num(wa.get("wind_speed"))
                 if speed is not None:
-                    unit = str(a.get("wind_speed_unit") or "km/h")
+                    unit = str(wa.get("wind_speed_unit") or "km/h")
                     speed = speed / 3.6 if unit == "km/h" else speed * 0.44704 if unit == "mph" else speed / 1.944 if unit == "kn" else speed
-                bearing = _num(a.get("wind_bearing"))
+                bearing = _num(wa.get("wind_bearing"))
                 ws.append((t, speed))
                 # Vinden kommer FRA bearing; vektoren peger mod hvor den kommer fra
                 wu.append((t, None if speed is None or bearing is None else speed * sin(radians(bearing))))
                 wv.append((t, None if speed is None or bearing is None else speed * cos(radians(bearing))))
-                cc.append((t, _num(a.get("cloud_coverage"))))
-                uv.append((t, _num(a.get("uv_index"))))
-                rh.append((t, _num(a.get("humidity"))))
+                cc.append((t, _num(wa.get("cloud_coverage"))))
+                uv.append((t, _num(wa.get("uv_index"))))
+                rh.append((t, _num(wa.get("humidity"))))
             for key, series in (("ws", ws), ("wu", wu), ("wv", wv), ("cc", cc), ("uv", uv), ("rh", rh)):
                 for h, v in agg.step_mean(series, start, end).items():
                     if h in out:

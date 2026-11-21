@@ -62,3 +62,24 @@ async def test_frozen_mode_keeps_values(ha: HomeAssistant, entry: MockConfigEntr
 async def test_unload(ha: HomeAssistant, entry: MockConfigEntry) -> None:
     assert await ha.config_entries.async_unload(entry.entry_id)
     assert entry.state is ConfigEntryState.NOT_LOADED
+
+
+async def test_collect_with_weather_and_setpoint(ha: HomeAssistant) -> None:
+    """Vejr og setpunkt hentes fra historikken i samme opsamling (regression: variabel blev overskrevet)."""
+    from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
+
+    ha.states.async_set("weather.hjem", "sunny", {"wind_speed": 18.0, "wind_speed_unit": "km/h", "wind_bearing": 270, "cloud_coverage": 20, "uv_index": 1, "humidity": 80})
+    ha.states.async_set("climate.vand", "heat", {"temperature": 35})
+    ha.states.async_set("climate.vp", "auto", {"temperature": 19})
+    await async_wait_recording_done(ha)
+    e = MockConfigEntry(domain=DOMAIN, title="VP", data={**DATA, "weather": "weather.hjem", "flow_setpoint": "climate.vand",
+                                                         "flow_setpoint_attribute": "temperature", "curve_offset": "climate.vp",
+                                                         "curve_offset_attribute": "temperature", "curve_offset_zero": 17})
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    rows = c._collect_sync(c.collected and 0 or __import__("time").time() // 3600 * 3600 - 3600, __import__("time").time() // 3600 * 3600 + 3600)
+    assert any("ws" in v for v in rows.values())
+    await c.async_calibrate()
+    assert c.status != "error", c.status_note
