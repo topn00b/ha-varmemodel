@@ -295,7 +295,7 @@ class VarmemodelCoordinator:
                 for st in changes(r["valve"]):
                     if st.state in ("unknown", "unavailable"):
                         continue
-                    if st.domain == "climate":
+                    if r["valve"].split(".", 1)[0] == "climate":
                         is_open = st.attributes.get("hvac_action") == "heating"
                     else:
                         is_open = st.state in ("on", "open", "opening")

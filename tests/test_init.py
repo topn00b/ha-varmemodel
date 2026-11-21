@@ -117,3 +117,29 @@ async def test_room_subentry_and_room_heat(ha: HomeAssistant) -> None:
     res = c._room_heat([Hour(ts=ts, q=3.0, dhw=0)])
     assert res["sensor.rum_1"]["yesterday_kwh"] == 1.0
     assert res["sensor.rum_2"]["yesterday_kwh"] == 2.0
+
+
+async def test_collect_valve_minutes_from_history(ha: HomeAssistant) -> None:
+    """Telestaternes minutter hentes fra historikken (regression: LazyState har ingen .domain)."""
+    from homeassistant.config_entries import ConfigSubentryData
+    from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
+
+    ha.states.async_set("binary_sensor.kompressor", "on")
+    ha.states.async_set("binary_sensor.stue_ventil", "on")
+    ha.states.async_set("climate.kontor", "heat", {"hvac_action": "heating"})
+    await async_wait_recording_done(ha)
+    e = MockConfigEntry(domain=DOMAIN, title="VP", data=DATA, subentries_data=[
+        ConfigSubentryData(data={"name": "Stue", "temperature": "sensor.rum_1", "valve": "binary_sensor.stue_ventil"},
+                           subentry_type="room", title="Stue", unique_id=None),
+        ConfigSubentryData(data={"name": "Kontor", "temperature": "sensor.rum_2", "valve": "climate.kontor"},
+                           subentry_type="room", title="Kontor", unique_id=None),
+    ])
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    h0 = __import__("time").time() // 3600 * 3600
+    rows = c._collect_sync(h0 - 3600, h0 + 3 * 3600)
+    nxt = rows[int(h0 + 3600)]
+    assert nxt["vchk"] == 1
+    assert nxt["v"]["sensor.rum_1"] == 60.0 and nxt["v"]["sensor.rum_2"] == 60.0
