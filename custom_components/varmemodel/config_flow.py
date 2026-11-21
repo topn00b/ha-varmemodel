@@ -1,4 +1,4 @@
-"""Opsætning: vælg dine egne sensorer – intet er kodet fast."""
+"""Opsætning: huset (ude, vejr), varmekilder og rum som underpunkter – intet er kodet fast."""
 
 from __future__ import annotations
 
@@ -32,22 +32,29 @@ from .const import (
     CONF_OFFSET_ZERO,
     CONF_OUTDOOR,
     CONF_RETURN,
-    CONF_SETPOINT,
-    CONF_SETPOINT_ATTR,
-    CONF_WEATHER,
     CONF_ROOM_ALWAYS_OPEN,
     CONF_ROOM_IN_PLAN,
     CONF_ROOM_MIN,
     CONF_ROOM_MIN_ENTITY,
     CONF_ROOM_NAME,
+    CONF_ROOM_NEIGHBOURS,
     CONF_ROOM_TEMP,
     CONF_ROOM_VALVE,
     CONF_ROOM_WEIGHT,
+    CONF_SETPOINT,
+    CONF_SETPOINT_ATTR,
+    CONF_SOURCE_NAME,
+    CONF_SOURCE_TYPE,
+    CONF_UNIT_TEMP,
+    CONF_UNIT_TEMP_ATTR,
+    CONF_WEATHER,
     CONF_WINDOW_DAYS,
-    SUBENTRY_ROOM,
-    DEFAULT_NAME,
     DEFAULT_WINDOW_DAYS,
     DOMAIN,
+    SOURCE_AIR_AIR,
+    SOURCE_HYDRONIC,
+    SUBENTRY_ROOM,
+    SUBENTRY_SOURCE,
 )
 
 ENERGY = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="energy"))
@@ -59,42 +66,73 @@ ANY = selector.EntitySelector(selector.EntitySelectorConfig(domain=["climate", "
 TEXT = selector.TextSelector()
 ZERO = selector.NumberSelector(selector.NumberSelectorConfig(min=-50, max=100, step=0.5, mode=selector.NumberSelectorMode.BOX))
 DAYS = selector.NumberSelector(selector.NumberSelectorConfig(min=14, max=365, step=1, mode=selector.NumberSelectorMode.BOX))
+TYPE = selector.SelectSelector(
+    selector.SelectSelectorConfig(options=[SOURCE_HYDRONIC, SOURCE_AIR_AIR], translation_key="source_type", mode=selector.SelectSelectorMode.LIST)
+)
 
-ENTITY_KEYS = (CONF_WEATHER, CONF_HEAT, CONF_ELECTRICITY, CONF_OUTDOOR, CONF_FLOW, CONF_RETURN, CONF_COMPRESSOR, CONF_DEFROST, CONF_DHW, CONF_SETPOINT, CONF_OFFSET)
+# Felter, der kræver langtidsstatistik
+STAT_KEYS = (CONF_ELECTRICITY, CONF_HEAT, CONF_OUTDOOR, CONF_FLOW, CONF_RETURN)
 
 
-def _schema(d: dict[str, Any], with_name: bool) -> vol.Schema:
-    def opt(key: str, sel: Any) -> tuple[Any, Any]:
-        return (vol.Optional(key, description={"suggested_value": d.get(key)}), sel)
-
-    fields: list[tuple[Any, Any]] = []
+def _house_schema(with_name: bool) -> vol.Schema:
+    fields: dict[Any, Any] = {}
     if with_name:
-        fields.append((vol.Required(CONF_NAME, default=d.get(CONF_NAME, DEFAULT_NAME)), TEXT))
-    fields += [
-        (vol.Required(CONF_ELECTRICITY, description={"suggested_value": d.get(CONF_ELECTRICITY)}), ENERGY),
-        opt(CONF_HEAT, ENERGY),
-        (vol.Required(CONF_OUTDOOR, description={"suggested_value": d.get(CONF_OUTDOOR)}), TEMP),
-        (vol.Required(CONF_INDOOR, description={"suggested_value": d.get(CONF_INDOOR)}), TEMPS),
-        opt(CONF_FLOW, TEMP),
-        opt(CONF_RETURN, TEMP),
-        opt(CONF_COMPRESSOR, BINARY),
-        opt(CONF_DEFROST, BINARY),
-        opt(CONF_DHW, BINARY),
-        opt(CONF_WEATHER, WEATHER),
-        opt(CONF_SETPOINT, ANY),
-        opt(CONF_SETPOINT_ATTR, TEXT),
-        opt(CONF_OFFSET, ANY),
-        opt(CONF_OFFSET_ATTR, TEXT),
-        (vol.Optional(CONF_OFFSET_ZERO, default=d.get(CONF_OFFSET_ZERO, 0)), ZERO),
-        (vol.Optional(CONF_WINDOW_DAYS, default=d.get(CONF_WINDOW_DAYS, DEFAULT_WINDOW_DAYS)), DAYS),
-    ]
-    return vol.Schema(dict(fields))
+        fields[vol.Required(CONF_NAME, default="Hus")] = TEXT
+    fields.update({
+        vol.Required(CONF_OUTDOOR): TEMP,
+        vol.Optional(CONF_WEATHER): WEATHER,
+        vol.Optional(CONF_INDOOR): TEMPS,
+        vol.Optional(CONF_WINDOW_DAYS, default=DEFAULT_WINDOW_DAYS): DAYS,
+    })
+    return vol.Schema(fields)
+
+
+HYDRONIC_SCHEMA = vol.Schema({
+    vol.Required(CONF_ELECTRICITY): ENERGY,
+    vol.Optional(CONF_HEAT): ENERGY,
+    vol.Optional(CONF_FLOW): TEMP,
+    vol.Optional(CONF_RETURN): TEMP,
+    vol.Optional(CONF_COMPRESSOR): BINARY,
+    vol.Optional(CONF_DEFROST): BINARY,
+    vol.Optional(CONF_DHW): BINARY,
+    vol.Optional(CONF_SETPOINT): ANY,
+    vol.Optional(CONF_SETPOINT_ATTR): TEXT,
+    vol.Optional(CONF_OFFSET): ANY,
+    vol.Optional(CONF_OFFSET_ATTR): TEXT,
+    vol.Optional(CONF_OFFSET_ZERO, default=0): ZERO,
+})
+
+AIR_AIR_SCHEMA = vol.Schema({
+    vol.Required(CONF_ELECTRICITY): ENERGY,
+    vol.Optional(CONF_UNIT_TEMP): selector.EntitySelector(selector.EntitySelectorConfig(domain=["climate", "sensor"])),
+    vol.Optional(CONF_UNIT_TEMP_ATTR): TEXT,
+    vol.Optional(CONF_COMPRESSOR): BINARY,
+    vol.Optional(CONF_DEFROST): BINARY,
+})
+
+ROOM_SCHEMA = vol.Schema({
+    vol.Required(CONF_ROOM_NAME): TEXT,
+    vol.Required(CONF_ROOM_TEMP): TEMP,
+    vol.Optional(CONF_ROOM_MIN_ENTITY): selector.EntitySelector(
+        selector.EntitySelectorConfig(domain=["input_number", "number", "sensor", "climate"])
+    ),
+    vol.Optional(CONF_ROOM_MIN): selector.NumberSelector(
+        selector.NumberSelectorConfig(min=5, max=30, step=0.5, mode=selector.NumberSelectorMode.BOX)
+    ),
+    vol.Optional(CONF_ROOM_VALVE): selector.EntitySelector(selector.EntitySelectorConfig(domain=["binary_sensor", "climate", "switch", "valve"])),
+    vol.Optional(CONF_ROOM_ALWAYS_OPEN, default=False): selector.BooleanSelector(),
+    vol.Optional(CONF_ROOM_WEIGHT, default=1.0): selector.NumberSelector(
+        selector.NumberSelectorConfig(min=0.1, max=10, step=0.1, mode=selector.NumberSelectorMode.BOX)
+    ),
+    vol.Optional(CONF_ROOM_IN_PLAN, default=True): selector.BooleanSelector(),
+    vol.Optional(CONF_ROOM_NEIGHBOURS): TEMPS,
+})
 
 
 def _validate(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, str]:
     """Energi og temperaturer skal have langtidsstatistik (state_class)."""
     errors: dict[str, str] = {}
-    for key in (CONF_ELECTRICITY, CONF_HEAT, CONF_OUTDOOR, CONF_FLOW, CONF_RETURN):
+    for key in STAT_KEYS:
         eid = data.get(key)
         if not eid:
             continue
@@ -115,7 +153,7 @@ def _clean(data: dict[str, Any]) -> dict[str, Any]:
 
 
 class VarmemodelConfigFlow(ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -123,8 +161,10 @@ class VarmemodelConfigFlow(ConfigFlow, domain=DOMAIN):
             errors = _validate(self.hass, user_input)
             if not errors:
                 data = _clean(user_input)
-                return self.async_create_entry(title=data.get(CONF_NAME, DEFAULT_NAME), data=data)
-        return self.async_show_form(step_id="user", data_schema=_schema(user_input or {}, True), errors=errors)
+                return self.async_create_entry(title=data.get(CONF_NAME, "Hus"), data=data)
+        return self.async_show_form(
+            step_id="user", data_schema=self.add_suggested_values_to_schema(_house_schema(True), user_input or {}), errors=errors
+        )
 
     @staticmethod
     @callback
@@ -134,41 +174,64 @@ class VarmemodelConfigFlow(ConfigFlow, domain=DOMAIN):
     @classmethod
     @callback
     def async_get_supported_subentry_types(cls, config_entry: ConfigEntry) -> dict[str, type[ConfigSubentryFlow]]:
-        return {SUBENTRY_ROOM: RoomSubentryFlow}
+        return {SUBENTRY_SOURCE: SourceSubentryFlow, SUBENTRY_ROOM: RoomSubentryFlow}
 
 
 class VarmemodelOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
-        current = {**self.config_entry.data, **self.config_entry.options}
         if user_input is not None:
             errors = _validate(self.hass, user_input)
             if not errors:
-                # Felter der er tømt, skal også fjernes fra de oprindelige data
-                data = {k: v for k, v in self.config_entry.data.items() if k not in ENTITY_KEYS and k not in (CONF_SETPOINT_ATTR, CONF_OFFSET_ATTR)}
-                self.hass.config_entries.async_update_entry(self.config_entry, data=data)
                 return self.async_create_entry(data=_clean(user_input))
-        return self.async_show_form(step_id="init", data_schema=_schema(user_input or current, False), errors=errors)
+        current = {**self.config_entry.data, **self.config_entry.options}
+        return self.async_show_form(
+            step_id="init", data_schema=self.add_suggested_values_to_schema(_house_schema(False), user_input or current), errors=errors
+        )
 
 
-ROOM_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_ROOM_NAME): TEXT,
-        vol.Required(CONF_ROOM_TEMP): TEMP,
-        vol.Optional(CONF_ROOM_MIN_ENTITY): selector.EntitySelector(
-            selector.EntitySelectorConfig(domain=["input_number", "number", "sensor", "climate"])
-        ),
-        vol.Optional(CONF_ROOM_MIN): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=5, max=30, step=0.5, mode=selector.NumberSelectorMode.BOX)
-        ),
-        vol.Optional(CONF_ROOM_VALVE): selector.EntitySelector(selector.EntitySelectorConfig(domain=["binary_sensor", "climate", "switch", "valve"])),
-        vol.Optional(CONF_ROOM_ALWAYS_OPEN, default=False): selector.BooleanSelector(),
-        vol.Optional(CONF_ROOM_WEIGHT, default=1.0): selector.NumberSelector(
-            selector.NumberSelectorConfig(min=0.1, max=10, step=0.1, mode=selector.NumberSelectorMode.BOX)
-        ),
-        vol.Optional(CONF_ROOM_IN_PLAN, default=True): selector.BooleanSelector(),
-    }
-)
+class SourceSubentryFlow(ConfigSubentryFlow):
+    """En varmekilde: luft-vand (vandbåren) eller luft-luft."""
+
+    def __init__(self) -> None:
+        self._base: dict[str, Any] = {}
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        if user_input is not None:
+            self._base = {CONF_SOURCE_NAME: str(user_input[CONF_SOURCE_NAME]).strip(), CONF_SOURCE_TYPE: user_input[CONF_SOURCE_TYPE]}
+            return await self.async_step_details()
+        schema = vol.Schema({vol.Required(CONF_SOURCE_NAME): TEXT, vol.Required(CONF_SOURCE_TYPE, default=SOURCE_HYDRONIC): TYPE})
+        return self.async_show_form(step_id="user", data_schema=schema)
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        sub = self._get_reconfigure_subentry()
+        self._base = {k: sub.data[k] for k in (CONF_SOURCE_NAME, CONF_SOURCE_TYPE) if k in sub.data}
+        return await self.async_step_details()
+
+    async def async_step_details(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        sub = self._get_reconfigure_subentry() if self.source == "reconfigure" else None
+        air = self._base.get(CONF_SOURCE_TYPE) == SOURCE_AIR_AIR
+        schema = AIR_AIR_SCHEMA if air else HYDRONIC_SCHEMA
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            errors = _validate(self.hass, user_input)
+            if not errors:
+                data = {**self._base, **_clean(user_input)}
+                if sub is None:
+                    return self.async_create_entry(title=data[CONF_SOURCE_NAME], data=data)
+                # Bevar markeringer, der ikke vises i formularen (fx at entitets-id'erne er fra version 1)
+                fields = {str(k) for k in schema.schema}
+                keep = {k: v for k, v in sub.data.items() if k not in fields and k not in data}
+                return self.async_update_and_abort(self._get_entry(), sub, title=data[CONF_SOURCE_NAME], data={**keep, **data})
+        suggested = user_input or (dict(sub.data) if sub else {})
+        return self.async_show_form(step_id="air_air" if air else "hydronic",
+                                    data_schema=self.add_suggested_values_to_schema(schema, suggested), errors=errors)
+
+    async def async_step_hydronic(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        return await self.async_step_details(user_input)
+
+    async def async_step_air_air(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        return await self.async_step_details(user_input)
 
 
 class RoomSubentryFlow(ConfigSubentryFlow):

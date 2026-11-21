@@ -3,37 +3,17 @@
     "step": {
       "user": {
         "title": "Varmemodel",
-        "description": "Vælg dine egne målere og følere. Kun el, udetemperatur og rumtemperaturer er påkrævet – jo flere du vælger, jo flere tal kan regnes ud.",
+        "description": "Huset: udetemperatur og vejr. Varmekilder og rum tilføjer du bagefter som underpunkter på integrationen.",
         "data": {
           "name": "Navn",
-          "electricity_energy": "El til varmepumpen (kWh, samlet)",
-          "heat_energy": "Varme leveret (kWh, samlet)",
           "outdoor_temp": "Udetemperatur",
-          "indoor_temps": "Rumtemperaturer",
-          "flow_temp": "Fremløbstemperatur",
-          "return_temp": "Returtemperatur",
-          "compressor": "Kompressor kører",
-          "defrost": "Afrimning",
-          "dhw": "Varmt vand",
-          "flow_setpoint": "Fremløbs-setpunkt (entitet)",
-          "flow_setpoint_attribute": "Fremløbs-setpunkt: attribut (tom = tilstand)",
-          "curve_offset": "Kurve-forskydning (entitet)",
-          "curve_offset_attribute": "Kurve-forskydning: attribut (tom = tilstand)",
-          "curve_offset_zero": "Kurve-forskydning: værdi der betyder 0",
-          "window_days": "Dage med data i kalibreringen",
-          "weather": "Vejr (vind, skydække, UV)"
+          "weather": "Vejr (vind, skydække, UV)",
+          "indoor_temps": "Rumtemperaturer (kun hvis du ikke opretter rum)",
+          "window_days": "Dage med data i kalibreringen"
         },
         "data_description": {
-          "electricity_energy": "Skal have langtidsstatistik.",
-          "heat_energy": "Uden den kan COP, varmetab og gulvets afgivelse ikke regnes ud.",
-          "indoor_temps": "Snittet bruges som husets indetemperatur.",
-          "compressor": "Bruges til at finde fulde driftstimer og tælle starter.",
-          "defrost": "Afrimninger tælles pr. effekt og udetemperatur.",
-          "dhw": "Timer med varmt vand holdes ude af rumopvarmningen.",
-          "flow_setpoint": "Fx varmepumpens vand-setpunkt. Bruges til at finde varmekurven.",
-          "curve_offset": "Fx den entitet, hvis måltemperatur forskyder kurven.",
-          "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0.",
-          "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud."
+          "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud.",
+          "indoor_temps": "Husets indetemperatur er ellers snittet af de rum, der tæller med i planen."
         }
       }
     },
@@ -47,34 +27,14 @@
       "init": {
         "title": "Varmemodel",
         "data": {
-          "electricity_energy": "El til varmepumpen (kWh, samlet)",
-          "heat_energy": "Varme leveret (kWh, samlet)",
           "outdoor_temp": "Udetemperatur",
-          "indoor_temps": "Rumtemperaturer",
-          "flow_temp": "Fremløbstemperatur",
-          "return_temp": "Returtemperatur",
-          "compressor": "Kompressor kører",
-          "defrost": "Afrimning",
-          "dhw": "Varmt vand",
-          "flow_setpoint": "Fremløbs-setpunkt (entitet)",
-          "flow_setpoint_attribute": "Fremløbs-setpunkt: attribut (tom = tilstand)",
-          "curve_offset": "Kurve-forskydning (entitet)",
-          "curve_offset_attribute": "Kurve-forskydning: attribut (tom = tilstand)",
-          "curve_offset_zero": "Kurve-forskydning: værdi der betyder 0",
-          "window_days": "Dage med data i kalibreringen",
-          "weather": "Vejr (vind, skydække, UV)"
+          "weather": "Vejr (vind, skydække, UV)",
+          "indoor_temps": "Rumtemperaturer (kun hvis du ikke opretter rum)",
+          "window_days": "Dage med data i kalibreringen"
         },
         "data_description": {
-          "electricity_energy": "Skal have langtidsstatistik.",
-          "heat_energy": "Uden den kan COP, varmetab og gulvets afgivelse ikke regnes ud.",
-          "indoor_temps": "Snittet bruges som husets indetemperatur.",
-          "compressor": "Bruges til at finde fulde driftstimer og tælle starter.",
-          "defrost": "Afrimninger tælles pr. effekt og udetemperatur.",
-          "dhw": "Timer med varmt vand holdes ude af rumopvarmningen.",
-          "flow_setpoint": "Fx varmepumpens vand-setpunkt. Bruges til at finde varmekurven.",
-          "curve_offset": "Fx den entitet, hvis måltemperatur forskyder kurven.",
-          "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0.",
-          "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud."
+          "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud.",
+          "indoor_temps": "Husets indetemperatur er ellers snittet af de rum, der tæller med i planen."
         }
       }
     },
@@ -146,6 +106,12 @@
       },
       "room_heat_device": {
         "name": "Varme"
+      },
+      "el_yesterday": {
+        "name": "El i går"
+      },
+      "el_week": {
+        "name": "El pr. døgn, 7 døgn"
       }
     },
     "button": {
@@ -164,6 +130,66 @@
     }
   },
   "config_subentries": {
+    "source": {
+      "initiate_flow": {
+        "user": "Tilføj varmekilde"
+      },
+      "entry_type": "Varmekilde",
+      "step": {
+        "user": {
+          "title": "Tilføj varmekilde",
+          "data": {
+            "name": "Navn",
+            "source_type": "Type"
+          },
+          "data_description": {}
+        },
+        "hydronic": {
+          "title": "Luft-vand (vandbåren)",
+          "data": {
+            "electricity_energy": "El (kWh, samlet)",
+            "heat_energy": "Varme leveret (kWh, samlet)",
+            "flow_temp": "Fremløbstemperatur",
+            "return_temp": "Returtemperatur",
+            "compressor": "Kompressor kører",
+            "defrost": "Afrimning",
+            "dhw": "Varmt vand",
+            "flow_setpoint": "Fremløbs-setpunkt (entitet)",
+            "flow_setpoint_attribute": "Fremløbs-setpunkt: attribut (tom = tilstand)",
+            "curve_offset": "Kurve-forskydning (entitet)",
+            "curve_offset_attribute": "Kurve-forskydning: attribut (tom = tilstand)",
+            "curve_offset_zero": "Kurve-forskydning: værdi der betyder 0"
+          },
+          "data_description": {
+            "heat_energy": "Uden den kan COP, varmetab og gulvets afgivelse ikke regnes ud.",
+            "compressor": "Bruges til fulde driftstimer, starter og fordeling af varmen på rummene.",
+            "dhw": "Timer med varmt vand holdes ude af rumopvarmningen.",
+            "flow_setpoint": "Fx varmepumpens vand-setpunkt. Bruges til at finde varmekurven.",
+            "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0."
+          }
+        },
+        "air_air": {
+          "title": "Luft-luft",
+          "data": {
+            "electricity_energy": "El (kWh, samlet)",
+            "unit_temp": "Enhedens egen temperaturføler",
+            "unit_temp_attribute": "Enhedens føler: attribut (fx current_temperature)",
+            "compressor": "Kompressor kører",
+            "defrost": "Afrimning"
+          },
+          "data_description": {
+            "electricity_energy": "Uden varmemåler lærer rummene, hvor mange grader de får pr. kWh el."
+          }
+        }
+      },
+      "error": {
+        "not_found": "Entiteten findes ikke.",
+        "no_statistics": "Entiteten har ingen langtidsstatistik (state_class mangler)."
+      },
+      "abort": {
+        "reconfigure_successful": "Gemt."
+      }
+    },
     "room": {
       "initiate_flow": {
         "user": "Tilføj rum"
@@ -180,13 +206,15 @@
             "valve": "Telestat / ventil",
             "always_open": "Kredsen er altid åben",
             "loop_weight": "Relativ kredsstørrelse",
-            "in_plan": "Tæller med i planen"
+            "in_plan": "Tæller med i planen",
+            "neighbours": "Nabozoner"
           },
           "data_description": {
             "minimum_entity": "Fx en input_number med rummets laveste komforttemperatur.",
-            "valve": "Tændt/åben = rummet får varme. Bruges til at fordele husets varme på rummene.",
+            "valve": "Tændt/åben = rummet får varme fra den vandbårne varmekilde.",
             "loop_weight": "1 = normal. Har rummet dobbelt så mange slynger som de andre, så 2.",
-            "in_plan": "Fra = rummet vises, men planen tager ikke hensyn til det."
+            "in_plan": "Fra = rummet vises og læres, men planen tager ikke hensyn til det (fx en kælder).",
+            "neighbours": "Temperaturfølere i tilstødende zoner, fx kælderen under stueetagen eller trappeopgangen. Modellen lærer, hvor meget varme der går imellem."
           }
         },
         "reconfigure": {
@@ -199,22 +227,33 @@
             "valve": "Telestat / ventil",
             "always_open": "Kredsen er altid åben",
             "loop_weight": "Relativ kredsstørrelse",
-            "in_plan": "Tæller med i planen"
+            "in_plan": "Tæller med i planen",
+            "neighbours": "Nabozoner"
           },
           "data_description": {
             "minimum_entity": "Fx en input_number med rummets laveste komforttemperatur.",
-            "valve": "Tændt/åben = rummet får varme. Bruges til at fordele husets varme på rummene.",
+            "valve": "Tændt/åben = rummet får varme fra den vandbårne varmekilde.",
             "loop_weight": "1 = normal. Har rummet dobbelt så mange slynger som de andre, så 2.",
-            "in_plan": "Fra = rummet vises, men planen tager ikke hensyn til det."
+            "in_plan": "Fra = rummet vises og læres, men planen tager ikke hensyn til det (fx en kælder).",
+            "neighbours": "Temperaturfølere i tilstødende zoner, fx kælderen under stueetagen eller trappeopgangen. Modellen lærer, hvor meget varme der går imellem."
           }
         }
       },
       "error": {
+        "not_found": "Entiteten findes ikke.",
         "no_statistics": "Entiteten har ingen langtidsstatistik (state_class mangler).",
         "duplicate_room": "Føleren bruges allerede af et andet rum."
       },
       "abort": {
         "reconfigure_successful": "Gemt."
+      }
+    }
+  },
+  "selector": {
+    "source_type": {
+      "options": {
+        "hydronic": "Luft-vand / vandbåren",
+        "air_air": "Luft-luft"
       }
     }
   }

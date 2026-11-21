@@ -61,3 +61,21 @@ CONF_ROOM_VALVE = "valve"
 CONF_ROOM_ALWAYS_OPEN = "always_open"
 CONF_ROOM_WEIGHT = "loop_weight"
 CONF_ROOM_IN_PLAN = "in_plan"
+CONF_ROOM_NEIGHBOURS = "neighbours"  # nabozoner (temperaturfølere), fx kælder eller trappeopgang
+
+# Varmekilder (underpunkter)
+SUBENTRY_SOURCE = "source"
+CONF_SOURCE_NAME = "name"
+CONF_SOURCE_TYPE = "source_type"
+SOURCE_HYDRONIC = "hydronic"  # luft-vand / vandbåren
+SOURCE_AIR_AIR = "air_air"  # luft-luft
+CONF_UNIT_TEMP = "unit_temp"  # luft-luft: enhedens egen føler (entitet)
+CONF_UNIT_TEMP_ATTR = "unit_temp_attribute"
+CONF_LEGACY_IDS = "legacy_ids"  # den varmekilde, der kom fra version 1, beholder sine entitets-id'er
+CONF_MIGRATED_SOURCE = "migrated_source"
+
+# Felter der hører til en vandbåren varmekilde (flyttes fra huset ved opgradering fra version 1)
+HYDRONIC_KEYS = (
+    "electricity_energy", "heat_energy", "flow_temp", "return_temp", "compressor", "defrost", "dhw",
+    "flow_setpoint", "flow_setpoint_attribute", "curve_offset", "curve_offset_attribute", "curve_offset_zero",
+)

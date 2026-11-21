@@ -729,27 +729,35 @@ class RoomHour:
     ts: int
     t_room: float | None
     t_out: float | None
-    q: float | None  # varme leveret til huset i timen (kWh)
+    q: float | None = None  # varme til huset i timen (kWh), når der kun er én varmekilde
     sun: float | None = None  # 0–1, klar himmel i dagslys
     aired: bool = False  # udluftning markeret i denne time
+    inputs: dict[str, float | None] | None = None  # kWh pr. varmekilde (varme eller el)
+    neighbours: dict[str, float | None] | None = None  # temperatur i nabozoner (fx kælder, trappeopgang)
 
 
-def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: int = 40) -> Fit:
+def _inp(h: RoomHour, k: str) -> float | None:
+    return h.inputs.get(k) if h.inputs is not None else h.q
+
+
+def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: int = 40, min_coverage: float = 0.6) -> Fit:
     """Hvordan et rum opfører sig, lært af historikken (blokke à 6 timer).
 
-    Temperaturændring over blokken = a·varme nu + a2·varme de foregående 6 timer
-    (gulvets forsinkelse) + b·(ude − rum)·timer + c (gratis varme) [+ s·sol].
-    Blokke med udluftning udelades, og målinger der stikker helt ud (over 3×
-    den typiske afvigelse) sorteres fra, før der tilpasses igen.
+    Temperaturændring over blokken = Σ_kilder (a·kWh nu + a2·kWh de foregående 6
+    timer) + b·(ude − rum)·timer + c (gratis varme) [+ s·sol]. Hver varmekilde får
+    sin egen virkning, så modellen selv finder ud af, hvem der varmer rummet.
+    En kilde med for lidt data (under 60 % af blokkene) tages ikke med endnu.
+    Blokke med udluftning udelades, og afvigere (over 3× den typiske afvigelse)
+    sorteres fra, før der tilpasses igen.
 
-    Værdien er rummets afkøling i °C pr. time ved 20 graders forskel mellem
-    inde og ude – det tal falder, når rummet bliver bedre isoleret.
+    Værdien er rummets afkøling i °C pr. time ved 20 graders forskel mellem inde
+    og ude – det tal falder, når rummet bliver bedre isoleret.
     """
     hs = sorted(hours, key=lambda h: h.ts)
     idx = {h.ts: h for h in hs}
-    rows, y, touts = [], [], []
+    keys = sorted({k for h in hs for k in (h.inputs or {})}) if any(h.inputs is not None for h in hs) else ["q"]
+    cands = []
     aired_blocks = 0
-    use_sun = sum(1 for h in hs if h.sun is not None) > len(hs) * 0.5
     for i in range(block, len(hs) - block + 1, step):
         cur = [idx.get(hs[i].ts + k * 3600) for k in range(block)]
         prev = [idx.get(hs[i].ts - (block - k) * 3600) for k in range(block)]
@@ -758,22 +766,42 @@ def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: i
         if any(h.aired for h in cur):
             aired_blocks += 1
             continue
-        if any(h.q is None or h.t_out is None or h.t_room is None for h in cur) or any(h.q is None for h in prev):
+        if any(h.t_out is None or h.t_room is None for h in cur):
             continue
-        dt = sum(h.t_out - cur[0].t_room for h in cur)  # (ude − rum)·timer
-        r = [sum(max(h.q, 0.0) for h in cur), sum(max(h.q, 0.0) for h in prev), dt, 1.0]
+        cands.append((cur, prev))
+    cover = {k: sum(1 for cur, prev in cands if all(_inp(h, k) is not None for h in cur + prev)) / max(1, len(cands)) for k in keys}
+    use = [k for k in keys if cover[k] >= min_coverage]
+    skipped_sources = [k for k in keys if k not in use]
+    base_extra = {"aired_blocks_skipped": aired_blocks, "sources_too_little_data": skipped_sources}
+    if not use:
+        return Fit(None, 0, note="ingen varmekilde med data nok endnu", extra=base_extra)
+    use_sun = sum(1 for h in hs if h.sun is not None) > len(hs) * 0.5
+    nkeys = sorted({k for h in hs for k in (h.neighbours or {})})
+    ncover = {k: sum(1 for cur, _ in cands if all((h.neighbours or {}).get(k) is not None for h in cur)) / max(1, len(cands)) for k in nkeys}
+    nuse = [k for k in nkeys if ncover[k] >= min_coverage]
+    rows, y, touts = [], [], []
+    for cur, prev in cands:
+        if any(_inp(h, k) is None for k in use for h in cur + prev):
+            continue
+        if any((h.neighbours or {}).get(k) is None for k in nuse for h in cur):
+            continue
+        r: list[float] = []
+        for k in use:
+            r += [sum(max(_inp(h, k), 0.0) for h in cur), sum(max(_inp(h, k), 0.0) for h in prev)]
+        r += [sum(h.t_out - cur[0].t_room for h in cur), 1.0]
         if use_sun:
             r.append(sum(h.sun or 0.0 for h in cur))
+        for k in nuse:
+            r.append(sum(h.neighbours[k] - cur[0].t_room for h in cur))
         rows.append(r)
         y.append(cur[-1].t_room - cur[0].t_room)
         touts += [h.t_out for h in cur]
     lo, hi = _range(touts)
     if len(rows) < min_blocks:
-        return Fit(None, len(rows), t_out_min=lo, t_out_max=hi, note="for få blokke à 6 timer endnu",
-                   extra={"aired_blocks_skipped": aired_blocks})
+        return Fit(None, len(rows), t_out_min=lo, t_out_max=hi, note="for få blokke à 6 timer endnu", extra=base_extra)
     res = ols(rows, y)
     if not res:
-        return Fit(None, len(rows), note="kunne ikke tilpasses")
+        return Fit(None, len(rows), note="kunne ikke tilpasses", extra=base_extra)
     beta, _ = res
     resid = [v - sum(b * x for b, x in zip(beta, r)) for r, v in zip(rows, y)]
     mad = median(abs(e) for e in resid) or 1e-6
@@ -782,23 +810,31 @@ def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: i
     rows, y = [rows[k] for k in keep], [y[k] for k in keep]
     res = ols(rows, y)
     if not res:
-        return Fit(None, len(rows), note="kunne ikke tilpasses")
+        return Fit(None, len(rows), note="kunne ikke tilpasses", extra=base_extra)
     beta, se = res
-    a, a2, b, c = beta[:4]
-    s = beta[4] if use_sun else None
+    n_src = 2 * len(use)
+    b, c = beta[n_src], beta[n_src + 1]
+    s = beta[n_src + 2] if use_sun else None
+    nb0 = n_src + 2 + (1 if use_sun else 0)
+    neighbours = {k: {"per_h_k": round(beta[nb0 + i], 4), "se": round(se[nb0 + i], 4),
+                      "k_per_hour_at_5k": round(beta[nb0 + i] * 5, 3)} for i, k in enumerate(nuse)}
     pred = [sum(bb * x for bb, x in zip(beta, r)) for r in rows]
     r2, rmse = _r2_rmse(y, pred)
     if b <= 0:
-        return Fit(None, len(rows), r2, rmse, lo, hi, note="rummet falder ikke med kulden – for lidt data",
-                   extra={"aired_blocks_skipped": aired_blocks})
+        return Fit(None, len(rows), r2, rmse, lo, hi, note="rummet falder ikke med kulden – for lidt data", extra=base_extra)
+    per_source = {k: {"now": round(beta[2 * i], 4), "delayed": round(beta[2 * i + 1], 4),
+                      "total": round(beta[2 * i] + beta[2 * i + 1], 4), "se_now": round(se[2 * i], 4)} for i, k in enumerate(use)}
+    first = per_source[use[0]]
     return Fit(
         round(b * 20, 3), len(rows), r2, rmse and round(rmse, 2), lo, hi, "fit",
         {"time_constant_h": round(1 / b, 0),
-         "heat_now_k_per_kwh": round(a, 4), "heat_delayed_k_per_kwh": round(a2, 4),
+         "heat_now_k_per_kwh": first["now"], "heat_delayed_k_per_kwh": first["delayed"],
+         "sources": per_source,
+         "neighbours": neighbours or None,
          "free_heat_k_per_day": round(c * 24 / block, 2),
          "sun_k_per_clear_hour": None if s is None else round(s, 3),
          "accuracy_6h_k": rmse and round(rmse, 2),
-         "aired_blocks_skipped": aired_blocks, "outliers_skipped": outliers,
+         "aired_blocks_skipped": aired_blocks, "outliers_skipped": outliers, "sources_too_little_data": skipped_sources,
          "value_is": "°C pr. time rummet falder ved 20 graders forskel mellem inde og ude"},
     )
 
@@ -818,3 +854,13 @@ def detect_airing(five_min: list[tuple[int, float]], drop: float = 0.3, window: 
                     hours.add(h + k)
                 break
     return hours
+
+
+def daily_el(hours: list[Hour], day_of, days: list[str]) -> dict[str, Any] | None:
+    """El pr. døgn for en varmekilde uden varmemåler (fx luft-luft)."""
+    hs = [h for h in hours if day_of(h.ts) in days and h.e is not None]
+    if not hs:
+        return None
+    touts = [h.t_out for h in hs if h.t_out is not None]
+    return {"days": days, "el_kwh": round(sum(max(h.e, 0.0) for h in hs), 2),
+            "t_out_mean": round(sum(touts) / len(touts), 1) if touts else None, "hours": len(hs)}

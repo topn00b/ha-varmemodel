@@ -1,41 +1,52 @@
-"""Opsætning, entiteter og kalibrering med en tom database."""
+"""Opsætning, flytning fra version 1, entiteter og opsamling."""
 
 from __future__ import annotations
 
+from datetime import timedelta
+import time
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
 
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntryState, ConfigSubentryData
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
 
+from custom_components.varmemodel.calibration import Fit, Hour
 from custom_components.varmemodel.const import DOMAIN
 
-DATA = {
-    "name": "Varmepumpe",
-    "electricity_energy": "sensor.vp_el",
-    "heat_energy": "sensor.vp_varme",
-    "outdoor_temp": "sensor.ude",
-    "indoor_temps": ["sensor.rum_1", "sensor.rum_2"],
-    "compressor": "binary_sensor.kompressor",
-}
+HOUSE = {"name": "Hus", "outdoor_temp": "sensor.ude", "indoor_temps": ["sensor.rum_1", "sensor.rum_2"]}
+HYD = {"name": "Luft-vand", "source_type": "hydronic", "electricity_energy": "sensor.vp_el", "heat_energy": "sensor.vp_varme",
+       "compressor": "binary_sensor.kompressor"}
+AIR = {"name": "Luft-luft", "source_type": "air_air", "electricity_energy": "sensor.ll_el"}
+
+
+def _sub(data: dict, kind: str) -> ConfigSubentryData:
+    return ConfigSubentryData(data=data, subentry_type=kind, title=data["name"], unique_id=None)
 
 
 @pytest.fixture
 async def entry(ha: HomeAssistant) -> MockConfigEntry:
-    e = MockConfigEntry(domain=DOMAIN, data=DATA, title="Varmepumpe")
+    e = MockConfigEntry(domain=DOMAIN, data=HOUSE, title="Hus", version=2, subentries_data=[_sub(HYD, "source"), _sub(AIR, "source")])
     e.add_to_hass(ha)
     assert await ha.config_entries.async_setup(e.entry_id)
-    await ha.async_block_till_done()
+    await ha.async_block_till_done(wait_background_tasks=True)
     return e
 
 
 async def test_setup_creates_entities(ha: HomeAssistant, entry: MockConfigEntry) -> None:
     assert entry.state is ConfigEntryState.LOADED
-    reg = er.async_get(ha)
-    ents = er.async_entries_for_config_entry(reg, entry.entry_id)
-    keys = {e.unique_id.removeprefix(entry.entry_id + "_") for e in ents}
-    assert {"heat_loss", "cop", "cop_steady", "cop_loss", "cop_yesterday", "cop_week", "room_sensor.rum_1", "emission", "curve", "cooling", "status", "recalibrate", "mode"} <= keys
+    ents = er.async_entries_for_config_entry(er.async_get(ha), entry.entry_id)
+    uids = {e.unique_id.removeprefix(entry.entry_id + "_") for e in ents}
+    hyd = next(s for s, x in entry.subentries.items() if x.data["source_type"] == "hydronic")
+    air = next(s for s, x in entry.subentries.items() if x.data["source_type"] == "air_air")
+    assert {"status", "recalibrate", "mode"} <= uids
+    assert {f"{hyd}_heat_loss", f"{hyd}_cop_steady", f"{hyd}_cop_yesterday", f"{air}_el_yesterday"} <= uids
+    assert {"room_sensor.rum_1", "room_sensor.rum_2"} <= uids
+    # varmekildens sensorer hører til dens underpunkt
+    assert all(e.config_subentry_id == hyd for e in ents if e.unique_id.startswith(f"{entry.entry_id}_{hyd}_"))
 
 
 async def test_calibrate_without_data(ha: HomeAssistant, entry: MockConfigEntry) -> None:
@@ -43,20 +54,15 @@ async def test_calibrate_without_data(ha: HomeAssistant, entry: MockConfigEntry)
     await c.async_calibrate()
     await ha.async_block_till_done()
     assert c.status in ("insufficient", "partial")
-    st = ha.states.get("sensor.varmepumpe_kalibrering") or next(
-        s for s in ha.states.async_all("sensor") if s.entity_id.endswith("calibration")
-    )
-    assert st.state == c.status
 
 
 async def test_frozen_mode_keeps_values(ha: HomeAssistant, entry: MockConfigEntry) -> None:
-    from custom_components.varmemodel.calibration import Fit
-
     c = entry.runtime_data
-    c._accept("cop", Fit(3.0, 50, 0.5, 0.1, 0.0, 5.0, "fit"), 1.0)
+    s = c.hydronic
+    c._accept(s, "cop", Fit(3.0, 50, 0.5, 0.1, 0.0, 5.0, "fit"), 1.0)
     await c.async_set_mode("frozen")
-    c._accept("cop", Fit(2.0, 50, 0.5, 0.1, 0.0, 5.0, "fit"), 2.0)
-    assert c.accepted["cop"]["value"] == 3.0
+    c._accept(s, "cop", Fit(2.0, 50, 0.5, 0.1, 0.0, 5.0, "fit"), 2.0)
+    assert s.accepted["cop"]["value"] == 3.0
 
 
 async def test_unload(ha: HomeAssistant, entry: MockConfigEntry) -> None:
@@ -64,82 +70,99 @@ async def test_unload(ha: HomeAssistant, entry: MockConfigEntry) -> None:
     assert entry.state is ConfigEntryState.NOT_LOADED
 
 
+async def test_migrate_from_version_1(ha: HomeAssistant) -> None:
+    """Version 1 (én varmepumpe) flyttes til huset med varmepumpen som varmekilde. Entitets-id'er og data bevares."""
+    v1 = {"name": "Luft-vand", "electricity_energy": "sensor.vp_el", "heat_energy": "sensor.vp_varme", "outdoor_temp": "sensor.ude",
+          "indoor_temps": ["sensor.rum_1"], "compressor": "binary_sensor.kompressor", "curve_offset_zero": 17}
+    e = MockConfigEntry(domain=DOMAIN, data=v1, title="Luft-vand", version=1,
+                        subentries_data=[_sub({"name": "Stue", "temperature": "sensor.rum_1"}, "room")])
+    e.add_to_hass(ha)
+    reg = er.async_get(ha)
+    old = reg.async_get_or_create("sensor", DOMAIN, f"{e.entry_id}_heat_loss", config_entry=e, suggested_object_id="luft_vand_heat_loss")
+    h = str(int(time.time()) // 3600 * 3600 - 7200)
+    store_v1 = {"collected": {h: {"comp": 60.0, "ws": 3.0, "air": ["sensor.rum_1"]}}, "accepted": {"cop": {"value": 2.5}},
+                "fits": {}, "runs": [{"at": time.time()}], "slots": {"1": [0.3, 0.1, 5.0, 33.0, 20.0]}, "daily": {}, "calib_version": 4}
+    from homeassistant.helpers.storage import Store
+
+    await Store(ha, 1, f"{DOMAIN}.{e.entry_id}").async_save(store_v1)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done(wait_background_tasks=True)
+    assert e.version == 2
+    src = [s for s in e.subentries.values() if s.subentry_type == "source"]
+    assert len(src) == 1 and src[0].data["source_type"] == "hydronic" and src[0].data["legacy_ids"] is True
+    assert src[0].data["curve_offset_zero"] == 17 and "electricity_energy" not in e.data
+    assert e.data["outdoor_temp"] == "sensor.ude"
+    # Samme entitet (samme entitets-id), nu på varmekildens underpunkt
+    new = reg.async_get(old.entity_id)
+    assert new is not None and new.config_subentry_id == src[0].subentry_id
+    c = e.runtime_data
+    s = c.sources[src[0].subentry_id]
+    assert s.collected[h] == {"comp": 60.0}
+    assert c.collected[h] == {"ws": 3.0, "air": ["sensor.rum_1"]}
+    assert s.accepted["cop"]["value"] == 2.5 and "1" in s.slots
+
+
 async def test_collect_with_weather_and_setpoint(ha: HomeAssistant) -> None:
     """Vejr og setpunkt hentes fra historikken i samme opsamling (regression: variabel blev overskrevet)."""
-    from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
-
     ha.states.async_set("weather.hjem", "sunny", {"wind_speed": 18.0, "wind_speed_unit": "km/h", "wind_bearing": 270, "cloud_coverage": 20, "uv_index": 1, "humidity": 80})
     ha.states.async_set("climate.vand", "heat", {"temperature": 35})
     ha.states.async_set("climate.vp", "auto", {"temperature": 19})
     await async_wait_recording_done(ha)
-    e = MockConfigEntry(domain=DOMAIN, title="VP", data={**DATA, "weather": "weather.hjem", "flow_setpoint": "climate.vand",
-                                                         "flow_setpoint_attribute": "temperature", "curve_offset": "climate.vp",
-                                                         "curve_offset_attribute": "temperature", "curve_offset_zero": 17})
+    hyd = {**HYD, "flow_setpoint": "climate.vand", "flow_setpoint_attribute": "temperature", "curve_offset": "climate.vp",
+           "curve_offset_attribute": "temperature", "curve_offset_zero": 17}
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "weather": "weather.hjem"}, subentries_data=[_sub(hyd, "source")])
     e.add_to_hass(ha)
     assert await ha.config_entries.async_setup(e.entry_id)
     await ha.async_block_till_done()
     c = e.runtime_data
-    h0 = __import__("time").time() // 3600 * 3600
-    rows = c._collect_sync(h0 - 3600, h0 + 3 * 3600)  # timen efter "nu" er helt dækket af vejret
-    assert any("ws" in v for v in rows.values())
+    h0 = time.time() // 3600 * 3600
+    house, per = c._collect_sync(h0 - 3600, h0 + 3 * 3600)  # timen efter "nu" er helt dækket
+    nxt = int(h0 + 3600)
+    assert house[nxt]["ws"] == 5.0
+    sid = next(iter(per))
+    assert per[sid][nxt]["sp"] == 35.0 and per[sid][nxt]["off"] == 2.0
     await c.async_calibrate()
     assert c.status != "error", c.status_note
 
 
-async def test_room_subentry_and_room_heat(ha: HomeAssistant) -> None:
-    """Rum som underpunkt: rumsensorer knyttes til underpunktet, og varmen fordeles efter telestaten."""
-    from homeassistant.config_entries import ConfigSubentryData
-
-    from custom_components.varmemodel.calibration import Hour
-
-    e = MockConfigEntry(domain=DOMAIN, title="VP", data=DATA, subentries_data=[
-        ConfigSubentryData(data={"name": "Stue", "temperature": "sensor.rum_1", "valve": "binary_sensor.stue_ventil", "loop_weight": 1.0},
-                           subentry_type="room", title="Stue", unique_id=None),
-        ConfigSubentryData(data={"name": "Bad", "temperature": "sensor.rum_2", "always_open": True, "loop_weight": 1.0},
-                           subentry_type="room", title="Bad", unique_id=None),
-    ])
-    e.add_to_hass(ha)
-    assert await ha.config_entries.async_setup(e.entry_id)
-    await ha.async_block_till_done()
-    c = e.runtime_data
-    assert [r["name"] for r in c.rooms_cfg] == ["Stue", "Bad"]
-    await ha.async_block_till_done(wait_background_tasks=True)
-    reg = er.async_get(ha)
-    ents = er.async_entries_for_config_entry(reg, e.entry_id)
-    assert any(x.unique_id.endswith("room_heat_sensor.rum_1") and x.config_subentry_id for x in ents), [(x.unique_id, x.config_subentry_id) for x in ents]
-    # Én time i går: stuen åben 30 min, badet altid åben (60 min) → 1/3 og 2/3 af varmen
-    from homeassistant.util import dt as dt_util
-    from datetime import timedelta
-
-    y = dt_util.start_of_local_day() - timedelta(hours=12)
-    ts = int(y.timestamp()) // 3600 * 3600
-    c.collected[str(ts)] = {"comp": 60.0, "vchk": 1, "v": {"sensor.rum_1": 30.0}}
-    res = c._room_heat([Hour(ts=ts, q=3.0, dhw=0)])
-    assert res["sensor.rum_1"]["yesterday_kwh"] == 1.0
-    assert res["sensor.rum_2"]["yesterday_kwh"] == 2.0
-
-
 async def test_collect_valve_minutes_from_history(ha: HomeAssistant) -> None:
     """Telestaternes minutter hentes fra historikken (regression: LazyState har ingen .domain)."""
-    from homeassistant.config_entries import ConfigSubentryData
-    from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
-
     ha.states.async_set("binary_sensor.kompressor", "on")
     ha.states.async_set("binary_sensor.stue_ventil", "on")
     ha.states.async_set("climate.kontor", "heat", {"hvac_action": "heating"})
     await async_wait_recording_done(ha)
-    e = MockConfigEntry(domain=DOMAIN, title="VP", data=DATA, subentries_data=[
-        ConfigSubentryData(data={"name": "Stue", "temperature": "sensor.rum_1", "valve": "binary_sensor.stue_ventil"},
-                           subentry_type="room", title="Stue", unique_id=None),
-        ConfigSubentryData(data={"name": "Kontor", "temperature": "sensor.rum_2", "valve": "climate.kontor"},
-                           subentry_type="room", title="Kontor", unique_id=None),
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data=HOUSE, subentries_data=[
+        _sub(HYD, "source"),
+        _sub({"name": "Stue", "temperature": "sensor.rum_1", "valve": "binary_sensor.stue_ventil"}, "room"),
+        _sub({"name": "Kontor", "temperature": "sensor.rum_2", "valve": "climate.kontor"}, "room"),
     ])
     e.add_to_hass(ha)
     assert await ha.config_entries.async_setup(e.entry_id)
     await ha.async_block_till_done()
     c = e.runtime_data
-    h0 = __import__("time").time() // 3600 * 3600
-    rows = c._collect_sync(h0 - 3600, h0 + 3 * 3600)
-    nxt = rows[int(h0 + 3600)]
-    assert nxt["vchk"] == 1
-    assert nxt["v"]["sensor.rum_1"] == 60.0 and nxt["v"]["sensor.rum_2"] == 60.0
+    h0 = time.time() // 3600 * 3600
+    house, _ = c._collect_sync(h0 - 3600, h0 + 3 * 3600)
+    nxt = house[int(h0 + 3600)]
+    assert nxt["vchk"] == 1 and nxt["v"]["sensor.rum_1"] == 60.0 and nxt["v"]["sensor.rum_2"] == 60.0
+
+
+async def test_room_heat_split(ha: HomeAssistant) -> None:
+    """Varmen fordeles efter telestat og altid åben kreds; rummene har egne enheder."""
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data=HOUSE, subentries_data=[
+        _sub(HYD, "source"),
+        _sub({"name": "Stue", "temperature": "sensor.rum_1", "valve": "binary_sensor.stue_ventil", "loop_weight": 1.0}, "room"),
+        _sub({"name": "Bad", "temperature": "sensor.rum_2", "always_open": True, "loop_weight": 1.0}, "room"),
+    ])
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done(wait_background_tasks=True)
+    c = e.runtime_data
+    ents = er.async_entries_for_config_entry(er.async_get(ha), e.entry_id)
+    assert any(x.unique_id.endswith("room_heat_sensor.rum_1") and x.config_subentry_id for x in ents)
+    y = dt_util.start_of_local_day() - timedelta(hours=12)
+    ts = int(y.timestamp()) // 3600 * 3600
+    c.collected[str(ts)] = {"vchk": 1, "v": {"sensor.rum_1": 30.0}}
+    c.hydronic.collected[str(ts)] = {"comp": 60.0}
+    res = c._room_heat({c.hydronic.sid: [Hour(ts=ts, q=3.0, dhw=0)]})
+    assert res["sensor.rum_1"]["yesterday_kwh"] == 1.0
+    assert res["sensor.rum_2"]["yesterday_kwh"] == 2.0

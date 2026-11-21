@@ -39,23 +39,26 @@ Hver nat kl. 03:17 regnes alle tal ud igen af de seneste 60 dages timestatistik.
 
 ## Opsætning
 
-Du vælger selv dine sensorer. Kun el, udetemperatur og rumtemperaturer er påkrævet. Jo flere du vælger, jo flere tal kan regnes ud.
+Opbygningen er **huset** med **varmekilder** og **rum** som underpunkter. Rummene lærer selv, hvilke varmekilder der varmer dem, og hvor meget.
 
-| Felt | Eksempel | Bruges til |
+**Huset**: udetemperatur (påkrævet), vejr (valgfrit, fx Met.no), antal dage i kalibreringen.
+
+**Varmekilde** (*Tilføj varmekilde*), to typer:
+
+| Felt | Luft-vand / vandbåren | Luft-luft |
 |---|---|---|
-| El til varmepumpen (kWh, samlet) | `sensor.vp_el` | COP |
-| Varme leveret (kWh, samlet) | `sensor.vp_varme` | varmetab, COP, afgivelse, effekt |
-| Udetemperatur | `sensor.ude` | alt |
-| Rumtemperaturer | `sensor.rum_1`, `sensor.rum_2` | varmetab, afgivelse, afkøling |
-| Fremløb / retur | `sensor.fremlob`, `sensor.retur` | COP, afgivelse |
-| Kompressor / afrimning / varmt vand | `binary_sensor.kompressor` … | fulde driftstimer, afrimninger, varmt vand |
-| Vejr | `weather.hjem` | vind, vindretning, skydække og UV time for time |
-| Fremløbs-setpunkt (entitet + evt. attribut) | `climate.vand`, attribut `temperature` | varmekurven |
-| Kurve-forskydning (entitet + attribut + nulpunkt) | `climate.varmepumpe`, `temperature`, 17 | varmekurven |
+| El (kWh, samlet) | påkrævet | påkrævet |
+| Varme leveret (kWh, samlet) | anbefalet | – |
+| Fremløb / retur | valgfrit | – |
+| Kompressor / afrimning / varmt vand | valgfrit | kompressor / afrimning valgfrit |
+| Fremløbs-setpunkt og kurve-forskydning | valgfrit (varmekurven) | – |
+| Enhedens egen føler (entitet + attribut) | – | valgfrit, fx `current_temperature` |
 
-Sensorer med energi og temperatur skal have langtidsstatistik (`state_class`). Det tjekker opsætningen.
+En luft-vand-kilde får alle kalibreringstallene herunder. En luft-luft-kilde uden varmemåler får el pr. døgn, og rummene lærer, hvor mange grader de får pr. kWh el.
 
-On/off-sensorer (kompressor, afrimning, varmt vand) og vejrets attributter gemmer Home Assistant ikke som langtidsstatistik. Integrationen opsummerer dem derfor selv time for time og gemmer dem i 120 dage. Ved første opstart fyldes de seneste 14 dage op fra historikken.
+Sensorer med energi og temperatur skal have langtidsstatistik (`state_class`). Det tjekker opsætningen. On/off-sensorer og attributter (kompressor, afrimning, varmt vand, setpunkt, vejr) gemmer Home Assistant ikke som langtidsstatistik. Integrationen opsummerer dem derfor selv time for time og gemmer dem i 120 dage. Ved første opstart fyldes de seneste 14 dage op fra historikken.
+
+Opgraderer du fra 0.2, flyttes opsætningen automatisk: varmepumpen bliver husets første varmekilde, og dens sensorer beholder entitets-id'er og historik.
 
 ## Rum
 
@@ -69,9 +72,10 @@ Tilføj hvert rum som et underpunkt (*Tilføj rum* på integrationen):
 | Telestat / ventil | `binary_sensor.rum_1_ventil` | fordeling af husets varme på rummene |
 | Kredsen er altid åben | til/fra | fx et badeværelse uden telestat |
 | Relativ kredsstørrelse | 1 | 2 hvis rummet har dobbelt så mange slynger |
-| Tæller med i planen | til/fra | rum der vises, men ikke styres efter |
+| Tæller med i planen | til/fra | rum der vises og læres, men ikke styres efter (fx en kælder) |
+| Nabozoner | `sensor.kaelder`, `sensor.trappe` | tilstødende zoner; modellen lærer, hvor meget varme der går imellem |
 
-Hvert rum får sin egen enhed med **Afkøling** (se ovenfor) og, hvis der er telestat eller altid åben kreds, **Varme** i kWh pr. døgn (snit af 7 døgn). Varmen er husets målte varme fordelt time for time efter kredsstørrelse × minutter åben, mens kompressoren kørte. Attributterne viser andel af gulvvarmen, timer åben med varme og **brat afkøling pr. døgn** (døre, udluftning).
+Hvert rum får sin egen enhed med **Afkøling** (med hvor mange grader rummet får pr. kWh fra hver varmekilde, og hvor meget naboerne betyder) (se ovenfor) og, hvis der er telestat eller altid åben kreds, **Varme** i kWh pr. døgn (snit af 7 døgn). Varmen er husets målte varme fordelt time for time efter kredsstørrelse × minutter åben, mens kompressoren kørte. Attributterne viser andel af gulvvarmen, timer åben med varme og **brat afkøling pr. døgn** (døre, udluftning).
 
 ## Diagnostik
 

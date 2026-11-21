@@ -3,37 +3,17 @@
     "step": {
       "user": {
         "title": "Varmemodel",
-        "description": "Pick your own meters and sensors. Only electricity, outdoor and room temperatures are required – the more you add, the more can be calibrated.",
+        "description": "The house: outdoor temperature and weather. Add heat sources and rooms afterwards as sub-entries of the integration.",
         "data": {
           "name": "Name",
-          "electricity_energy": "Heat pump electricity (kWh, total)",
-          "heat_energy": "Heat delivered (kWh, total)",
           "outdoor_temp": "Outdoor temperature",
-          "indoor_temps": "Room temperatures",
-          "flow_temp": "Flow temperature",
-          "return_temp": "Return temperature",
-          "compressor": "Compressor running",
-          "defrost": "Defrost",
-          "dhw": "Domestic hot water",
-          "flow_setpoint": "Flow setpoint (entity)",
-          "flow_setpoint_attribute": "Flow setpoint: attribute (empty = state)",
-          "curve_offset": "Curve offset (entity)",
-          "curve_offset_attribute": "Curve offset: attribute (empty = state)",
-          "curve_offset_zero": "Curve offset: value meaning 0",
-          "window_days": "Days of data used for calibration",
-          "weather": "Weather (wind, cloud cover, UV)"
+          "weather": "Weather (wind, cloud cover, UV)",
+          "indoor_temps": "Room temperatures (only if you don't add rooms)",
+          "window_days": "Days of data used for calibration"
         },
         "data_description": {
-          "electricity_energy": "Must have long-term statistics.",
-          "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
-          "indoor_temps": "The average is used as the indoor temperature.",
-          "compressor": "Used to find full running hours and count starts.",
-          "defrost": "Defrosts are counted per power and outdoor temperature.",
-          "dhw": "Hours with hot water are excluded from space heating.",
-          "flow_setpoint": "E.g. the water setpoint. Used to fit the heating curve.",
-          "curve_offset": "E.g. the entity whose target shifts the curve.",
-          "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0.",
-          "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated."
+          "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated.",
+          "indoor_temps": "Otherwise the indoor temperature is the average of the rooms included in the plan."
         }
       }
     },
@@ -47,34 +27,14 @@
       "init": {
         "title": "Varmemodel",
         "data": {
-          "electricity_energy": "Heat pump electricity (kWh, total)",
-          "heat_energy": "Heat delivered (kWh, total)",
           "outdoor_temp": "Outdoor temperature",
-          "indoor_temps": "Room temperatures",
-          "flow_temp": "Flow temperature",
-          "return_temp": "Return temperature",
-          "compressor": "Compressor running",
-          "defrost": "Defrost",
-          "dhw": "Domestic hot water",
-          "flow_setpoint": "Flow setpoint (entity)",
-          "flow_setpoint_attribute": "Flow setpoint: attribute (empty = state)",
-          "curve_offset": "Curve offset (entity)",
-          "curve_offset_attribute": "Curve offset: attribute (empty = state)",
-          "curve_offset_zero": "Curve offset: value meaning 0",
-          "window_days": "Days of data used for calibration",
-          "weather": "Weather (wind, cloud cover, UV)"
+          "weather": "Weather (wind, cloud cover, UV)",
+          "indoor_temps": "Room temperatures (only if you don't add rooms)",
+          "window_days": "Days of data used for calibration"
         },
         "data_description": {
-          "electricity_energy": "Must have long-term statistics.",
-          "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
-          "indoor_temps": "The average is used as the indoor temperature.",
-          "compressor": "Used to find full running hours and count starts.",
-          "defrost": "Defrosts are counted per power and outdoor temperature.",
-          "dhw": "Hours with hot water are excluded from space heating.",
-          "flow_setpoint": "E.g. the water setpoint. Used to fit the heating curve.",
-          "curve_offset": "E.g. the entity whose target shifts the curve.",
-          "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0.",
-          "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated."
+          "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated.",
+          "indoor_temps": "Otherwise the indoor temperature is the average of the rooms included in the plan."
         }
       }
     },
@@ -146,6 +106,12 @@
       },
       "room_heat_device": {
         "name": "Heat"
+      },
+      "el_yesterday": {
+        "name": "Electricity yesterday"
+      },
+      "el_week": {
+        "name": "Electricity per day, 7 days"
       }
     },
     "button": {
@@ -164,6 +130,66 @@
     }
   },
   "config_subentries": {
+    "source": {
+      "initiate_flow": {
+        "user": "Add heat source"
+      },
+      "entry_type": "Heat source",
+      "step": {
+        "user": {
+          "title": "Add heat source",
+          "data": {
+            "name": "Name",
+            "source_type": "Type"
+          },
+          "data_description": {}
+        },
+        "hydronic": {
+          "title": "Air-to-water (hydronic)",
+          "data": {
+            "electricity_energy": "Electricity (kWh, total)",
+            "heat_energy": "Heat delivered (kWh, total)",
+            "flow_temp": "Flow temperature",
+            "return_temp": "Return temperature",
+            "compressor": "Compressor running",
+            "defrost": "Defrost",
+            "dhw": "Domestic hot water",
+            "flow_setpoint": "Flow setpoint (entity)",
+            "flow_setpoint_attribute": "Flow setpoint: attribute (empty = state)",
+            "curve_offset": "Curve offset (entity)",
+            "curve_offset_attribute": "Curve offset: attribute (empty = state)",
+            "curve_offset_zero": "Curve offset: value meaning 0"
+          },
+          "data_description": {
+            "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
+            "compressor": "Used for full running hours, starts and splitting heat between rooms.",
+            "dhw": "Hours with hot water are excluded from space heating.",
+            "flow_setpoint": "E.g. the water setpoint. Used to fit the heating curve.",
+            "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0."
+          }
+        },
+        "air_air": {
+          "title": "Air-to-air",
+          "data": {
+            "electricity_energy": "Electricity (kWh, total)",
+            "unit_temp": "The unit's own temperature sensor",
+            "unit_temp_attribute": "Unit sensor: attribute (e.g. current_temperature)",
+            "compressor": "Compressor running",
+            "defrost": "Defrost"
+          },
+          "data_description": {
+            "electricity_energy": "Without a heat meter the rooms learn how many degrees they get per kWh of electricity."
+          }
+        }
+      },
+      "error": {
+        "not_found": "Entity not found.",
+        "no_statistics": "Entity has no long-term statistics (missing state_class)."
+      },
+      "abort": {
+        "reconfigure_successful": "Saved."
+      }
+    },
     "room": {
       "initiate_flow": {
         "user": "Add room"
@@ -180,13 +206,15 @@
             "valve": "Valve / actuator",
             "always_open": "Loop is always open",
             "loop_weight": "Relative loop size",
-            "in_plan": "Included in the plan"
+            "in_plan": "Included in the plan",
+            "neighbours": "Neighbouring zones"
           },
           "data_description": {
             "minimum_entity": "E.g. an input_number with the lowest comfort temperature.",
-            "valve": "On/open = the room receives heat. Used to split the heat between rooms.",
+            "valve": "On/open = the room receives heat from the hydronic source.",
             "loop_weight": "1 = normal. A room with twice the loop length: 2.",
-            "in_plan": "Off = shown, but the plan does not consider it."
+            "in_plan": "Off = shown and learned, but not considered by the plan (e.g. a basement).",
+            "neighbours": "Temperature sensors in adjacent zones, e.g. the basement or a stairwell. The model learns how much heat flows between them."
           }
         },
         "reconfigure": {
@@ -199,22 +227,33 @@
             "valve": "Valve / actuator",
             "always_open": "Loop is always open",
             "loop_weight": "Relative loop size",
-            "in_plan": "Included in the plan"
+            "in_plan": "Included in the plan",
+            "neighbours": "Neighbouring zones"
           },
           "data_description": {
             "minimum_entity": "E.g. an input_number with the lowest comfort temperature.",
-            "valve": "On/open = the room receives heat. Used to split the heat between rooms.",
+            "valve": "On/open = the room receives heat from the hydronic source.",
             "loop_weight": "1 = normal. A room with twice the loop length: 2.",
-            "in_plan": "Off = shown, but the plan does not consider it."
+            "in_plan": "Off = shown and learned, but not considered by the plan (e.g. a basement).",
+            "neighbours": "Temperature sensors in adjacent zones, e.g. the basement or a stairwell. The model learns how much heat flows between them."
           }
         }
       },
       "error": {
+        "not_found": "Entity not found.",
         "no_statistics": "Entity has no long-term statistics (missing state_class).",
         "duplicate_room": "This sensor is already used by another room."
       },
       "abort": {
         "reconfigure_successful": "Saved."
+      }
+    }
+  },
+  "selector": {
+    "source_type": {
+      "options": {
+        "hydronic": "Air-to-water / hydronic",
+        "air_air": "Air-to-air"
       }
     }
   }

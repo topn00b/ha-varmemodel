@@ -54,10 +54,12 @@ async def test_calibration_from_recorder_statistics(ha: HomeAssistant) -> None:
     async_import_statistics(ha, _meta("sensor.fremlob", "°C", False, "temperature"), flows)
     await async_wait_recording_done(ha)
 
-    entry = MockConfigEntry(domain=DOMAIN, title="Varmepumpe", data={
-        "name": "Varmepumpe", "electricity_energy": "sensor.vp_el", "heat_energy": "sensor.vp_varme",
-        "outdoor_temp": "sensor.ude", "indoor_temps": ["sensor.rum_1"], "flow_temp": "sensor.fremlob",
-    })
+    from homeassistant.config_entries import ConfigSubentryData
+
+    entry = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={
+        "name": "Hus", "outdoor_temp": "sensor.ude", "indoor_temps": ["sensor.rum_1"]}, subentries_data=[ConfigSubentryData(
+        data={"name": "Luft-vand", "source_type": "hydronic", "electricity_energy": "sensor.vp_el", "heat_energy": "sensor.vp_varme",
+              "flow_temp": "sensor.fremlob"}, subentry_type="source", title="Luft-vand", unique_id=None)])
     entry.add_to_hass(ha)
     assert await ha.config_entries.async_setup(entry.entry_id)
     await ha.async_block_till_done()
@@ -65,8 +67,9 @@ async def test_calibration_from_recorder_statistics(ha: HomeAssistant) -> None:
     await c.async_calibrate()
     await ha.async_block_till_done()
 
-    assert len(c.last_hours) >= len(hours) - 30
-    assert abs(c.accepted["heat_loss"]["value"] - 3 * H_TRUE) < 15
-    assert abs(c.accepted["cop"]["value"] - (A + C * 35)) < 0.1
-    assert c.accepted["cop"]["extra"]["c_source"] == "fit"
+    s = c.hydronic
+    assert len(s.last_hours) >= len(hours) - 30
+    assert abs(s.accepted["heat_loss"]["value"] - 3 * H_TRUE) < 15
+    assert abs(s.accepted["cop"]["value"] - (A + C * 35)) < 0.1
+    assert s.accepted["cop"]["extra"]["c_source"] == "fit"
     assert c.status in ("partial", "ok")
