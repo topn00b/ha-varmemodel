@@ -207,14 +207,16 @@
             "always_open": "Kredsen er altid åben",
             "loop_weight": "Relativ kredsstørrelse",
             "in_plan": "Tæller med i planen",
-            "neighbours": "Nabozoner"
+            "neighbours": "Nabozoner",
+            "heat_source": "Varmekilde"
           },
           "data_description": {
             "minimum_entity": "Fx en input_number med rummets laveste komforttemperatur.",
             "valve": "Tændt/åben = rummet får varme fra den vandbårne varmekilde.",
             "loop_weight": "1 = normal. Har rummet dobbelt så mange slynger som de andre, så 2.",
             "in_plan": "Fra = rummet vises og læres, men planen tager ikke hensyn til det (fx en kælder).",
-            "neighbours": "Temperaturfølere i tilstødende zoner, fx kælderen under stueetagen eller trappeopgangen. Modellen lærer, hvor meget varme der går imellem."
+            "neighbours": "Temperaturfølere i tilstødende zoner, fx kælderen under stueetagen eller trappeopgangen. Modellen lærer, hvor meget varme der går imellem.",
+            "heat_source": "Den varmekilde, som rummets termostat eller telestat styrer. Modellen lærer stadig virkningen fra alle kilder."
           }
         },
         "reconfigure": {
@@ -228,14 +230,16 @@
             "always_open": "Kredsen er altid åben",
             "loop_weight": "Relativ kredsstørrelse",
             "in_plan": "Tæller med i planen",
-            "neighbours": "Nabozoner"
+            "neighbours": "Nabozoner",
+            "heat_source": "Varmekilde"
           },
           "data_description": {
             "minimum_entity": "Fx en input_number med rummets laveste komforttemperatur.",
             "valve": "Tændt/åben = rummet får varme fra den vandbårne varmekilde.",
             "loop_weight": "1 = normal. Har rummet dobbelt så mange slynger som de andre, så 2.",
             "in_plan": "Fra = rummet vises og læres, men planen tager ikke hensyn til det (fx en kælder).",
-            "neighbours": "Temperaturfølere i tilstødende zoner, fx kælderen under stueetagen eller trappeopgangen. Modellen lærer, hvor meget varme der går imellem."
+            "neighbours": "Temperaturfølere i tilstødende zoner, fx kælderen under stueetagen eller trappeopgangen. Modellen lærer, hvor meget varme der går imellem.",
+            "heat_source": "Den varmekilde, som rummets termostat eller telestat styrer. Modellen lærer stadig virkningen fra alle kilder."
           }
         }
       },

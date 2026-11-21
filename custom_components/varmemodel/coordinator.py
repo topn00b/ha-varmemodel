@@ -61,6 +61,7 @@ from .const import (
     CONF_ROOM_MIN_ENTITY,
     CONF_ROOM_NAME,
     CONF_ROOM_NEIGHBOURS,
+    CONF_ROOM_SOURCE,
     CONF_ROOM_TEMP,
     CONF_ROOM_VALVE,
     CONF_ROOM_WEIGHT,
@@ -183,11 +184,20 @@ class VarmemodelCoordinator:
                  "always_open": bool(s.data.get(CONF_ROOM_ALWAYS_OPEN)), "weight": float(s.data.get(CONF_ROOM_WEIGHT) or 1.0),
                  "min_entity": s.data.get(CONF_ROOM_MIN_ENTITY), "min": s.data.get(CONF_ROOM_MIN),
                  "in_plan": s.data.get(CONF_ROOM_IN_PLAN, True), "neighbours": list(s.data.get(CONF_ROOM_NEIGHBOURS) or []),
-                 "subentry_id": sid}
+                 "source": s.data.get(CONF_ROOM_SOURCE), "subentry_id": sid}
                 for sid, s in subs
             ]
         return [{"key": e, "name": None, "valve": None, "always_open": False, "weight": 1.0, "min_entity": None, "min": None,
-                 "in_plan": True, "neighbours": [], "subentry_id": None} for e in (self.conf.get(CONF_INDOOR) or [])]
+                 "in_plan": True, "neighbours": [], "source": None, "subentry_id": None} for e in (self.conf.get(CONF_INDOOR) or [])]
+
+    def room_source(self, room: dict[str, Any]) -> SourceState | None:
+        """Varmekilden som rummets termostat/telestat styrer: den valgte, ellers den første vandbårne
+        for rum med telestat eller altid åben kreds."""
+        if room.get("source") in self.sources:
+            return self.sources[room["source"]]
+        if room.get("valve") or room.get("always_open"):
+            return self.hydronic
+        return None
 
     def _room_temps(self) -> list[str]:
         return list(dict.fromkeys(list(self.conf.get(CONF_INDOOR) or []) + [r["key"] for r in self.rooms_cfg]))
@@ -619,13 +629,18 @@ class VarmemodelCoordinator:
         return out
 
     def _room_heat(self, hours_by_source: dict[str, list[Hour]]) -> dict[str, dict[str, Any]]:
-        """Den vandbårne varme fordelt på rummene time for time efter (kredsstørrelse × minutter
-        åben mens kompressoren kørte). Altid åbne kredse tæller med alle kompressorminutter."""
-        hyd = self.hydronic
-        rooms = [r for r in self.rooms_cfg if r["valve"] or r["always_open"]]
-        if not rooms or hyd is None:
-            return {}
-        hours = hours_by_source.get(hyd.sid, [])
+        """Hver vandbåren varmekildes varme fordelt på dens rum time for time efter (kredsstørrelse ×
+        minutter åben mens kompressoren kørte). Altid åbne kredse tæller med alle kompressorminutter."""
+        out: dict[str, dict[str, Any]] = {}
+        for sid, src in self.sources.items():
+            if src.kind != SOURCE_HYDRONIC:
+                continue
+            rooms = [r for r in self.rooms_cfg if (r["valve"] or r["always_open"]) and self.room_source(r) is src]
+            if rooms:
+                out.update(self._split_heat(src, rooms, hours_by_source.get(sid, [])))
+        return out
+
+    def _split_heat(self, hyd: SourceState, rooms: list[dict[str, Any]], hours: list[Hour]) -> dict[str, dict[str, Any]]:
         day_of = lambda ts: dt_util.as_local(dt_util.utc_from_timestamp(ts)).date().isoformat()  # noqa: E731
         today = dt_util.now().date()
         days7 = {(today - timedelta(days=i)).isoformat() for i in range(1, 8)}
@@ -667,6 +682,6 @@ class VarmemodelCoordinator:
                 "share_pct": round(a["week"] / tot_week * 100, 1) if tot_week > 0 else None,
                 "open_hours_per_day": round(a["open_h"] / max(1, len(a["days"])), 1),
                 "sudden_drops_per_day": round(a["drops"] / max(1, len(a["days"])), 1), "days": len(a["days"]),
-                "valve_data": valve_seen}
+                "valve_data": valve_seen, "source": hyd.name}
             for k, a in acc.items()
         }

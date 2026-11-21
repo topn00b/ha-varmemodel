@@ -72,6 +72,7 @@ Tilføj hvert rum som et underpunkt (*Tilføj rum* på integrationen):
 | Telestat / ventil | `binary_sensor.rum_1_ventil` | fordeling af husets varme på rummene |
 | Kredsen er altid åben | til/fra | fx et badeværelse uden telestat |
 | Relativ kredsstørrelse | 1 | 2 hvis rummet har dobbelt så mange slynger |
+| Varmekilde | Luft-vand | den varmekilde, som rummets termostat eller telestat styrer (planen og fordelingen af varme bruger den; modellen lærer stadig af alle kilder) |
 | Tæller med i planen | til/fra | rum der vises og læres, men ikke styres efter (fx en kælder) |
 | Nabozoner | `sensor.kaelder`, `sensor.trappe` | tilstødende zoner; modellen lærer, hvor meget varme der går imellem |
 

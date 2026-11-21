@@ -61,6 +61,7 @@ CONF_ROOM_VALVE = "valve"
 CONF_ROOM_ALWAYS_OPEN = "always_open"
 CONF_ROOM_WEIGHT = "loop_weight"
 CONF_ROOM_IN_PLAN = "in_plan"
+CONF_ROOM_SOURCE = "heat_source"  # varmekilden som rummets termostat/telestat styrer (underpunkt-id)
 CONF_ROOM_NEIGHBOURS = "neighbours"  # nabozoner (temperaturfølere), fx kælder eller trappeopgang
 
 # Varmekilder (underpunkter)

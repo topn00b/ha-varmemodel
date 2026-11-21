@@ -38,6 +38,7 @@ from .const import (
     CONF_ROOM_MIN_ENTITY,
     CONF_ROOM_NAME,
     CONF_ROOM_NEIGHBOURS,
+    CONF_ROOM_SOURCE,
     CONF_ROOM_TEMP,
     CONF_ROOM_VALVE,
     CONF_ROOM_WEIGHT,
@@ -243,6 +244,20 @@ class RoomSubentryFlow(ConfigSubentryFlow):
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         return self._form("reconfigure", user_input, self._get_reconfigure_subentry())
 
+    def _schema(self) -> vol.Schema:
+        """Rummets felter; varmekilden vælges blandt husets varmekilder."""
+        sources = [
+            selector.SelectOptionDict(value=sid, label=s.title)
+            for sid, s in self._get_entry().subentries.items() if s.subentry_type == SUBENTRY_SOURCE
+        ]
+        if not sources:
+            return ROOM_SCHEMA
+        return ROOM_SCHEMA.extend({
+            vol.Optional(CONF_ROOM_SOURCE): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=sources, mode=selector.SelectSelectorMode.DROPDOWN)
+            )
+        })
+
     @callback
     def _form(self, step_id: str, user_input: dict[str, Any] | None, subentry: ConfigSubentry | None) -> SubentryFlowResult:
         errors: dict[str, str] = {}
@@ -264,4 +279,4 @@ class RoomSubentryFlow(ConfigSubentryFlow):
         suggested = dict(subentry.data) if subentry else {}
         if user_input is not None:
             suggested = user_input
-        return self.async_show_form(step_id=step_id, data_schema=self.add_suggested_values_to_schema(ROOM_SCHEMA, suggested), errors=errors)
+        return self.async_show_form(step_id=step_id, data_schema=self.add_suggested_values_to_schema(self._schema(), suggested), errors=errors)

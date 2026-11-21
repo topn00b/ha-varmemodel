@@ -166,3 +166,26 @@ async def test_room_heat_split(ha: HomeAssistant) -> None:
     res = c._room_heat({c.hydronic.sid: [Hour(ts=ts, q=3.0, dhw=0)]})
     assert res["sensor.rum_1"]["yesterday_kwh"] == 1.0
     assert res["sensor.rum_2"]["yesterday_kwh"] == 2.0
+
+
+async def test_room_source_selection(ha: HomeAssistant) -> None:
+    """Rummets varmekilde kan vælges; varmen fordeles kun på rum, der hører til den vandbårne kilde."""
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data=HOUSE, subentries_data=[_sub(HYD, "source"), _sub(AIR, "source")])
+    e.add_to_hass(ha)
+    air_id = next(s for s, x in e.subentries.items() if x.data["source_type"] == "air_air")
+    hyd_id = next(s for s, x in e.subentries.items() if x.data["source_type"] == "hydronic")
+    # vælg varmekilde i formularen
+    r = await ha.config_entries.subentries.async_init((e.entry_id, "room"), context={"source": "user"})
+    r = await ha.config_entries.subentries.async_configure(r["flow_id"], {"name": "Gang 1", "temperature": "sensor.rum_1", "heat_source": air_id})
+    assert r["type"].value == "create_entry"
+    r = await ha.config_entries.subentries.async_init((e.entry_id, "room"), context={"source": "user"})
+    r = await ha.config_entries.subentries.async_configure(r["flow_id"], {"name": "Stue", "temperature": "sensor.rum_2", "valve": "binary_sensor.v", "heat_source": hyd_id})
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done(wait_background_tasks=True)
+    c = e.runtime_data
+    rooms = {r["name"]: r for r in c.rooms_cfg}
+    assert c.room_source(rooms["Gang 1"]).kind == "air_air"
+    assert c.room_source(rooms["Stue"]).kind == "hydronic"
+    ents = er.async_entries_for_config_entry(er.async_get(ha), e.entry_id)
+    assert any(x.unique_id.endswith("room_heat_sensor.rum_2") for x in ents)
+    assert not any(x.unique_id.endswith("room_heat_sensor.rum_1") for x in ents)

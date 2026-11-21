@@ -36,7 +36,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
         async_add_entities(ents, config_subentry_id=sid)
     for r in c.rooms_cfg:
         rents: list[SensorEntity] = [RoomSensor(c, r)]
-        if r["valve"] or r["always_open"]:
+        src = c.room_source(r)
+        if (r["valve"] or r["always_open"]) and src is not None and src.kind == SOURCE_HYDRONIC:
             rents.append(RoomHeatSensor(c, r))
         if r["subentry_id"]:
             async_add_entities(rents, config_subentry_id=r["subentry_id"])
@@ -216,6 +217,7 @@ class RoomSensor(RoomEntity, SensorEntity):
         e = r.get("extra") or {}
         return {
             "kilde": self.source,
+            "varmekilde": (lambda s: s.name if s else None)(self.coordinator.room_source(next((x for x in self.coordinator.rooms_cfg if x["key"] == self.source), {}))),
             "tidskonstant_timer": e.get("time_constant_h"),
             "varmekilder_grader_pr_kwh": {k: v.get("total") for k, v in (e.get("sources") or {}).items()} or None,
             "varmekilder_detaljer": e.get("sources"),
@@ -258,5 +260,6 @@ class RoomHeatSensor(RoomEntity, SensorEntity):
             "åben_med_varme_timer_pr_døgn": r.get("open_hours_per_day"),
             "brat_afkøling_pr_døgn": r.get("sudden_drops_per_day"),
             "døgn": r.get("days"),
+            "varmekilde": r.get("source"),
             "metode": "den vandbårne varme fordelt efter kredsstørrelse × minutter åben mens kompressoren kørte",
         }
