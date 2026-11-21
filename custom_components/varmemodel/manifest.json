@@ -1,0 +1,17 @@
+{
+  "domain": "varmemodel",
+  "name": "Varmemodel",
+  "codeowners": [
+    "@topn00b"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "recorder"
+  ],
+  "documentation": "https://github.com/topn00b/ha-varmemodel",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/topn00b/ha-varmemodel/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

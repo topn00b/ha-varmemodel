@@ -1,0 +1,135 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Varmemodel",
+        "description": "Vælg dine egne målere og følere. Kun el, udetemperatur og rumtemperaturer er påkrævet – jo flere du vælger, jo flere tal kan regnes ud.",
+        "data": {
+          "name": "Navn",
+          "electricity_energy": "El til varmepumpen (kWh, samlet)",
+          "heat_energy": "Varme leveret (kWh, samlet)",
+          "outdoor_temp": "Udetemperatur",
+          "indoor_temps": "Rumtemperaturer",
+          "flow_temp": "Fremløbstemperatur",
+          "return_temp": "Returtemperatur",
+          "compressor": "Kompressor kører",
+          "defrost": "Afrimning",
+          "dhw": "Varmt vand",
+          "flow_setpoint": "Fremløbs-setpunkt (entitet)",
+          "flow_setpoint_attribute": "Fremløbs-setpunkt: attribut (tom = tilstand)",
+          "curve_offset": "Kurve-forskydning (entitet)",
+          "curve_offset_attribute": "Kurve-forskydning: attribut (tom = tilstand)",
+          "curve_offset_zero": "Kurve-forskydning: værdi der betyder 0",
+          "window_days": "Dage med data i kalibreringen"
+        },
+        "data_description": {
+          "electricity_energy": "Skal have langtidsstatistik.",
+          "heat_energy": "Uden den kan COP, varmetab og gulvets afgivelse ikke regnes ud.",
+          "indoor_temps": "Snittet bruges som husets indetemperatur.",
+          "compressor": "Bruges til at finde fulde driftstimer og tælle starter.",
+          "defrost": "Afrimninger tælles pr. effekt og udetemperatur.",
+          "dhw": "Timer med varmt vand holdes ude af rumopvarmningen.",
+          "flow_setpoint": "Fx varmepumpens vand-setpunkt. Bruges til at finde varmekurven.",
+          "curve_offset": "Fx den entitet, hvis måltemperatur forskyder kurven.",
+          "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0."
+        }
+      }
+    },
+    "error": {
+      "not_found": "Entiteten findes ikke.",
+      "no_statistics": "Entiteten har ingen langtidsstatistik (state_class mangler)."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Varmemodel",
+        "data": {
+          "electricity_energy": "El til varmepumpen (kWh, samlet)",
+          "heat_energy": "Varme leveret (kWh, samlet)",
+          "outdoor_temp": "Udetemperatur",
+          "indoor_temps": "Rumtemperaturer",
+          "flow_temp": "Fremløbstemperatur",
+          "return_temp": "Returtemperatur",
+          "compressor": "Kompressor kører",
+          "defrost": "Afrimning",
+          "dhw": "Varmt vand",
+          "flow_setpoint": "Fremløbs-setpunkt (entitet)",
+          "flow_setpoint_attribute": "Fremløbs-setpunkt: attribut (tom = tilstand)",
+          "curve_offset": "Kurve-forskydning (entitet)",
+          "curve_offset_attribute": "Kurve-forskydning: attribut (tom = tilstand)",
+          "curve_offset_zero": "Kurve-forskydning: værdi der betyder 0",
+          "window_days": "Dage med data i kalibreringen"
+        },
+        "data_description": {
+          "electricity_energy": "Skal have langtidsstatistik.",
+          "heat_energy": "Uden den kan COP, varmetab og gulvets afgivelse ikke regnes ud.",
+          "indoor_temps": "Snittet bruges som husets indetemperatur.",
+          "compressor": "Bruges til at finde fulde driftstimer og tælle starter.",
+          "defrost": "Afrimninger tælles pr. effekt og udetemperatur.",
+          "dhw": "Timer med varmt vand holdes ude af rumopvarmningen.",
+          "flow_setpoint": "Fx varmepumpens vand-setpunkt. Bruges til at finde varmekurven.",
+          "curve_offset": "Fx den entitet, hvis måltemperatur forskyder kurven.",
+          "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0."
+        }
+      }
+    },
+    "error": {
+      "not_found": "Entiteten findes ikke.",
+      "no_statistics": "Entiteten har ingen langtidsstatistik (state_class mangler)."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "heat_loss": {
+        "name": "Varmetab"
+      },
+      "cop": {
+        "name": "COP ved 0 °C og 35 °C fremløb"
+      },
+      "emission": {
+        "name": "Gulvets afgivelse"
+      },
+      "max_power": {
+        "name": "Maks. effekt"
+      },
+      "min_power": {
+        "name": "Laveste stabile effekt"
+      },
+      "curve": {
+        "name": "Varmekurve ved 0 °C"
+      },
+      "defrost": {
+        "name": "Afrimninger pr. kompressortime"
+      },
+      "cooling": {
+        "name": "Afkølingstid"
+      },
+      "status": {
+        "name": "Kalibrering",
+        "state": {
+          "waiting": "Venter",
+          "ok": "OK",
+          "partial": "Delvis",
+          "insufficient": "For få data",
+          "frozen": "Fastfrosset",
+          "error": "Fejl"
+        }
+      }
+    },
+    "button": {
+      "recalibrate": {
+        "name": "Kalibrér nu"
+      }
+    },
+    "select": {
+      "mode": {
+        "name": "Tilstand",
+        "state": {
+          "calibrated": "Lærer løbende",
+          "frozen": "Fastfrosset"
+        }
+      }
+    }
+  }
+}

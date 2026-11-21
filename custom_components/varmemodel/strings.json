@@ -1,0 +1,135 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Varmemodel",
+        "description": "Pick your own meters and sensors. Only electricity, outdoor and room temperatures are required – the more you add, the more can be calibrated.",
+        "data": {
+          "name": "Name",
+          "electricity_energy": "Heat pump electricity (kWh, total)",
+          "heat_energy": "Heat delivered (kWh, total)",
+          "outdoor_temp": "Outdoor temperature",
+          "indoor_temps": "Room temperatures",
+          "flow_temp": "Flow temperature",
+          "return_temp": "Return temperature",
+          "compressor": "Compressor running",
+          "defrost": "Defrost",
+          "dhw": "Domestic hot water",
+          "flow_setpoint": "Flow setpoint (entity)",
+          "flow_setpoint_attribute": "Flow setpoint: attribute (empty = state)",
+          "curve_offset": "Curve offset (entity)",
+          "curve_offset_attribute": "Curve offset: attribute (empty = state)",
+          "curve_offset_zero": "Curve offset: value meaning 0",
+          "window_days": "Days of data used for calibration"
+        },
+        "data_description": {
+          "electricity_energy": "Must have long-term statistics.",
+          "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
+          "indoor_temps": "The average is used as the indoor temperature.",
+          "compressor": "Used to find full running hours and count starts.",
+          "defrost": "Defrosts are counted per power and outdoor temperature.",
+          "dhw": "Hours with hot water are excluded from space heating.",
+          "flow_setpoint": "E.g. the water setpoint. Used to fit the heating curve.",
+          "curve_offset": "E.g. the entity whose target shifts the curve.",
+          "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0."
+        }
+      }
+    },
+    "error": {
+      "not_found": "Entity not found.",
+      "no_statistics": "Entity has no long-term statistics (missing state_class)."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Varmemodel",
+        "data": {
+          "electricity_energy": "Heat pump electricity (kWh, total)",
+          "heat_energy": "Heat delivered (kWh, total)",
+          "outdoor_temp": "Outdoor temperature",
+          "indoor_temps": "Room temperatures",
+          "flow_temp": "Flow temperature",
+          "return_temp": "Return temperature",
+          "compressor": "Compressor running",
+          "defrost": "Defrost",
+          "dhw": "Domestic hot water",
+          "flow_setpoint": "Flow setpoint (entity)",
+          "flow_setpoint_attribute": "Flow setpoint: attribute (empty = state)",
+          "curve_offset": "Curve offset (entity)",
+          "curve_offset_attribute": "Curve offset: attribute (empty = state)",
+          "curve_offset_zero": "Curve offset: value meaning 0",
+          "window_days": "Days of data used for calibration"
+        },
+        "data_description": {
+          "electricity_energy": "Must have long-term statistics.",
+          "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
+          "indoor_temps": "The average is used as the indoor temperature.",
+          "compressor": "Used to find full running hours and count starts.",
+          "defrost": "Defrosts are counted per power and outdoor temperature.",
+          "dhw": "Hours with hot water are excluded from space heating.",
+          "flow_setpoint": "E.g. the water setpoint. Used to fit the heating curve.",
+          "curve_offset": "E.g. the entity whose target shifts the curve.",
+          "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0."
+        }
+      }
+    },
+    "error": {
+      "not_found": "Entity not found.",
+      "no_statistics": "Entity has no long-term statistics (missing state_class)."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "heat_loss": {
+        "name": "Heat loss"
+      },
+      "cop": {
+        "name": "COP at 0 °C and 35 °C flow"
+      },
+      "emission": {
+        "name": "Floor emission"
+      },
+      "max_power": {
+        "name": "Maximum power"
+      },
+      "min_power": {
+        "name": "Lowest stable power"
+      },
+      "curve": {
+        "name": "Heating curve at 0 °C"
+      },
+      "defrost": {
+        "name": "Defrosts per compressor hour"
+      },
+      "cooling": {
+        "name": "Cooling time constant"
+      },
+      "status": {
+        "name": "Calibration",
+        "state": {
+          "waiting": "Waiting",
+          "ok": "OK",
+          "partial": "Partial",
+          "insufficient": "Insufficient data",
+          "frozen": "Frozen",
+          "error": "Error"
+        }
+      }
+    },
+    "button": {
+      "recalibrate": {
+        "name": "Calibrate now"
+      }
+    },
+    "select": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "calibrated": "Learning",
+          "frozen": "Frozen"
+        }
+      }
+    }
+  }
+}
