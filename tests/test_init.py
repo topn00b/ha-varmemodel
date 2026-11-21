@@ -189,3 +189,31 @@ async def test_room_source_selection(ha: HomeAssistant) -> None:
     ents = er.async_entries_for_config_entry(er.async_get(ha), e.entry_id)
     assert any(x.unique_id.endswith("room_heat_sensor.rum_2") for x in ents)
     assert not any(x.unique_id.endswith("room_heat_sensor.rum_1") for x in ents)
+
+
+async def test_room_new_shape_skips_guard(ha: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Når et rums model får en ny varmekilde, tages den nye model i brug uden ±10 %-grænsen."""
+    c = entry.runtime_data
+    old = Fit(0.10, 50, 0.5, 0.2, 0.0, 5.0, "fit", {"sources": {"A": {"total": 0.05}}})
+    c.rooms["sensor.rum_1"] = {"value": 0.10, "extra": old.extra, "t_out_min": 0.0, "t_out_max": 5.0}
+    new = Fit(0.30, 50, 0.7, 0.2, 0.0, 5.0, "fit", {"sources": {"A": {"total": 0.05}, "B": {"total": 0.4}}})
+    # samme logik som i kalibreringen
+    from custom_components.varmemodel import coordinator as co
+
+    async def fake_hours():
+        return {}
+    room_fits = {"sensor.rum_1": new}
+    prev = c.rooms["sensor.rum_1"]
+    pe = prev["extra"]
+    assert set(pe["sources"]) != set(new.extra["sources"])
+    # kør acceptlogikken via en kalibrering med de falske tal
+    orig = c._rooms_fit
+    c._rooms_fit = lambda _h: room_fits
+    try:
+        await c.async_calibrate()
+    finally:
+        c._rooms_fit = orig
+    assert c.rooms["sensor.rum_1"]["value"] == 0.30
+    assert "ny model" in c.rooms["sensor.rum_1"]["guard"]
+    assert set(c.rooms["sensor.rum_1"]["extra"]["sources"]) == {"A", "B"}
+    del co

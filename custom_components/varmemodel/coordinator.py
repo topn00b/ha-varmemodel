@@ -480,8 +480,16 @@ class VarmemodelCoordinator:
             prev = self.rooms.get(eid)
             if self.mode == MODE_FROZEN and prev:
                 continue
-            value, note = guard(f.value, prev.get("value") if prev else None, (f.t_out_min, f.t_out_max),
-                                (prev.get("t_out_min"), prev.get("t_out_max")) if prev else (None, None))
+            # Ny modelopbygning (andre varmekilder eller nabozoner end sidst) er en ny model – ingen ±10 %-grænse
+            pe = (prev or {}).get("extra") or {}
+            new_shape = f.value is not None and prev is not None and (
+                set((pe.get("sources") or {})) != set((f.extra.get("sources") or {}))
+                or set((pe.get("neighbours") or {})) != set((f.extra.get("neighbours") or {})))
+            if new_shape:
+                value, note = f.value, "ny model (varmekilder eller naboer ændret)"
+            else:
+                value, note = guard(f.value, prev.get("value") if prev else None, (f.t_out_min, f.t_out_max),
+                                    (prev.get("t_out_min"), prev.get("t_out_max")) if prev else (None, None))
             self.rooms[eid] = {"value": value, "guard": note, "n": f.n, "r2": None if f.r2 is None else round(f.r2, 2),
                                "t_out_min": f.t_out_min, "t_out_max": f.t_out_max, "note": f.note,
                                "fitted_at": now if f.value is not None else (prev or {}).get("fitted_at"),
