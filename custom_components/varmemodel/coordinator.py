@@ -40,7 +40,16 @@ from .const import (
     CONF_SETPOINT,
     CONF_SETPOINT_ATTR,
     CONF_WEATHER,
+    CONF_ROOM_ALWAYS_OPEN,
+    CONF_ROOM_IN_PLAN,
+    CONF_ROOM_MIN,
+    CONF_ROOM_MIN_ENTITY,
+    CONF_ROOM_NAME,
+    CONF_ROOM_TEMP,
+    CONF_ROOM_VALVE,
+    CONF_ROOM_WEIGHT,
     CONF_WINDOW_DAYS,
+    SUBENTRY_ROOM,
     DEFAULT_WINDOW_DAYS,
     DOMAIN,
     FIT_KEYS,
@@ -78,6 +87,7 @@ class VarmemodelCoordinator:
         self.slots: dict[str, list[float]] = {}
         self.daily: dict[str, Any] = {}
         self.rooms: dict[str, dict[str, Any]] = {}
+        self.room_heat: dict[str, dict[str, Any]] = {}
         self.mode: str = MODE_CALIBRATED
         self.last_hours: list[Hour] = []
         self.status: str = "waiting"
@@ -94,6 +104,24 @@ class VarmemodelCoordinator:
         v = self.conf.get(key)
         return v or None
 
+    @property
+    def rooms_cfg(self) -> list[dict[str, Any]]:
+        """Rummene: underpunkter af typen rum, ellers rumtemperaturerne fra opsætningen."""
+        subs = [s for s in self.entry.subentries.values() if s.subentry_type == SUBENTRY_ROOM]
+        if subs:
+            return [
+                {"key": s.data[CONF_ROOM_TEMP], "name": s.data.get(CONF_ROOM_NAME, s.title), "valve": s.data.get(CONF_ROOM_VALVE),
+                 "always_open": bool(s.data.get(CONF_ROOM_ALWAYS_OPEN)), "weight": float(s.data.get(CONF_ROOM_WEIGHT) or 1.0),
+                 "min_entity": s.data.get(CONF_ROOM_MIN_ENTITY), "min": s.data.get(CONF_ROOM_MIN),
+                 "in_plan": s.data.get(CONF_ROOM_IN_PLAN, True), "subentry_id": sid}
+                for sid, s in self.entry.subentries.items() if s.subentry_type == SUBENTRY_ROOM
+            ]
+        return [{"key": e, "name": None, "valve": None, "always_open": False, "weight": 1.0, "min_entity": None, "min": None,
+                 "in_plan": True, "subentry_id": None} for e in (self.conf.get(CONF_INDOOR) or [])]
+
+    def _room_temps(self) -> list[str]:
+        return list(dict.fromkeys(list(self.conf.get(CONF_INDOOR) or []) + [r["key"] for r in self.rooms_cfg]))
+
     # ------------------------------------------------------------ livscyklus
     async def async_start(self) -> None:
         data = await self.store.async_load() or {}
@@ -105,6 +133,7 @@ class VarmemodelCoordinator:
         self.slots = data.get("slots", {})
         self.daily = data.get("daily", {})
         self.rooms = data.get("rooms", {})
+        self.room_heat = data.get("room_heat", {})
         if data and data.get("calib_version") != CALIB_VERSION:
             # Ny regnemetode: tallene regnes forfra (opsamlede timer beholdes)
             self.accepted, self.fits, self.runs = {}, {}, []
@@ -128,7 +157,7 @@ class VarmemodelCoordinator:
     def _data(self) -> dict[str, Any]:
         return (
             {"collected": self.collected, "accepted": self.accepted, "fits": self.fits, "runs": self.runs[-30:], "mode": self.mode,
-             "calib_version": CALIB_VERSION, "slots": self.slots, "daily": self.daily, "rooms": self.rooms}
+             "calib_version": CALIB_VERSION, "slots": self.slots, "daily": self.daily, "rooms": self.rooms, "room_heat": self.room_heat}
         )
 
     async def _save(self) -> None:
@@ -171,7 +200,8 @@ class VarmemodelCoordinator:
         done = [int(k) for k in self.collected]
         start = max(done) + agg.HOUR if done else end - BACKFILL_DAYS * 86400
         # Nye datakilder (vejr, udluftningstjek) hentes ind for de timer, der mangler dem
-        need = (["ws"] if self._id(CONF_WEATHER) else []) + (["airchk"] if self.conf.get(CONF_INDOOR) else [])
+        need = (["ws"] if self._id(CONF_WEATHER) else []) + (["airchk"] if self._room_temps() else []) + \
+            (["vchk"] if any(r["valve"] for r in self.rooms_cfg) else [])
         missing = [int(k) for k, v in self.collected.items()
                    if any(n not in v for n in need) and int(k) >= end - BACKFILL_DAYS * 86400]
         if missing:
@@ -238,7 +268,7 @@ class VarmemodelCoordinator:
                         out[h][key] = v
 
         # Udluftning: et rum faldt mindst 0,3 °C på et kvarter (5-minutters statistik, ca. 10 dage tilbage)
-        indoor = list(self.conf.get(CONF_INDOOR) or [])
+        indoor = self._room_temps()
         if indoor:
             five = statistics_during_period(self.hass, a - timedelta(hours=1), b, set(indoor), "5minute", {"temperature": "°C"}, {"mean"})
             for h in out:
@@ -250,6 +280,32 @@ class VarmemodelCoordinator:
                         out[h].setdefault("air", [])
                         if eid not in out[h]["air"]:
                             out[h]["air"].append(eid)
+
+        # Telestater/ventiler: minutter åben mens kompressoren kørte (uden kompressor: minutter åben)
+        valves = [r for r in self.rooms_cfg if r["valve"]]
+        if valves:
+            comp_iv: list[tuple[float, float]] | None = None
+            if cid := self._id(CONF_COMPRESSOR):
+                comp_iv = agg.intervals([(st.last_changed.timestamp(), st.state == "on") for st in changes(cid)
+                                         if st.state not in ("unknown", "unavailable")], end)
+            for h in out:
+                out[h]["vchk"] = 1
+            for r in valves:
+                ch = []
+                for st in changes(r["valve"]):
+                    if st.state in ("unknown", "unavailable"):
+                        continue
+                    if st.domain == "climate":
+                        is_open = st.attributes.get("hvac_action") == "heating"
+                    else:
+                        is_open = st.state in ("on", "open", "opening")
+                    ch.append((st.last_updated.timestamp(), is_open))
+                v_iv = agg.intervals(ch, end)
+                if comp_iv is not None:
+                    v_iv = agg.intersect(v_iv, comp_iv)
+                for h, mins in agg.minutes_per_hour(v_iv, start, end).items():
+                    if h in out:
+                        out[h].setdefault("v", {})[r["key"]] = mins
 
         if eid := self._id(CONF_SETPOINT):
             for h, v in agg.step_mean(attr_series(eid, self.conf.get(CONF_SETPOINT_ATTR) or None, 0.0, False), start, end).items():
@@ -304,6 +360,7 @@ class VarmemodelCoordinator:
                                "t_out_min": f.t_out_min, "t_out_max": f.t_out_max, "note": f.note,
                                "fitted_at": now if f.value is not None else (prev or {}).get("fitted_at"),
                                "extra": (prev or {}).get("extra", {}) if note.startswith("begrænset") or f.value is None else f.extra}
+        self.room_heat = self._room_heat(hours)
         n_ok = sum(1 for f in fits.values() if f.source == "fit")
         self.status = "frozen" if self.mode == MODE_FROZEN else ("ok" if n_ok == len(fits) else "partial" if n_ok else "insufficient")
         self.status_note = f"{n_ok} af {len(fits)} tal kunne regnes ud af {len(hours)} timer"
@@ -341,8 +398,8 @@ class VarmemodelCoordinator:
         end = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
         start = end - timedelta(days=days)
         ids = {k: self._id(k) for k in (CONF_HEAT, CONF_ELECTRICITY, CONF_OUTDOOR, CONF_FLOW, CONF_RETURN)}
-        indoor = list(self.conf.get(CONF_INDOOR) or [])
-        want = {v for v in ids.values() if v} | set(indoor)
+        indoor = list(self.conf.get(CONF_INDOOR) or []) or self._room_temps()
+        want = {v for v in ids.values() if v} | set(self._room_temps())
         stats = statistics_during_period(
             self.hass, start, end, want, "hour", {"energy": "kWh", "temperature": "°C"}, {"change", "mean"}
         )
@@ -360,7 +417,7 @@ class VarmemodelCoordinator:
                 return _num((r.get(eid) or {}).get(field)) if eid else None
 
             tin = [v for v in (_num((r.get(i) or {}).get("mean")) for i in indoor) if v is not None]
-            self._room_t[ts] = {i: _num((r.get(i) or {}).get("mean")) for i in indoor}
+            self._room_t[ts] = {i: _num((r.get(i) or {}).get("mean")) for i in self._room_temps()}
             c = self.collected.get(str(ts), {})
             hours.append(
                 Hour(
@@ -427,7 +484,7 @@ class VarmemodelCoordinator:
         """Én model pr. rum. Timer med udluftning i rummet udelades."""
         out: dict[str, Fit] = {}
         room_t = getattr(self, "_room_t", {})
-        for eid in list(self.conf.get(CONF_INDOOR) or []):
+        for eid in [r["key"] for r in self.rooms_cfg]:
             rh = []
             for h in hours:
                 c = self.collected.get(str(h.ts), {})
@@ -435,3 +492,54 @@ class VarmemodelCoordinator:
                                    sun=sun_factor(h), aired=eid in (c.get("air") or [])))
             out[eid] = fit_room(rh)
         return out
+
+    def _room_heat(self, hours: list[Hour]) -> dict[str, dict[str, Any]]:
+        """Varme fordelt på rummene time for time efter (kredsstørrelse × minutter åben mens kompressoren kørte).
+        Altid åbne kredse tæller med alle kompressorminutter. Gælder kun rum med telestat eller altid åben kreds."""
+        rooms = [r for r in self.rooms_cfg if r["valve"] or r["always_open"]]
+        if not rooms:
+            return {}
+        day_of = lambda ts: dt_util.as_local(dt_util.utc_from_timestamp(ts)).date().isoformat()  # noqa: E731
+        today = dt_util.now().date()
+        days7 = {(today - timedelta(days=i)).isoformat() for i in range(1, 8)}
+        yday = (today - timedelta(days=1)).isoformat()
+        acc = {r["key"]: {"week": 0.0, "yday": 0.0, "open_h": 0.0, "drops": 0, "days": set()} for r in rooms}
+        valve_seen = False
+        for h in hours:
+            c = self.collected.get(str(h.ts), {})
+            if "vchk" not in c and any(r["valve"] for r in rooms):
+                continue
+            valve_seen = True
+            d = day_of(h.ts)
+            for r in rooms:
+                if d in days7:
+                    acc[r["key"]]["days"].add(d)
+            if d not in days7 or not h.q or h.q <= 0 or (h.dhw or 0) > 0:
+                continue
+            comp = c.get("comp", 60.0)
+            w = {r["key"]: r["weight"] * (comp if r["always_open"] else (c.get("v") or {}).get(r["key"], 0.0)) for r in rooms}
+            tot = sum(w.values())
+            for k, v in w.items():
+                share = h.q * v / tot if tot > 0 else 0.0
+                acc[k]["week"] += share
+                acc[k]["open_h"] += (v / next(r["weight"] for r in rooms if r["key"] == k)) / 60
+                if d == yday:
+                    acc[k]["yday"] += share
+        # brat afkøling (døre, udluftning) pr. døgn ud fra opsamlerens markeringer
+        for k, v in self.collected.items():
+            d = day_of(int(k))
+            if d not in days7:
+                continue
+            for eid in v.get("air") or []:
+                prev = self.collected.get(str(int(k) - 3600), {})
+                if eid in acc and eid not in (prev.get("air") or []):
+                    acc[eid]["drops"] += 1
+        tot_week = sum(a["week"] for a in acc.values())
+        return {
+            k: {"kwh_per_day": round(a["week"] / max(1, len(a["days"])), 2), "yesterday_kwh": round(a["yday"], 2),
+                "share_pct": round(a["week"] / tot_week * 100, 1) if tot_week > 0 else None,
+                "open_hours_per_day": round(a["open_h"] / max(1, len(a["days"])), 1),
+                "sudden_drops_per_day": round(a["drops"] / max(1, len(a["days"])), 1), "days": len(a["days"]),
+                "valve_data": valve_seen}
+            for k, a in acc.items()
+        }

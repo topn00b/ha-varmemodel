@@ -13,18 +13,29 @@ class VarmemodelEntity(Entity):
     _attr_has_entity_name = True
     _attr_should_poll = False
 
-    def __init__(self, coordinator: VarmemodelCoordinator, key: str) -> None:
+    def __init__(self, coordinator: VarmemodelCoordinator, key: str, room: dict | None = None) -> None:
         self.coordinator = coordinator
         entry = coordinator.entry
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_translation_key = key
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name=entry.data.get(CONF_NAME, DEFAULT_NAME),
-            manufacturer="Varmemodel",
-            model="Kalibrering",
-            entry_type=DeviceEntryType.SERVICE,
-        )
+        if room and room.get("subentry_id"):
+            # Hvert rum (underpunkt) har sin egen enhed – en enhed hører kun til ét underpunkt
+            self._attr_device_info = DeviceInfo(
+                identifiers={(DOMAIN, f"{entry.entry_id}_{room['subentry_id']}")},
+                name=room.get("name"),
+                manufacturer="Varmemodel",
+                model="Rum",
+                entry_type=DeviceEntryType.SERVICE,
+                via_device=(DOMAIN, entry.entry_id),
+            )
+        else:
+            self._attr_device_info = DeviceInfo(
+                identifiers={(DOMAIN, entry.entry_id)},
+                name=entry.data.get(CONF_NAME, DEFAULT_NAME),
+                manufacturer="Varmemodel",
+                model="Kalibrering",
+                entry_type=DeviceEntryType.SERVICE,
+            )
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self.coordinator.async_add_listener(self.async_write_ha_state))

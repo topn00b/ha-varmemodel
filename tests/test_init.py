@@ -79,7 +79,41 @@ async def test_collect_with_weather_and_setpoint(ha: HomeAssistant) -> None:
     assert await ha.config_entries.async_setup(e.entry_id)
     await ha.async_block_till_done()
     c = e.runtime_data
-    rows = c._collect_sync(c.collected and 0 or __import__("time").time() // 3600 * 3600 - 3600, __import__("time").time() // 3600 * 3600 + 3600)
+    h0 = __import__("time").time() // 3600 * 3600
+    rows = c._collect_sync(h0 - 3600, h0 + 3 * 3600)  # timen efter "nu" er helt dækket af vejret
     assert any("ws" in v for v in rows.values())
     await c.async_calibrate()
     assert c.status != "error", c.status_note
+
+
+async def test_room_subentry_and_room_heat(ha: HomeAssistant) -> None:
+    """Rum som underpunkt: rumsensorer knyttes til underpunktet, og varmen fordeles efter telestaten."""
+    from homeassistant.config_entries import ConfigSubentryData
+
+    from custom_components.varmemodel.calibration import Hour
+
+    e = MockConfigEntry(domain=DOMAIN, title="VP", data=DATA, subentries_data=[
+        ConfigSubentryData(data={"name": "Stue", "temperature": "sensor.rum_1", "valve": "binary_sensor.stue_ventil", "loop_weight": 1.0},
+                           subentry_type="room", title="Stue", unique_id=None),
+        ConfigSubentryData(data={"name": "Bad", "temperature": "sensor.rum_2", "always_open": True, "loop_weight": 1.0},
+                           subentry_type="room", title="Bad", unique_id=None),
+    ])
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    assert [r["name"] for r in c.rooms_cfg] == ["Stue", "Bad"]
+    await ha.async_block_till_done(wait_background_tasks=True)
+    reg = er.async_get(ha)
+    ents = er.async_entries_for_config_entry(reg, e.entry_id)
+    assert any(x.unique_id.endswith("room_heat_sensor.rum_1") and x.config_subentry_id for x in ents), [(x.unique_id, x.config_subentry_id) for x in ents]
+    # Én time i går: stuen åben 30 min, badet altid åben (60 min) → 1/3 og 2/3 af varmen
+    from homeassistant.util import dt as dt_util
+    from datetime import timedelta
+
+    y = dt_util.start_of_local_day() - timedelta(hours=12)
+    ts = int(y.timestamp()) // 3600 * 3600
+    c.collected[str(ts)] = {"comp": 60.0, "vchk": 1, "v": {"sensor.rum_1": 30.0}}
+    res = c._room_heat([Hour(ts=ts, q=3.0, dhw=0)])
+    assert res["sensor.rum_1"]["yesterday_kwh"] == 1.0
+    assert res["sensor.rum_2"]["yesterday_kwh"] == 2.0

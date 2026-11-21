@@ -57,6 +57,22 @@ Sensorer med energi og temperatur skal have langtidsstatistik (`state_class`). D
 
 On/off-sensorer (kompressor, afrimning, varmt vand) og vejrets attributter gemmer Home Assistant ikke som langtidsstatistik. Integrationen opsummerer dem derfor selv time for time og gemmer dem i 120 dage. Ved første opstart fyldes de seneste 14 dage op fra historikken.
 
+## Rum
+
+Tilføj hvert rum som et underpunkt (*Tilføj rum* på integrationen):
+
+| Felt | Eksempel | Bruges til |
+|---|---|---|
+| Navn | Stue | enhedens navn |
+| Temperaturføler | `sensor.rum_1` | rummodellen |
+| Min.-temperatur (entitet eller fast) | `input_number.rum_1_min` | planlægningen (0.3) |
+| Telestat / ventil | `binary_sensor.rum_1_ventil` | fordeling af husets varme på rummene |
+| Kredsen er altid åben | til/fra | fx et badeværelse uden telestat |
+| Relativ kredsstørrelse | 1 | 2 hvis rummet har dobbelt så mange slynger |
+| Tæller med i planen | til/fra | rum der vises, men ikke styres efter |
+
+Hvert rum får sin egen enhed med **Afkøling** (se ovenfor) og, hvis der er telestat eller altid åben kreds, **Varme** i kWh pr. døgn (snit af 7 døgn). Varmen er husets målte varme fordelt time for time efter kredsstørrelse × minutter åben, mens kompressoren kørte. Attributterne viser andel af gulvvarmen, timer åben med varme og **brat afkøling pr. døgn** (døre, udluftning).
+
 ## Diagnostik
 
 Diagnostikfilen indeholder kalibreringen og de brugte timer med tid som "timer før seneste time". Den indeholder ingen entitets-id'er.

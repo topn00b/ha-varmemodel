@@ -20,8 +20,15 @@ PRECISION = {"heat_loss": 0, "cop": 2, "cop_steady": 2, "cop_loss": 1, "emission
 
 async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     c = entry.runtime_data
-    rooms = [RoomSensor(c, eid) for eid in (c.conf.get("indoor_temps") or [])]
-    async_add_entities([FitSensor(c, k) for k in FIT_KEYS] + [DailyCopSensor(c, "yesterday"), DailyCopSensor(c, "week"), StatusSensor(c)] + rooms)
+    async_add_entities([FitSensor(c, k) for k in FIT_KEYS] + [DailyCopSensor(c, "yesterday"), DailyCopSensor(c, "week"), StatusSensor(c)])
+    for r in c.rooms_cfg:
+        ents: list[SensorEntity] = [RoomSensor(c, r["key"], r["name"], r)]
+        if r["valve"] or r["always_open"]:
+            ents.append(RoomHeatSensor(c, r["key"], r["name"], r))
+        if r["subentry_id"]:
+            async_add_entities(ents, config_subentry_id=r["subentry_id"])
+        else:
+            async_add_entities(ents)
 
 
 class FitSensor(VarmemodelEntity, SensorEntity):
@@ -127,6 +134,11 @@ class DailyCopSensor(VarmemodelEntity, SensorEntity):
         return attrs
 
 
+def _room_name(coordinator: VarmemodelCoordinator, source: str) -> str:
+    st = coordinator.hass.states.get(source)
+    return (st.name if st else source.split(".")[-1]).removesuffix(" Temperature").removesuffix(" temperatur")
+
+
 class RoomSensor(VarmemodelEntity, SensorEntity):
     """Et rums afkøling (°C pr. time ved 20 graders forskel) – falder når rummet isoleres bedre."""
 
@@ -134,13 +146,11 @@ class RoomSensor(VarmemodelEntity, SensorEntity):
     _attr_native_unit_of_measurement = "°C/h"
     _attr_suggested_display_precision = 3
 
-    def __init__(self, coordinator: VarmemodelCoordinator, source: str) -> None:
-        super().__init__(coordinator, f"room_{source}")
+    def __init__(self, coordinator: VarmemodelCoordinator, source: str, name: str | None = None, room: dict | None = None) -> None:
+        super().__init__(coordinator, f"room_{source}", room)
         self.source = source
-        self._attr_translation_key = "room"
-        st = coordinator.hass.states.get(source)
-        name = (st.name if st else source.split(".")[-1]).removesuffix(" Temperature").removesuffix(" temperatur")
-        self._attr_translation_placeholders = {"room": name}
+        self._attr_translation_key = "room_device" if room and room.get("subentry_id") else "room"
+        self._attr_translation_placeholders = {"room": name or _room_name(coordinator, source)}
 
     @property
     def native_value(self) -> float | None:
@@ -167,4 +177,35 @@ class RoomSensor(VarmemodelEntity, SensorEntity):
             "begrænsning": r.get("guard"),
             "beregnet": dt_util.as_local(dt_util.utc_from_timestamp(ts)).isoformat() if ts else None,
             "note": r.get("note") or None,
+        }
+
+
+class RoomHeatSensor(VarmemodelEntity, SensorEntity):
+    """Varme til rummet pr. døgn (snit af de seneste 7 døgn), fordelt efter telestatens åbningstid."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "kWh/d"
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: VarmemodelCoordinator, source: str, name: str | None = None, room: dict | None = None) -> None:
+        super().__init__(coordinator, f"room_heat_{source}", room)
+        self.source = source
+        self._attr_translation_key = "room_heat_device" if room and room.get("subentry_id") else "room_heat"
+        self._attr_translation_placeholders = {"room": name or _room_name(coordinator, source)}
+
+    @property
+    def native_value(self) -> float | None:
+        r = self.coordinator.room_heat.get(self.source)
+        return r.get("kwh_per_day") if r and r.get("valve_data") else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        r = self.coordinator.room_heat.get(self.source) or {}
+        return {
+            "i_går_kwh": r.get("yesterday_kwh"),
+            "andel_af_gulvvarmen_pct": r.get("share_pct"),
+            "åben_med_varme_timer_pr_døgn": r.get("open_hours_per_day"),
+            "brat_afkøling_pr_døgn": r.get("sudden_drops_per_day"),
+            "døgn": r.get("days"),
+            "metode": "husets målte varme fordelt efter kredsstørrelse × minutter åben mens kompressoren kørte",
         }

@@ -50,3 +50,14 @@ CALIB_VERSION = 4
 
 CALIBRATION_HOUR = 3
 CALIBRATION_MINUTE = 17
+
+# Rum (underpunkter)
+SUBENTRY_ROOM = "room"
+CONF_ROOM_NAME = "name"
+CONF_ROOM_TEMP = "temperature"
+CONF_ROOM_MIN_ENTITY = "minimum_entity"
+CONF_ROOM_MIN = "minimum"
+CONF_ROOM_VALVE = "valve"
+CONF_ROOM_ALWAYS_OPEN = "always_open"
+CONF_ROOM_WEIGHT = "loop_weight"
+CONF_ROOM_IN_PLAN = "in_plan"

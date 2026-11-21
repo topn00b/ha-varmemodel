@@ -137,6 +137,15 @@
       },
       "room": {
         "name": "{room} cooling"
+      },
+      "room_heat": {
+        "name": "{room} heat"
+      },
+      "room_device": {
+        "name": "Cooling"
+      },
+      "room_heat_device": {
+        "name": "Heat"
       }
     },
     "button": {
@@ -151,6 +160,61 @@
           "calibrated": "Learning",
           "frozen": "Frozen"
         }
+      }
+    }
+  },
+  "config_subentries": {
+    "room": {
+      "initiate_flow": {
+        "user": "Add room"
+      },
+      "entry_type": "Room",
+      "step": {
+        "user": {
+          "title": "Add room",
+          "data": {
+            "name": "Name",
+            "temperature": "Temperature sensor",
+            "minimum_entity": "Minimum temperature (entity)",
+            "minimum": "Minimum temperature (fixed)",
+            "valve": "Valve / actuator",
+            "always_open": "Loop is always open",
+            "loop_weight": "Relative loop size",
+            "in_plan": "Included in the plan"
+          },
+          "data_description": {
+            "minimum_entity": "E.g. an input_number with the lowest comfort temperature.",
+            "valve": "On/open = the room receives heat. Used to split the heat between rooms.",
+            "loop_weight": "1 = normal. A room with twice the loop length: 2.",
+            "in_plan": "Off = shown, but the plan does not consider it."
+          }
+        },
+        "reconfigure": {
+          "title": "Edit room",
+          "data": {
+            "name": "Name",
+            "temperature": "Temperature sensor",
+            "minimum_entity": "Minimum temperature (entity)",
+            "minimum": "Minimum temperature (fixed)",
+            "valve": "Valve / actuator",
+            "always_open": "Loop is always open",
+            "loop_weight": "Relative loop size",
+            "in_plan": "Included in the plan"
+          },
+          "data_description": {
+            "minimum_entity": "E.g. an input_number with the lowest comfort temperature.",
+            "valve": "On/open = the room receives heat. Used to split the heat between rooms.",
+            "loop_weight": "1 = normal. A room with twice the loop length: 2.",
+            "in_plan": "Off = shown, but the plan does not consider it."
+          }
+        }
+      },
+      "error": {
+        "no_statistics": "Entity has no long-term statistics (missing state_class).",
+        "duplicate_room": "This sensor is already used by another room."
+      },
+      "abort": {
+        "reconfigure_successful": "Saved."
       }
     }
   }

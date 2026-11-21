@@ -137,6 +137,15 @@
       },
       "room": {
         "name": "{room} afkøling"
+      },
+      "room_heat": {
+        "name": "{room} varme"
+      },
+      "room_device": {
+        "name": "Afkøling"
+      },
+      "room_heat_device": {
+        "name": "Varme"
       }
     },
     "button": {
@@ -151,6 +160,61 @@
           "calibrated": "Lærer løbende",
           "frozen": "Fastfrosset"
         }
+      }
+    }
+  },
+  "config_subentries": {
+    "room": {
+      "initiate_flow": {
+        "user": "Tilføj rum"
+      },
+      "entry_type": "Rum",
+      "step": {
+        "user": {
+          "title": "Tilføj rum",
+          "data": {
+            "name": "Navn",
+            "temperature": "Temperaturføler",
+            "minimum_entity": "Min.-temperatur (entitet)",
+            "minimum": "Min.-temperatur (fast)",
+            "valve": "Telestat / ventil",
+            "always_open": "Kredsen er altid åben",
+            "loop_weight": "Relativ kredsstørrelse",
+            "in_plan": "Tæller med i planen"
+          },
+          "data_description": {
+            "minimum_entity": "Fx en input_number med rummets laveste komforttemperatur.",
+            "valve": "Tændt/åben = rummet får varme. Bruges til at fordele husets varme på rummene.",
+            "loop_weight": "1 = normal. Har rummet dobbelt så mange slynger som de andre, så 2.",
+            "in_plan": "Fra = rummet vises, men planen tager ikke hensyn til det."
+          }
+        },
+        "reconfigure": {
+          "title": "Ret rum",
+          "data": {
+            "name": "Navn",
+            "temperature": "Temperaturføler",
+            "minimum_entity": "Min.-temperatur (entitet)",
+            "minimum": "Min.-temperatur (fast)",
+            "valve": "Telestat / ventil",
+            "always_open": "Kredsen er altid åben",
+            "loop_weight": "Relativ kredsstørrelse",
+            "in_plan": "Tæller med i planen"
+          },
+          "data_description": {
+            "minimum_entity": "Fx en input_number med rummets laveste komforttemperatur.",
+            "valve": "Tændt/åben = rummet får varme. Bruges til at fordele husets varme på rummene.",
+            "loop_weight": "1 = normal. Har rummet dobbelt så mange slynger som de andre, så 2.",
+            "in_plan": "Fra = rummet vises, men planen tager ikke hensyn til det."
+          }
+        }
+      },
+      "error": {
+        "no_statistics": "Entiteten har ingen langtidsstatistik (state_class mangler).",
+        "duplicate_room": "Føleren bruges allerede af et andet rum."
+      },
+      "abort": {
+        "reconfigure_successful": "Gemt."
       }
     }
   }

@@ -6,7 +6,15 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    ConfigSubentry,
+    ConfigSubentryFlow,
+    OptionsFlow,
+    SubentryFlowResult,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 
@@ -27,7 +35,16 @@ from .const import (
     CONF_SETPOINT,
     CONF_SETPOINT_ATTR,
     CONF_WEATHER,
+    CONF_ROOM_ALWAYS_OPEN,
+    CONF_ROOM_IN_PLAN,
+    CONF_ROOM_MIN,
+    CONF_ROOM_MIN_ENTITY,
+    CONF_ROOM_NAME,
+    CONF_ROOM_TEMP,
+    CONF_ROOM_VALVE,
+    CONF_ROOM_WEIGHT,
     CONF_WINDOW_DAYS,
+    SUBENTRY_ROOM,
     DEFAULT_NAME,
     DEFAULT_WINDOW_DAYS,
     DOMAIN,
@@ -114,6 +131,11 @@ class VarmemodelConfigFlow(ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         return VarmemodelOptionsFlow()
 
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(cls, config_entry: ConfigEntry) -> dict[str, type[ConfigSubentryFlow]]:
+        return {SUBENTRY_ROOM: RoomSubentryFlow}
+
 
 class VarmemodelOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -127,3 +149,56 @@ class VarmemodelOptionsFlow(OptionsFlow):
                 self.hass.config_entries.async_update_entry(self.config_entry, data=data)
                 return self.async_create_entry(data=_clean(user_input))
         return self.async_show_form(step_id="init", data_schema=_schema(user_input or current, False), errors=errors)
+
+
+ROOM_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_ROOM_NAME): TEXT,
+        vol.Required(CONF_ROOM_TEMP): TEMP,
+        vol.Optional(CONF_ROOM_MIN_ENTITY): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain=["input_number", "number", "sensor", "climate"])
+        ),
+        vol.Optional(CONF_ROOM_MIN): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=5, max=30, step=0.5, mode=selector.NumberSelectorMode.BOX)
+        ),
+        vol.Optional(CONF_ROOM_VALVE): selector.EntitySelector(selector.EntitySelectorConfig(domain=["binary_sensor", "climate", "switch", "valve"])),
+        vol.Optional(CONF_ROOM_ALWAYS_OPEN, default=False): selector.BooleanSelector(),
+        vol.Optional(CONF_ROOM_WEIGHT, default=1.0): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0.1, max=10, step=0.1, mode=selector.NumberSelectorMode.BOX)
+        ),
+        vol.Optional(CONF_ROOM_IN_PLAN, default=True): selector.BooleanSelector(),
+    }
+)
+
+
+class RoomSubentryFlow(ConfigSubentryFlow):
+    """Et rum: temperaturføler, min.-temperatur, telestat/kreds og om det tæller med i planen."""
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        return self._form("user", user_input, None)
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        return self._form("reconfigure", user_input, self._get_reconfigure_subentry())
+
+    @callback
+    def _form(self, step_id: str, user_input: dict[str, Any] | None, subentry: ConfigSubentry | None) -> SubentryFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            data = _clean(dict(user_input))
+            data[CONF_ROOM_NAME] = str(data.get(CONF_ROOM_NAME, "")).strip()
+            st = self.hass.states.get(data[CONF_ROOM_TEMP])
+            if st is not None and not st.attributes.get("state_class"):
+                errors[CONF_ROOM_TEMP] = "no_statistics"
+            elif any(
+                s.data.get(CONF_ROOM_TEMP) == data[CONF_ROOM_TEMP] and (subentry is None or sid != subentry.subentry_id)
+                for sid, s in self._get_entry().subentries.items()
+            ):
+                errors[CONF_ROOM_TEMP] = "duplicate_room"
+            else:
+                if subentry is None:
+                    return self.async_create_entry(title=data[CONF_ROOM_NAME], data=data)
+                return self.async_update_and_abort(self._get_entry(), subentry, title=data[CONF_ROOM_NAME], data=data)
+        suggested = dict(subentry.data) if subentry else {}
+        if user_input is not None:
+            suggested = user_input
+        return self.async_show_form(step_id=step_id, data_schema=self.add_suggested_values_to_schema(ROOM_SCHEMA, suggested), errors=errors)

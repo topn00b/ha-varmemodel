@@ -97,3 +97,29 @@ def intervals(changes: list[tuple[float, bool]], end: float) -> list[tuple[float
     if cur is not None:
         out.append((cur, end))
     return out
+
+
+def intersect(a: list[tuple[float, float]], b: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Fællesmængde af to lister med perioder."""
+    out = []
+    for x, y in a:
+        for p, q in b:
+            lo, hi = max(x, p), min(y, q)
+            if hi > lo:
+                out.append((lo, hi))
+    return sorted(out)
+
+
+def minutes_per_hour(iv: list[tuple[float, float]], start: float, end: float) -> dict[int, float]:
+    """Minutter pr. time dækket af perioderne."""
+    out: dict[int, float] = {h: 0.0 for h in range(hour_start(start), int(end), HOUR)}
+    for a, b in iv:
+        _acc = {}
+        t = max(a, start)
+        while t < min(b, end):
+            h = hour_start(t)
+            nxt = min(min(b, end), h + HOUR)
+            if h in out:
+                out[h] += (nxt - t) / 60
+            t = nxt
+    return {h: round(v, 2) for h, v in out.items()}
