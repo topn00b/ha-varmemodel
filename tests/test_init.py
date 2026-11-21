@@ -87,7 +87,7 @@ async def test_migrate_from_version_1(ha: HomeAssistant) -> None:
     await Store(ha, 1, f"{DOMAIN}.{e.entry_id}").async_save(store_v1)
     assert await ha.config_entries.async_setup(e.entry_id)
     await ha.async_block_till_done(wait_background_tasks=True)
-    assert e.version == 2
+    assert e.version == 2 and e.title == "Hus"
     src = [s for s in e.subentries.values() if s.subentry_type == "source"]
     assert len(src) == 1 and src[0].data["source_type"] == "hydronic" and src[0].data["legacy_ids"] is True
     assert src[0].data["curve_offset_zero"] == 17 and "electricity_energy" not in e.data

@@ -27,7 +27,7 @@ class VarmemodelEntity(Entity):
             )
         else:
             self._attr_device_info = DeviceInfo(
-                identifiers={(DOMAIN, entry.entry_id)}, name=entry.data.get(CONF_NAME) or entry.title or DEFAULT_NAME,
+                identifiers={(DOMAIN, entry.entry_id)}, name=entry.title or entry.data.get(CONF_NAME) or DEFAULT_NAME,
                 manufacturer="Varmemodel", model="Hus", entry_type=DeviceEntryType.SERVICE,
             )
 

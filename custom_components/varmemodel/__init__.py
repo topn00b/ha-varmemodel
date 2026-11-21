@@ -43,7 +43,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         hass.config_entries.async_add_subentry(entry, sub)
         house[CONF_MIGRATED_SOURCE] = sub.subentry_id
-        hass.config_entries.async_update_entry(entry, data=house, options={}, version=2)
+        house["name"] = "Hus"
+        # Opsætningen er nu huset; varmepumpen er et underpunkt med det gamle navn
+        hass.config_entries.async_update_entry(entry, title="Hus", data=house, options={}, version=2)
         _LOGGER.info("Varmemodel: opsætning flyttet til version 2 – varmepumpen er nu varmekilden '%s'", entry.title)
     return True
 
