@@ -94,7 +94,7 @@
         "name": "Maximum power"
       },
       "min_power": {
-        "name": "Lowest stable power"
+        "name": "Lowest measured power"
       },
       "curve": {
         "name": "Heating curve at 0 °C"

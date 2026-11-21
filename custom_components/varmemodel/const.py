@@ -41,5 +41,8 @@ FIT_KEYS: dict[str, str | None] = {
     "cooling": "h",
 }
 
+# Øges når selve regnemetoden ændres: så regnes tallene forfra uden ±10 %-grænsen
+CALIB_VERSION = 2
+
 CALIBRATION_HOUR = 3
 CALIBRATION_MINUTE = 17

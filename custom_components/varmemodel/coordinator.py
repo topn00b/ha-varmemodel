@@ -22,6 +22,7 @@ from .const import (
     BACKFILL_DAYS,
     CALIBRATION_HOUR,
     CALIBRATION_MINUTE,
+    CALIB_VERSION,
     COLLECT_KEEP_DAYS,
     CONF_COMPRESSOR,
     CONF_DEFROST,
@@ -96,6 +97,9 @@ class VarmemodelCoordinator:
         self.fits = data.get("fits", {})
         self.runs = data.get("runs", [])
         self.mode = data.get("mode", MODE_CALIBRATED)
+        if data and data.get("calib_version") != CALIB_VERSION:
+            # Ny regnemetode: tallene regnes forfra (opsamlede timer beholdes)
+            self.accepted, self.fits, self.runs = {}, {}, []
         self._unsubs.append(async_track_time_change(self.hass, self._on_hour, minute=0, second=30))
         self._unsubs.append(
             async_track_time_change(self.hass, self._on_night, hour=CALIBRATION_HOUR, minute=CALIBRATION_MINUTE, second=0)
@@ -115,7 +119,8 @@ class VarmemodelCoordinator:
 
     async def _save(self) -> None:
         await self.store.async_save(
-            {"collected": self.collected, "accepted": self.accepted, "fits": self.fits, "runs": self.runs[-30:], "mode": self.mode}
+            {"collected": self.collected, "accepted": self.accepted, "fits": self.fits, "runs": self.runs[-30:], "mode": self.mode,
+             "calib_version": CALIB_VERSION}
         )
 
     @callback

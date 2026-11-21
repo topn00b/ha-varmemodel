@@ -94,7 +94,7 @@
         "name": "Maks. effekt"
       },
       "min_power": {
-        "name": "Laveste stabile effekt"
+        "name": "Laveste målte effekt"
       },
       "curve": {
         "name": "Varmekurve ved 0 °C"

@@ -75,6 +75,7 @@ class Fit:
 MIN_COMP_FULL = 45.0  # minutter kompressor for "fuld driftstime"
 MAX_FLOW_SPACE_HEATING = 40.0  # over det er det typisk varmt vand
 COP_LIMITS = (1.0, 7.5)  # timer udenfor er målefejl
+MIN_Q_NO_COMP = 2.5  # kWh: fuld driftstime, når kompressordata mangler
 PRIOR_COP_PER_K_FLOW = -0.08  # ca. −2,5 % pr. grad fremløb ved COP ~3,2
 
 
@@ -160,6 +161,10 @@ def _space_heating(h: Hour, need_full: bool = True) -> bool:
     if h.dhw is None and h.t_flow is not None and h.t_flow > MAX_FLOW_SPACE_HEATING:
         return False
     if need_full and h.comp is not None and h.comp < MIN_COMP_FULL:
+        return False
+    # Uden kompressordata (fx før opsamlingen startede) kan opstartstimer ikke
+    # skilles fra: kræv så så meget varme, at det må have været en fuld time.
+    if need_full and h.comp is None and (h.q is None or h.q < MIN_Q_NO_COMP):
         return False
     return True
 
@@ -313,14 +318,20 @@ def fit_power(hours: list[Hour], min_n: int = 20) -> tuple[Fit, Fit]:
     full = [h for h in hours if h.q is not None and h.q > 0.3 and _space_heating(h)
             and (h.comp is None or h.comp >= 55)]
     q = [h.q for h in full]
-    e = [h.e for h in full if h.e is not None]
     lo, hi = _range([h.t_out for h in full if h.t_out is not None])
     if len(q) < min_n:
         f = Fit(None, len(q), t_out_min=lo, t_out_max=hi, note="for få fulde driftstimer")
         return f, Fit(None, len(q), t_out_min=lo, t_out_max=hi, note=f.note)
     pmax = Fit(round(quantile(q, 0.9), 2), len(q), None, None, lo, hi, "fit", {"value_is": "90 %-fraktil af varme i fulde driftstimer"})
-    pmin = Fit(round(quantile(q, 0.1), 2), len(q), None, None, lo, hi, "fit",
-               {"el_kw_p10": round(quantile(e, 0.1), 2) if e else None, "value_is": "10 %-fraktil af varme i fulde driftstimer"})
+    # Laveste effekt kræver kompressordata – ellers kan en halv driftstime ligne lav effekt
+    known = [h for h in full if h.comp is not None]
+    if len(known) < min_n:
+        return pmax, Fit(None, len(known), t_out_min=lo, t_out_max=hi, note="for få timer med kompressordata")
+    qk = [h.q for h in known]
+    ek = [h.e for h in known if h.e is not None]
+    klo, khi = _range([h.t_out for h in known if h.t_out is not None])
+    pmin = Fit(round(quantile(qk, 0.1), 2), len(qk), None, None, klo, khi, "fit",
+               {"el_kw_p10": round(quantile(ek, 0.1), 2) if ek else None, "value_is": "10 %-fraktil af varme i timer hvor kompressoren kørte hele timen"})
     return pmax, pmin
 
 

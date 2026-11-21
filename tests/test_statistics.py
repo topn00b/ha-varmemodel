@@ -31,6 +31,9 @@ def _meta(sid: str, unit: str, has_sum: bool, unit_class: str) -> dict:
 
 async def test_calibration_from_recorder_statistics(ha: HomeAssistant) -> None:
     hours = synth(days=50)
+    for h in hours:  # større hus: timer uden kompressordata skal have ≥ 2,5 kWh for at tælle
+        h.q *= 3
+        h.e *= 3
     end = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
     start = end - timedelta(hours=len(hours) - 1)
     q_sum = e_sum = 0.0
@@ -63,7 +66,7 @@ async def test_calibration_from_recorder_statistics(ha: HomeAssistant) -> None:
     await ha.async_block_till_done()
 
     assert len(c.last_hours) >= len(hours) - 30
-    assert abs(c.accepted["heat_loss"]["value"] - H_TRUE) < 6
+    assert abs(c.accepted["heat_loss"]["value"] - 3 * H_TRUE) < 15
     assert abs(c.accepted["cop"]["value"] - (A + C * 35)) < 0.1
     assert c.accepted["cop"]["extra"]["c_source"] == "fit"
     assert c.status in ("partial", "ok")
