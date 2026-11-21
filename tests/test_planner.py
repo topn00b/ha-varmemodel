@@ -94,3 +94,17 @@ def test_no_warning_when_only_margin_is_touched() -> None:
     room = PlanRoom("Stue", t_now=20.25, t_min=20.0, heat_now=0.0, heat_delayed=0.0, cool_per_hk=0.0, margin=0.4)
     p = make_plan(hours(n=6, blocked=lambda i: True), M, [room], 20.5)
     assert p.warnings == [] or all("Stue" not in w for w in p.warnings)
+
+
+def test_red_allowance_needs_less_preheat() -> None:
+    room = PlanRoom("Stue", t_now=21.0, t_min=20.0, heat_now=0.01, heat_delayed=0.01, cool_per_hk=0.006, margin=0.0)
+    hs = hours(n=18, t_out=lambda i: 0.0, blocked=lambda i: i >= 6)
+    strict = make_plan(hs, M, [room], 20.5)
+    loose = make_plan(hs, M, [room], 20.5, red_allowance=1.0)
+    assert strict.heat_kwh > loose.heat_kwh
+
+
+def test_boost_only_for_given_hours() -> None:
+    a = make_plan(hours(n=24), M, [], 20.5, boost=1.0, boost_hours=5)
+    b = make_plan(hours(n=24), M, [], 20.5)
+    assert abs((a.demand_kwh - b.demand_kwh) - 5 * M.heat_loss_w_k / 1000) < 0.02

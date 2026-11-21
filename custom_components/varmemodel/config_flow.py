@@ -56,10 +56,8 @@ from .const import (
     CONF_PRICE_ATTR,
     CONF_BLOCK_ENTITY,
     CONF_BLOCK_CODES,
-    CONF_MAX_PAUSE,
-    CONF_COMFORT_OFFSET,
     CONF_BOOST_ENTITY,
-    CONF_BOOST_DELTA,
+    CONF_MEASURES_CALENDAR,
     DEFAULT_WINDOW_DAYS,
     DOMAIN,
     SOURCE_AIR_AIR,
@@ -98,10 +96,8 @@ def _house_schema(with_name: bool) -> vol.Schema:
         vol.Optional(CONF_PRICE_ATTR): TEXT,
         vol.Optional(CONF_BLOCK_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain=["sensor", "input_text"])),
         vol.Optional(CONF_BLOCK_CODES, default="r"): TEXT,
-        vol.Optional(CONF_MAX_PAUSE, default=0): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=24, step=1, mode=selector.NumberSelectorMode.BOX)),
-        vol.Optional(CONF_COMFORT_OFFSET, default=1.0): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=3, step=0.5, mode=selector.NumberSelectorMode.BOX)),
         vol.Optional(CONF_BOOST_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain=["input_boolean", "binary_sensor", "switch"])),
-        vol.Optional(CONF_BOOST_DELTA, default=1.0): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=5, step=0.5, mode=selector.NumberSelectorMode.BOX)),
+        vol.Optional(CONF_MEASURES_CALENDAR): selector.EntitySelector(selector.EntitySelectorConfig(domain="calendar")),
     })
     return vol.Schema(fields)
 

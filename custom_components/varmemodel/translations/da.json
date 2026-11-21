@@ -14,16 +14,15 @@
           "price_attribute": "Elpris: attribut med listen (tom = find selv)",
           "block_entity": "Blokerede timer (tidsplan)",
           "block_codes": "Koder der betyder blokeret (kommasepareret)",
-          "max_pause": "Maks. pause uden gulvvarme (timer, 0 = ingen)",
-          "comfort_offset": "Komfort over min. (°C)",
           "boost_entity": "»Jeg fryser« (entitet)",
-          "boost_delta": "»Jeg fryser« hæver målet med (°C)"
+          "measures_calendar": "Kalender med energitiltag"
         },
         "data_description": {
           "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud.",
           "indoor_temps": "Husets indetemperatur er ellers snittet af de rum, der tæller med i planen.",
           "block_entity": "Fx en zone-tidsplan. Format: »TIMEINDEKS|koder« (timer siden 1970 UTC, én kode pr. time) eller en liste med tid og værdi.",
-          "price_entity": "Prisen bør være inkl. afgifter. Listen skal have tid (start/t/time) og pris (el/value/price) pr. time eller kvarter."
+          "price_entity": "Prisen bør være inkl. afgifter. Listen skal have tid (start/t/time) og pris (el/value/price) pr. time eller kvarter.",
+          "measures_calendar": "Hver begivenhed er et tiltag (fx tætning). Varmetabet regnes før og efter datoen."
         }
       }
     },
@@ -45,16 +44,15 @@
           "price_attribute": "Elpris: attribut med listen (tom = find selv)",
           "block_entity": "Blokerede timer (tidsplan)",
           "block_codes": "Koder der betyder blokeret (kommasepareret)",
-          "max_pause": "Maks. pause uden gulvvarme (timer, 0 = ingen)",
-          "comfort_offset": "Komfort over min. (°C)",
           "boost_entity": "»Jeg fryser« (entitet)",
-          "boost_delta": "»Jeg fryser« hæver målet med (°C)"
+          "measures_calendar": "Kalender med energitiltag"
         },
         "data_description": {
           "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud.",
           "indoor_temps": "Husets indetemperatur er ellers snittet af de rum, der tæller med i planen.",
           "block_entity": "Fx en zone-tidsplan. Format: »TIMEINDEKS|koder« (timer siden 1970 UTC, én kode pr. time) eller en liste med tid og værdi.",
-          "price_entity": "Prisen bør være inkl. afgifter. Listen skal have tid (start/t/time) og pris (el/value/price) pr. time eller kvarter."
+          "price_entity": "Prisen bør være inkl. afgifter. Listen skal have tid (start/t/time) og pris (el/value/price) pr. time eller kvarter.",
+          "measures_calendar": "Hver begivenhed er et tiltag (fx tætning). Varmetabet regnes før og efter datoen."
         }
       }
     },
@@ -150,6 +148,9 @@
       },
       "plan_cost": {
         "name": "Plan pris"
+      },
+      "measures": {
+        "name": "Energitiltag"
       }
     },
     "button": {
@@ -164,6 +165,23 @@
           "calibrated": "Lærer løbende",
           "frozen": "Fastfrosset"
         }
+      }
+    },
+    "number": {
+      "max_pause": {
+        "name": "Maks. pause uden gulvvarme"
+      },
+      "comfort_offset": {
+        "name": "Komfort over min."
+      },
+      "boost_delta": {
+        "name": "»Jeg fryser« hæver målet"
+      },
+      "boost_hours": {
+        "name": "»Jeg fryser« gælder højst"
+      },
+      "red_allowance": {
+        "name": "Må falde under min. i blokerede timer"
       }
     }
   },

@@ -32,6 +32,7 @@ from .calibration import (
     detect_airing,
     fit_cop_loss,
     fit_cop_steady,
+    fit_heat_loss,
     fit_room,
     guard,
     steady_slots,
@@ -88,6 +89,10 @@ from .const import (
     CONF_BOOST_ENTITY,
     CONF_BOOST_DELTA,
     PLAN_HORIZON_H,
+    CONF_BOOST_HOURS,
+    CONF_RED_ALLOWANCE,
+    CONF_MEASURES_CALENDAR,
+    SETTINGS,
     DEFAULT_WINDOW_DAYS,
     DOMAIN,
     FIT_KEYS,
@@ -166,6 +171,12 @@ class VarmemodelCoordinator:
         self._room_t: dict[int, dict[str, float | None]] = {}
         self.plans: dict[str, dict[str, Any]] = {}
         self.plan_meta: dict[str, Any] = {"updated": None, "inputs_ok": False, "missing": ["ikke planlagt endnu"]}
+        self.settings: dict[str, float] = {}
+        self.plan_log: dict[str, dict[str, dict[str, Any]]] = {}  # kilde -> timens start -> det planlagte ved timens start
+        self.fc_log: dict[str, dict[str, list[float]]] = {}  # timens start -> rum -> forudsigelse lavet da
+        self.rooms_check: dict[str, dict[str, Any]] = {}
+        self.yesterday: dict[str, dict[str, Any]] = {}
+        self.measures: list[dict[str, Any]] = []
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[CALLBACK_TYPE] = []
         self._build_sources()
@@ -238,6 +249,11 @@ class VarmemodelCoordinator:
         self.mode = data.get("mode", MODE_CALIBRATED)
         self.rooms = data.get("rooms", {})
         self.room_heat = data.get("room_heat", {})
+        self.settings = data.get("settings", {})
+        self.plan_log = data.get("plan_log", {})
+        self.fc_log = data.get("fc_log", {})
+        self.yesterday = data.get("yesterday", {})
+        self.measures = data.get("measures", [])
         for sid, s in self.sources.items():
             s.load((data.get("sources") or {}).get(sid, {}))
         if data and data.get("calib_version") != CALIB_VERSION:
@@ -280,7 +296,8 @@ class VarmemodelCoordinator:
     def _data(self) -> dict[str, Any]:
         return {"collected": self.collected, "sources": {sid: s.as_store() for sid, s in self.sources.items()},
                 "runs": self.runs[-30:], "mode": self.mode, "calib_version": CALIB_VERSION,
-                "rooms": self.rooms, "room_heat": self.room_heat}
+                "rooms": self.rooms, "room_heat": self.room_heat, "settings": self.settings, "plan_log": self.plan_log,
+                "fc_log": self.fc_log, "yesterday": self.yesterday, "measures": self.measures}
 
     async def _save(self) -> None:
         await self.store.async_save(self._data())
@@ -304,6 +321,20 @@ class VarmemodelCoordinator:
     async def _on_hour(self, _now: datetime) -> None:
         await self.async_collect()
         self.store.async_delay_save(self._data, 300)
+
+    def setting(self, key: str) -> float:
+        """Planens indstilling: tal-entiteten, ellers opsætningen, ellers standarden."""
+        default = next(d for k, *_, d in SETTINGS if k == key)
+        v = self.settings.get(key, self.conf.get(key))
+        try:
+            return float(v) if v is not None else float(default)
+        except (TypeError, ValueError):
+            return float(default)
+
+    async def async_set_setting(self, key: str, value: float) -> None:
+        self.settings[key] = value
+        await self._save()
+        await self.async_replan()
 
     async def async_set_mode(self, mode: str) -> None:
         self.mode = mode
@@ -514,6 +545,11 @@ class VarmemodelCoordinator:
                                "fitted_at": now if f.value is not None else (prev or {}).get("fitted_at"),
                                "extra": (prev or {}).get("extra", {}) if note.startswith("begrænset") or f.value is None else f.extra}
         self.room_heat = self._room_heat(hours_by_source)
+        self.yesterday = self._yesterday(day_of, yday[0])
+        try:
+            self.measures = await self._measures()
+        except Exception:  # noqa: BLE001 – tiltag må ikke vælte kalibreringen
+            _LOGGER.exception("Før/efter for tiltag fejlede")
         n_hours = max((len(s.last_hours) for s in self.sources.values()), default=0)
         if not self.sources:
             self.status, self.status_note = "waiting", "tilføj en varmekilde"
@@ -738,6 +774,65 @@ class VarmemodelCoordinator:
             for k, a in acc.items()
         }
 
+    def _yesterday(self, day_of: Callable[[int], str], day: str) -> dict[str, dict[str, Any]]:
+        """Gårsdagen time for time: det planlagte (ved timens start) mod det, der faktisk skete."""
+        out: dict[str, dict[str, Any]] = {}
+        for sid, s in self.sources.items():
+            log = self.plan_log.get(sid) or {}
+            hrs = [h for h in s.last_hours if day_of(h.ts) == day]
+            if s.kind != SOURCE_HYDRONIC or not hrs:
+                continue
+            planned = [log.get(str(h.ts)) for h in hrs]
+            known = [(h, x) for h, x in zip(hrs, planned) if x is not None]
+            q = lambda h: max(h.q or 0.0, 0.0)  # noqa: E731
+            e = lambda h: max(h.e or 0.0, 0.0)  # noqa: E731
+            out[sid] = {
+                "dato": day, "timer_med_plan": len(known), "timer": len(hrs),
+                "plan_varme_kwh": round(sum(x["p"] for _, x in known), 1),
+                "plan_el_kwh": round(sum(x.get("e", 0.0) for _, x in known), 1),
+                "plan_kr": round(sum(x.get("e", 0.0) * x["pr"] for _, x in known), 1),
+                "faktisk_varme_kwh": round(sum(q(h) for h, _ in known), 1),
+                "faktisk_varme_uden_vv_kwh": round(sum(q(h) * (1 - min(h.dhw or 0.0, 60.0) / 60) for h, _ in known), 1),
+                "faktisk_el_kwh": round(sum(e(h) for h, _ in known), 1),
+                "faktisk_kr": round(sum(e(h) * x["pr"] for h, x in known), 1),
+                "faktisk_varme_i_rød_kwh": round(sum(q(h) for h, x in known if x["b"]), 1),
+                "timer": [{"t": _ts_local_iso(h.ts), "plan": x["p"], "faktisk": round(q(h), 2), "blokeret": x["b"]} for h, x in known],
+            }
+        return out
+
+    async def _measures(self) -> list[dict[str, Any]]:
+        """Før/efter for hvert energitiltag i kalenderen: varmetabet regnet hver for sig før og efter datoen."""
+        cal = self._id(CONF_MEASURES_CALENDAR)
+        src = self.hydronic
+        if not cal or src is None or not src.last_hours:
+            return []
+        days = int(self.conf.get(CONF_WINDOW_DAYS) or DEFAULT_WINDOW_DAYS)
+        end = dt_util.now()
+        resp = await self.hass.services.async_call(
+            "calendar", "get_events", {"start_date_time": end - timedelta(days=days), "end_date_time": end},
+            target={"entity_id": cal}, blocking=True, return_response=True)
+        events = ((resp or {}).get(cal) or {}).get("events") or []
+        hours = src.last_hours
+        out = []
+        for ev in events:
+            d = dt_util.parse_datetime(str(ev.get("start"))) or None
+            if d is None:
+                dd = dt_util.parse_date(str(ev.get("start")))
+                d = datetime.combine(dd, datetime.min.time(), dt_util.get_default_time_zone()) if dd else None
+            if d is None:
+                continue
+            ts = d.timestamp()
+            before = [h for h in hours if h.ts < ts]
+            after = [h for h in hours if h.ts >= ts + 86400]
+            fb, fa = await self.hass.async_add_executor_job(fit_heat_loss, before), await self.hass.async_add_executor_job(fit_heat_loss, after)
+            chg = round((fa.value - fb.value) / fb.value * 100, 1) if fa.value and fb.value else None
+            out.append({"navn": ev.get("summary"), "dato": d.date().isoformat(), "før_w_k": fb.value and round(fb.value, 1),
+                        "efter_w_k": fa.value and round(fa.value, 1), "ændring_pct": chg,
+                        "dage_før": round(len(before) / 24), "dage_efter": round(len(after) / 24),
+                        "forklaringsgrad_før": fb.r2 and round(fb.r2, 2), "forklaringsgrad_efter": fa.r2 and round(fa.r2, 2),
+                        "note": None if chg is not None else "for lidt data – kræver ca. 16 døgn på hver side"})
+        return out
+
     # ------------------------------------------------------------ planlægning
     async def _on_replan(self, _now: datetime) -> None:
         try:
@@ -799,11 +894,25 @@ class VarmemodelCoordinator:
                 break
             t_out = fc.get(ts, t_now if t_now is not None else 5.0)
             hours.append(PlanHour(ts=ts, price=prices[ts], t_out=t_out, blocked=bool(blocks.get(ts, False))))
-        boost_on = False
-        if (be := self._id(CONF_BOOST_ENTITY)) and (bs := self.hass.states.get(be)):
-            boost_on = bs.state == "on"
-        boost = float(self.conf.get(CONF_BOOST_DELTA) or 0) if boost_on else 0.0
-        offset = float(self.conf.get(CONF_COMFORT_OFFSET) if self.conf.get(CONF_COMFORT_OFFSET) is not None else 1.0)
+        # »Jeg fryser«: gælder fra den blev slået til, i højst boost_hours timer og kun til næste blokerede periode starter
+        boost_on, boost_h, boost_note = False, 0, None
+        if (be := self._id(CONF_BOOST_ENTITY)) and (bs := self.hass.states.get(be)) and bs.state == "on":
+            since = bs.last_changed.timestamp()
+            until = since + self.setting(CONF_BOOST_HOURS) * 3600
+            started_in_block = bool(blocks.get(int(since // 3600 * 3600)))
+            for k, h in enumerate(hours):
+                if h.ts + 3600 <= since:
+                    continue
+                if h.blocked and not started_in_block and h.ts >= since - 3600:
+                    until = min(until, h.ts)
+                    break
+                if not h.blocked:
+                    started_in_block = False
+            boost_h = max(0, min(len(hours), int(-(-(until - h0) // 3600))))
+            boost_on = boost_h > 0
+            boost_note = _ts_local_iso(until) if boost_on else "udløbet"
+        boost = self.setting(CONF_BOOST_DELTA) if boost_on else 0.0
+        offset = self.setting(CONF_COMFORT_OFFSET)
         plans: dict[str, dict[str, Any]] = {}
         for sid, s in self.sources.items():
             if s.kind != SOURCE_HYDRONIC:
@@ -841,7 +950,7 @@ class VarmemodelCoordinator:
                 if t_room is None or t_min is None or not src or fitd.get("value") is None:
                     skipped.append(r["name"] or r["key"])
                     continue
-                mins.append(t_min + boost)
+                mins.append(t_min)
                 nbs = []
                 for nb_name, nb in (ex.get("neighbours") or {}).items():
                     nb_eid = next((n for n in r.get("neighbours") or [] if self._label(n) == nb_name), None)
@@ -849,25 +958,56 @@ class VarmemodelCoordinator:
                     if tn is not None:
                         nbs.append((float(nb.get("per_h_k") or 0.0), tn))
                 rooms.append(PlanRoom(
-                    name=r["name"] or r["key"], t_now=t_room, t_min=t_min + boost,
+                    name=r["name"] or r["key"], t_now=t_room, t_min=t_min,
                     heat_now=float(src.get("now") or 0.0), heat_delayed=float(src.get("delayed") or 0.0),
                     cool_per_hk=float(fitd["value"]) / 20, free_per_h=float(ex.get("free_heat_k_per_day") or 0.0) / 24,
                     margin=min(0.6, max(0.2, float(ex.get("accuracy_6h_k") or 0.3))), neighbours=nbs,
                 ))
-            target = (sum(mins) / len(mins) + offset) if mins else 20.5 + boost
+            target = (sum(mins) / len(mins) + offset) if mins else 20.5
             p = await self.hass.async_add_executor_job(
-                partial(make_plan, hours, model, rooms, target, int(self.conf.get(CONF_MAX_PAUSE) or 0), label=_clock))
+                partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), label=_clock,
+                        boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE)))
+            # Log: det planlagte for timen (første plan i timen) og rummenes forudsigelse – til »i går« og »!«
+            log = self.plan_log.setdefault(sid, {})
+            if p.hours and p.hours[0]["ts"] == h0 and str(h0) not in log:
+                x = p.hours[0]
+                log[str(h0)] = {"p": x["heat_kw"], "e": round(x["heat_kw"] / x["cop"], 2) if x["cop"] else 0.0,
+                                "pr": x["price"], "b": x["blocked"], "s": x["shift"]}
+            for k in [k for k in log if int(k) < h0 - 3 * 86400]:
+                del log[k]
+            if p.rooms and str(h0) not in self.fc_log:
+                self.fc_log[str(h0)] = {name: v[:8] for name, v in p.rooms.items()}
+            for k in [k for k in self.fc_log if int(k) < h0 - 8 * 3600]:
+                del self.fc_log[k]
+            checks: dict[str, dict[str, Any]] = {}
+            old_fc = self.fc_log.get(str(h0 - 6 * 3600)) or {}
+            for r in rooms:
+                f = old_fc.get(r.name) or []
+                if len(f) > 5:
+                    dev = round(r.t_now - f[5], 2)
+                    lim = round(max(0.3, 2 * r.margin), 2)
+                    checks[r.name] = {"ventet": f[5], "målt": round(r.t_now, 2), "afvigelse": dev, "grænse": lim, "flag": abs(dev) > lim}
+            self.rooms_check = checks
             plans[sid] = {"hours": p.hours, "rooms": p.rooms, "demand_kwh": p.demand_kwh, "heat_kwh": p.heat_kwh,
                           "el_kwh": p.el_kwh, "cost_kr": p.cost_kr, "reason": p.reason, "warnings": p.warnings,
-                          "target": round(target, 1), "rooms_skipped": skipped, "boost": boost_on}
+                          "target": round(target, 1), "rooms_skipped": skipped, "boost": boost_on, "boost_until": boost_note,
+                          "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
+                          "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
         self.plans = plans
         if len(hours) < 6:
             missing.append("for få timer med pris")
         self.plan_meta = {"updated": now, "inputs_ok": not missing, "missing": missing, "horizon_h": len(hours),
                           "blocked_known": bool(blocks)}
+        self.store.async_delay_save(self._data, 600)
         self._notify()
 
 
 def _clock(ts: int) -> str:
     """Lokal klokkeslæt til planens advarsler, fx 'kl. 23'."""
-    return dt_util.as_local(dt_util.utc_from_timestamp(ts)).strftime("kl. %H")
+    d = dt_util.as_local(dt_util.utc_from_timestamp(ts))
+    days = (d.date() - dt_util.now().date()).days
+    return {0: "", 1: "i morgen ", 2: "i overmorgen "}.get(days, d.strftime("%d/%m ")) + d.strftime("kl. %H")
+
+
+def _ts_local_iso(ts: float) -> str:
+    return dt_util.as_local(dt_util.utc_from_timestamp(ts)).isoformat()

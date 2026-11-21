@@ -90,9 +90,8 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 |---|---|---|
 | Elpris | `sensor.pris` | entitet med en liste af tid og pris pr. time eller kvarter, helst inkl. afgifter |
 | Blokerede timer | `sensor.zoner` + kode `r` | timer hvor der aldrig varmes, fx dyreste pris. Format »TIMEINDEKS\|koder« eller en liste |
-| Maks. pause uden gulvvarme | 6 | længste pause (timer) uden for blokerede timer – gulvene må ikke blive kolde |
-| Komfort over min. | 1 | hvor meget over rummenes min. planen sigter efter |
-| »Jeg fryser« | `input_boolean.jeg_fryser` + 1 °C | hæver rummenes mål, så planen lægger mere varme – aldrig i blokerede timer |
+| »Jeg fryser« | `input_boolean.jeg_fryser` | hæver rummenes mål, så planen lægger mere varme – aldrig i blokerede timer |
+| Kalender med energitiltag | `calendar.energitiltag` | før/efter-beregning af varmetabet |
 
 **Sådan regnes planen:**
 
@@ -101,6 +100,17 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 3. **Rummene forudsiges** time for time med rummodellerne (varme nu og forsinket, afkøling, gratis varme, nabozoner). Kommer et rum under min. + sin usikkerhed, lægges der varme i den billigste time før.
 4. For lange pauser brydes med den billigste time.
 5. **Fremløb** = mål + effekt ÷ gulvets afgivelse, og **kurve-forskydning** = fremløb − varmekurven.
+
+**Indstillinger (tal-entiteter på huset):** *Maks. pause uden gulvvarme*, *Komfort over min.*, *»Jeg fryser« hæver målet*, *»Jeg fryser« gælder højst* (timer) og *Må falde under min. i blokerede timer*. De påvirker kun planen.
+
+**»Jeg fryser«** gælder fra den slås til, i højst det valgte antal timer og kun til næste blokerede periode begynder. Der varmes aldrig i blokerede timer.
+
+**Log og kontrol:**
+- Ved hver times start gemmes, hvad planen sagde for timen.
+- Næste nat sammenlignes gårsdagen: planlagt mod faktisk varme, el, kroner og varme i blokerede timer (attributten *i_går* på *Plan pris*).
+- Hvert rums forudsigelse fra 6 timer før sammenlignes med den målte temperatur. Afviger den mere end 2 × rummets præcision (mindst 0,3 °C), markeres rummet (attributten *rooms_check* på *Plan nu*), fx ved en åben dør.
+
+**Energitiltag:** Vælg en kalender under *Konfigurer*. Hver begivenhed er et tiltag. Ved kalibreringen regnes varmetabet for sig før og efter datoen (dagen selv udelades). Det kræver ca. 16 døgn på hver side. Resultatet ses på sensoren *Energitiltag*.
 
 **Sensorer pr. varmekilde:** *Plan nu* (varme / slukket / blokeret, med effekt, fremløb, forskydning, pris, grund, næste start/stop, hele planen og rummenes forudsigelse i attributterne), *Plan fremløb*, *Plan kurve-forskydning* og *Plan pris* (forventet elpris for perioden).
 
@@ -174,5 +184,5 @@ Diagnostikfilen indeholder kalibreringen og de brugte timer med tid som "timer f
 
 ## Planer
 
-- **0.4 (her):** Planlæggeren for vandbårne varmekilder. Senere: luft-luft i planen.
+- **0.4–0.5 (her):** Planlæggeren for vandbårne varmekilder, indstillinger, log, rumkontrol og før/efter. Senere: luft-luft i planen.
 - **0.5:** Gulvkomfort, sikkerhedsnet og en blueprint til at udføre planen.

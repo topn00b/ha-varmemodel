@@ -14,16 +14,15 @@
           "price_attribute": "Price: attribute holding the list (empty = auto)",
           "block_entity": "Blocked hours (schedule)",
           "block_codes": "Codes meaning blocked (comma separated)",
-          "max_pause": "Max pause without floor heating (hours, 0 = none)",
-          "comfort_offset": "Comfort above minimum (°C)",
           "boost_entity": "\"I'm cold\" (entity)",
-          "boost_delta": "\"I'm cold\" raises the target by (°C)"
+          "measures_calendar": "Calendar with energy measures"
         },
         "data_description": {
           "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated.",
           "indoor_temps": "Otherwise the indoor temperature is the average of the rooms included in the plan.",
           "block_entity": "E.g. a zone schedule. Format: \"HOURINDEX|codes\" (hours since 1970 UTC, one code per hour) or a list with time and value.",
-          "price_entity": "The price should include tariffs. The list needs time (start/t/time) and price (el/value/price) per hour or quarter."
+          "price_entity": "The price should include tariffs. The list needs time (start/t/time) and price (el/value/price) per hour or quarter.",
+          "measures_calendar": "Each event is a measure (e.g. sealing). Heat loss is computed before and after its date."
         }
       }
     },
@@ -45,16 +44,15 @@
           "price_attribute": "Price: attribute holding the list (empty = auto)",
           "block_entity": "Blocked hours (schedule)",
           "block_codes": "Codes meaning blocked (comma separated)",
-          "max_pause": "Max pause without floor heating (hours, 0 = none)",
-          "comfort_offset": "Comfort above minimum (°C)",
           "boost_entity": "\"I'm cold\" (entity)",
-          "boost_delta": "\"I'm cold\" raises the target by (°C)"
+          "measures_calendar": "Calendar with energy measures"
         },
         "data_description": {
           "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated.",
           "indoor_temps": "Otherwise the indoor temperature is the average of the rooms included in the plan.",
           "block_entity": "E.g. a zone schedule. Format: \"HOURINDEX|codes\" (hours since 1970 UTC, one code per hour) or a list with time and value.",
-          "price_entity": "The price should include tariffs. The list needs time (start/t/time) and price (el/value/price) per hour or quarter."
+          "price_entity": "The price should include tariffs. The list needs time (start/t/time) and price (el/value/price) per hour or quarter.",
+          "measures_calendar": "Each event is a measure (e.g. sealing). Heat loss is computed before and after its date."
         }
       }
     },
@@ -150,6 +148,9 @@
       },
       "plan_cost": {
         "name": "Plan cost"
+      },
+      "measures": {
+        "name": "Energy measures"
       }
     },
     "button": {
@@ -164,6 +165,23 @@
           "calibrated": "Learning",
           "frozen": "Frozen"
         }
+      }
+    },
+    "number": {
+      "max_pause": {
+        "name": "Max pause without floor heating"
+      },
+      "comfort_offset": {
+        "name": "Comfort above minimum"
+      },
+      "boost_delta": {
+        "name": "\"I'm cold\" raises the target"
+      },
+      "boost_hours": {
+        "name": "\"I'm cold\" lasts at most"
+      },
+      "red_allowance": {
+        "name": "May drop below minimum in blocked hours"
       }
     }
   },

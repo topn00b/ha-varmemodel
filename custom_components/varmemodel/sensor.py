@@ -25,7 +25,7 @@ def _ts_local(ts: float | None) -> str | None:
 
 async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     c = entry.runtime_data
-    async_add_entities([StatusSensor(c)])
+    async_add_entities([StatusSensor(c), MeasuresSensor(c)])
     for sid, s in c.sources.items():
         ents: list[SensorEntity] = []
         if s.kind == SOURCE_HYDRONIC:
@@ -223,7 +223,10 @@ class RoomSensor(RoomEntity, SensorEntity):
         r = self.coordinator.rooms.get(self.source) or {}
         e = r.get("extra") or {}
         return {
-            "kilde": self.source,
+            "temperaturføler": self.source,
+            "min_entitet": (cfg := next((x for x in self.coordinator.rooms_cfg if x["key"] == self.source), {})).get("min_entity"),
+            "telestat": cfg.get("valve") or ("altid åben" if cfg.get("always_open") else None),
+            "i_plan": cfg.get("in_plan"),
             "varmekilde": (lambda s: s.name if s else None)(self.coordinator.room_source(next((x for x in self.coordinator.rooms_cfg if x["key"] == self.source), {}))),
             "tidskonstant_timer": e.get("time_constant_h"),
             "varmekilder_grader_pr_kwh": {k: v.get("total") for k, v in (e.get("sources") or {}).items()} or None,
@@ -284,7 +287,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["heat", "off", "blocked", "unknown"]
-    _unrecorded_attributes = frozenset({"plan", "rooms_forecast"})
+    _unrecorded_attributes = frozenset({"plan", "rooms_forecast", "history", "rooms_check"})
 
     def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
         super().__init__(coordinator, s, "plan_now")
@@ -319,6 +322,11 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "inputs_ok": m.get("inputs_ok"), "missing": m.get("missing") or None, "horizon_h": m.get("horizon_h"),
             "plan": [{"t": _ts_local(x["ts"]), **{k: x[k] for k in ("heat_kw", "flow", "shift", "price", "t_out", "blocked", "cost")}} for x in hrs],
             "rooms_forecast": p.get("rooms"),
+            "rooms_check": self.coordinator.rooms_check or None,
+            "boost_until": p.get("boost_until"), "boost_delta": p.get("boost_delta"), "red_allowance": p.get("red_allowance"),
+            "max_pause": p.get("max_pause"), "comfort_offset": p.get("comfort_offset"),
+            "history": [{"t": _ts_local(int(k)), "plan": v["p"], "price": v["pr"], "blocked": v["b"]}
+                        for k, v in sorted((self.coordinator.plan_log.get(self.src.sid) or {}).items(), key=lambda kv: int(kv[0]))[-48:]],
         }
 
 
@@ -352,8 +360,31 @@ class PlanCostSensor(SourceEntity, SensorEntity):
     def native_value(self) -> float | None:
         return (self.coordinator.plans.get(self.src.sid) or {}).get("cost_kr")
 
+    _unrecorded_attributes = frozenset({"i_går_timer"})
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         p = self.coordinator.plans.get(self.src.sid) or {}
+        y = dict(self.coordinator.yesterday.get(self.src.sid) or {})
+        hrs = y.pop("timer", None)
         return {"heat_kwh": p.get("heat_kwh"), "el_kwh": p.get("el_kwh"), "demand_kwh": p.get("demand_kwh"),
-                "horizon_h": self.coordinator.plan_meta.get("horizon_h")}
+                "horizon_h": self.coordinator.plan_meta.get("horizon_h"), "i_går": y or None, "i_går_timer": hrs}
+
+
+class MeasuresSensor(VarmemodelEntity, SensorEntity):
+    """Energitiltag fra kalenderen med varmetabet før og efter (antal tiltag med resultat)."""
+
+    _attr_native_unit_of_measurement = None
+
+    def __init__(self, coordinator: VarmemodelCoordinator) -> None:
+        super().__init__(coordinator, "measures")
+
+    @property
+    def native_value(self) -> int:
+        return sum(1 for m in self.coordinator.measures if m.get("ændring_pct") is not None)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        from .const import CONF_MEASURES_CALENDAR
+
+        return {"kalender": self.coordinator.conf.get(CONF_MEASURES_CALENDAR), "tiltag": self.coordinator.measures or None}

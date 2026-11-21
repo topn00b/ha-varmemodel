@@ -99,14 +99,25 @@ def simulate_rooms(rooms: list[PlanRoom], hours: list[PlanHour], q: list[float],
 
 def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
               max_pause: int = 0, past_q: list[float] | None = None,
-              label: Callable[[int], str] | None = None) -> Plan:
-    """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra."""
+              label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
+              red_allowance: float = 0.0) -> Plan:
+    """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra.
+
+    ``boost`` (»jeg fryser«) hæver målet og rummenes min. i de første ``boost_hours`` timer.
+    ``red_allowance``: så meget må et rum falde under sit min. i blokerede timer.
+    """
     n = len(hours)
     plan = Plan()
     if n == 0:
         plan.reason = "ingen timer at planlægge"
         return plan
-    demand = [max(0.0, (model.heat_loss_w_k * (target - h.t_out) - model.gains_w) / 1000) for h in hours]
+
+    def limit(r: PlanRoom, i: int) -> float:
+        """Laveste tilladte temperatur for rummet ved udgangen af time i."""
+        return r.t_min + (boost if i < boost_hours else 0.0) - (red_allowance if hours[i].blocked else 0.0)
+
+    demand = [max(0.0, (model.heat_loss_w_k * (target + (boost if i < boost_hours else 0.0) - h.t_out) - model.gains_w) / 1000)
+              for i, h in enumerate(hours)]
     plan.demand_kwh = round(sum(demand), 2)
     q = [0.0] * n
     free = [i for i, h in enumerate(hours) if not h.blocked]
@@ -152,7 +163,7 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
         worst: tuple[int, PlanRoom] | None = None
         for r in rooms:
             for i, t in enumerate(sim[r.name]):
-                if t < r.t_min + r.margin and (r.name, i) not in skip:
+                if t < limit(r, i) + r.margin and (r.name, i) not in skip:
                     if worst is None or i < worst[0]:
                         worst = (i, r)
                     break
@@ -190,9 +201,9 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
     lab = label or (lambda ts: f"om {(ts - hours[0].ts) // 3600} t")
     for r in rooms:
         s = plan.rooms[r.name]
-        k = min(range(n), key=s.__getitem__)
-        if s[k] < r.t_min:
-            plan.warnings.append(f"{r.name} ventes under min.: {s[k]:.1f} °C {lab(hours[k].ts)} (min. {r.t_min:.1f})")
+        k = min(range(n), key=lambda j: s[j] - limit(r, j))
+        if s[k] < limit(r, k):
+            plan.warnings.append(f"{r.name} ventes under min.: {s[k]:.1f} °C {lab(hours[k].ts)} (grænse {limit(r, k):.1f})")
     for i, h in enumerate(hours):
         p = round(q[i], 2)
         flow = target + (p / model.emission_kw_k if p > 0 and model.emission_kw_k > 0 else 0.0)

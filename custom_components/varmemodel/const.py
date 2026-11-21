@@ -92,4 +92,15 @@ CONF_MAX_PAUSE = "max_pause"
 CONF_COMFORT_OFFSET = "comfort_offset"
 CONF_BOOST_ENTITY = "boost_entity"
 CONF_BOOST_DELTA = "boost_delta"
-PLAN_HORIZON_H = 36
+PLAN_HORIZON_H = 48
+CONF_BOOST_HOURS = "boost_hours"
+CONF_RED_ALLOWANCE = "red_allowance"
+CONF_MEASURES_CALENDAR = "measures_calendar"
+# Planens indstillinger (tal-entiteter): nøgle, min, maks, trin, enhed, standard
+SETTINGS = (
+    ("max_pause", 0, 24, 1, "h", 0),
+    ("comfort_offset", 0, 3, 0.5, "°C", 1.0),
+    ("boost_delta", 0, 5, 0.5, "°C", 1.0),
+    ("boost_hours", 1, 12, 1, "h", 5),
+    ("red_allowance", 0, 3, 0.5, "°C", 0.0),
+)
