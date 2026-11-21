@@ -19,6 +19,7 @@ Integrationen **styrer ingenting**. Den udgiver tal som sensorer, og hvert tal v
 | Afrimninger pr. kompressortime | i alt og pr. udetemperatur og effekt | Talt time for time. Kun rapport. |
 | Vind: ekstra varmetab pr. m/s | % | Varmetab med vind og sol: varme = H·ΔT·(1 + w·vind) − G − S·sol over 48-timers blokke. Attributterne viser solens gratis varme ved klar himmel, varmetabet i stille vejr og afkølingen i pauser pr. vindretning. Kræver vejr-entitet og ca. 30 dages opsamlede vejrdata. |
 | Afkølingstid | timer | Hvor hurtigt rummene falder i pauser uden varme. |
+| *Rum* afkøling (én pr. rum) | °C pr. time ved 20 graders forskel | Hvor hurtigt rummet falder, når der ikke kommer varme. Tallet falder, når rummet isoleres bedre, så det kan bruges til at se effekten af energitiltag. Lært af blokke på 6 timer: opvarmning pr. kWh nu og forsinket (gulvet), gratis varme (mennesker, madlavning) og sol. **Udluftning holdes ude**: timer efter et brat fald (≥ 0,3 °C på et kvarter) bruges ikke, og afvigere sorteres fra. Attributterne viser præcisionen over 6 timer. |
 | Kalibrering | status | ok, delvis, for få data, fastfrosset eller fejl. |
 
 Hver nat kl. 03:17 regnes alle tal ud igen af de seneste 60 dages timestatistik. Antallet af dage kan ændres. Knappen **Kalibrér nu** gør det med det samme.

@@ -46,7 +46,7 @@ FIT_KEYS: dict[str, str | None] = {
 }
 
 # Øges når selve regnemetoden ændres: så regnes tallene forfra uden ±10 %-grænsen
-CALIB_VERSION = 3
+CALIB_VERSION = 4
 
 CALIBRATION_HOUR = 3
 CALIBRATION_MINUTE = 17

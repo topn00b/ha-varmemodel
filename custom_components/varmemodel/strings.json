@@ -134,6 +134,9 @@
       },
       "wind_effect": {
         "name": "Wind: extra heat loss per m/s"
+      },
+      "room": {
+        "name": "{room} cooling"
       }
     },
     "button": {

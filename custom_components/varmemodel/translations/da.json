@@ -134,6 +134,9 @@
       },
       "wind_effect": {
         "name": "Vind: ekstra varmetab pr. m/s"
+      },
+      "room": {
+        "name": "{room} afkøling"
       }
     },
     "button": {

@@ -214,3 +214,31 @@ def test_wind_sector_from_vector() -> None:
     assert wind_sector(5.0, 0.0) == "Ø"
     assert wind_sector(-3.5, -3.5) == "SV"
     assert wind_sector(0.1, 0.1) is None
+
+
+def test_room_model_recovers_cooling_and_skips_airing() -> None:
+    from custom_components.varmemodel.calibration import RoomHour, fit_room
+
+    rnd = random.Random(11)
+    b_true, a_true = 0.005, 0.03  # 1/time og °C pr. kWh
+    t = 20.5
+    hours = []
+    for i in range(24 * 40):
+        t_out = 4 + 4 * math.sin(i / 70)
+        q = 4.0 if (i % 24) < 8 else 0.0
+        aired = (i % 97) == 0
+        t = t + a_true * q + b_true * (t_out - t) + rnd.gauss(0, 0.01) - (0.8 if aired else 0.0)
+        hours.append(RoomHour(ts=i * 3600, t_room=t, t_out=t_out, q=q, aired=aired))
+    f = fit_room(hours)
+    assert f.source == "fit"
+    assert abs(f.value - b_true * 20) < 0.02
+    assert f.extra["aired_blocks_skipped"] > 0
+
+
+def test_detect_airing() -> None:
+    from custom_components.varmemodel.calibration import detect_airing
+
+    pts = [(i * 300, 21.0) for i in range(12)] + [(12 * 300, 20.6), (13 * 300, 20.5)]
+    hours = detect_airing(pts)
+    assert {0, 3600, 7200, 10800} <= hours and 14400 not in hours
+    assert not detect_airing([(i * 300, 21.0 - i * 0.01) for i in range(24)])

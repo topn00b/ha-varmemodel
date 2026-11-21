@@ -721,3 +721,100 @@ def fit_wind_sectors(hours: list[Hour], min_hours: int = 6) -> dict[str, Any]:
         by.setdefault(sec, []).append((a.t_in - b.t_in) / dt * 20)
     return {k: {"hours": len(v), "k_per_hour_at_20k": round(median(v), 3) if len(v) >= min_hours else None}
             for k, v in sorted(by.items(), key=lambda kv: SECTORS.index(kv[0]))}
+
+
+# ---------------------------------------------------------------- rummodel
+@dataclass
+class RoomHour:
+    ts: int
+    t_room: float | None
+    t_out: float | None
+    q: float | None  # varme leveret til huset i timen (kWh)
+    sun: float | None = None  # 0–1, klar himmel i dagslys
+    aired: bool = False  # udluftning markeret i denne time
+
+
+def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: int = 40) -> Fit:
+    """Hvordan et rum opfører sig, lært af historikken (blokke à 6 timer).
+
+    Temperaturændring over blokken = a·varme nu + a2·varme de foregående 6 timer
+    (gulvets forsinkelse) + b·(ude − rum)·timer + c (gratis varme) [+ s·sol].
+    Blokke med udluftning udelades, og målinger der stikker helt ud (over 3×
+    den typiske afvigelse) sorteres fra, før der tilpasses igen.
+
+    Værdien er rummets afkøling i °C pr. time ved 20 graders forskel mellem
+    inde og ude – det tal falder, når rummet bliver bedre isoleret.
+    """
+    hs = sorted(hours, key=lambda h: h.ts)
+    idx = {h.ts: h for h in hs}
+    rows, y, touts = [], [], []
+    aired_blocks = 0
+    use_sun = sum(1 for h in hs if h.sun is not None) > len(hs) * 0.5
+    for i in range(block, len(hs) - block + 1, step):
+        cur = [idx.get(hs[i].ts + k * 3600) for k in range(block)]
+        prev = [idx.get(hs[i].ts - (block - k) * 3600) for k in range(block)]
+        if None in cur or None in prev:
+            continue
+        if any(h.aired for h in cur):
+            aired_blocks += 1
+            continue
+        if any(h.q is None or h.t_out is None or h.t_room is None for h in cur) or any(h.q is None for h in prev):
+            continue
+        dt = sum(h.t_out - cur[0].t_room for h in cur)  # (ude − rum)·timer
+        r = [sum(max(h.q, 0.0) for h in cur), sum(max(h.q, 0.0) for h in prev), dt, 1.0]
+        if use_sun:
+            r.append(sum(h.sun or 0.0 for h in cur))
+        rows.append(r)
+        y.append(cur[-1].t_room - cur[0].t_room)
+        touts += [h.t_out for h in cur]
+    lo, hi = _range(touts)
+    if len(rows) < min_blocks:
+        return Fit(None, len(rows), t_out_min=lo, t_out_max=hi, note="for få blokke à 6 timer endnu",
+                   extra={"aired_blocks_skipped": aired_blocks})
+    res = ols(rows, y)
+    if not res:
+        return Fit(None, len(rows), note="kunne ikke tilpasses")
+    beta, _ = res
+    resid = [v - sum(b * x for b, x in zip(beta, r)) for r, v in zip(rows, y)]
+    mad = median(abs(e) for e in resid) or 1e-6
+    keep = [k for k, e in enumerate(resid) if abs(e) <= 3 * 1.4826 * mad]
+    outliers = len(rows) - len(keep)
+    rows, y = [rows[k] for k in keep], [y[k] for k in keep]
+    res = ols(rows, y)
+    if not res:
+        return Fit(None, len(rows), note="kunne ikke tilpasses")
+    beta, se = res
+    a, a2, b, c = beta[:4]
+    s = beta[4] if use_sun else None
+    pred = [sum(bb * x for bb, x in zip(beta, r)) for r in rows]
+    r2, rmse = _r2_rmse(y, pred)
+    if b <= 0:
+        return Fit(None, len(rows), r2, rmse, lo, hi, note="rummet falder ikke med kulden – for lidt data",
+                   extra={"aired_blocks_skipped": aired_blocks})
+    return Fit(
+        round(b * 20, 3), len(rows), r2, rmse and round(rmse, 2), lo, hi, "fit",
+        {"time_constant_h": round(1 / b, 0),
+         "heat_now_k_per_kwh": round(a, 4), "heat_delayed_k_per_kwh": round(a2, 4),
+         "free_heat_k_per_day": round(c * 24 / block, 2),
+         "sun_k_per_clear_hour": None if s is None else round(s, 3),
+         "accuracy_6h_k": rmse and round(rmse, 2),
+         "aired_blocks_skipped": aired_blocks, "outliers_skipped": outliers,
+         "value_is": "°C pr. time rummet falder ved 20 graders forskel mellem inde og ude"},
+    )
+
+
+def detect_airing(five_min: list[tuple[int, float]], drop: float = 0.3, window: int = 900, after: int = 3 * 3600) -> set[int]:
+    """Timer (start) der skal udelades pga. udluftning: rummet faldt mindst ``drop``
+    grader inden for ``window`` sekunder. Timerne indtil ``after`` sekunder efter markeres."""
+    pts = sorted(five_min)
+    hours: set[int] = set()
+    for i, (t, v) in enumerate(pts):
+        for t2, v2 in pts[i + 1:]:
+            if t2 - t > window:
+                break
+            if v - v2 >= drop:
+                h = t // 3600 * 3600
+                for k in range(0, after + 3600, 3600):
+                    hours.add(h + k)
+                break
+    return hours

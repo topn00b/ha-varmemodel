@@ -18,7 +18,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import aggregate as agg
-from .calibration import Fit, Hour, Slot, calibrate, daily_cop, fit_cop_loss, fit_cop_steady, guard, steady_slots
+from .calibration import Fit, Hour, RoomHour, Slot, calibrate, daily_cop, detect_airing, fit_room, sun_factor, fit_cop_loss, fit_cop_steady, guard, steady_slots
 from .const import (
     BACKFILL_DAYS,
     CALIBRATION_HOUR,
@@ -77,6 +77,7 @@ class VarmemodelCoordinator:
         self.runs: list[dict[str, Any]] = []
         self.slots: dict[str, list[float]] = {}
         self.daily: dict[str, Any] = {}
+        self.rooms: dict[str, dict[str, Any]] = {}
         self.mode: str = MODE_CALIBRATED
         self.last_hours: list[Hour] = []
         self.status: str = "waiting"
@@ -103,6 +104,7 @@ class VarmemodelCoordinator:
         self.mode = data.get("mode", MODE_CALIBRATED)
         self.slots = data.get("slots", {})
         self.daily = data.get("daily", {})
+        self.rooms = data.get("rooms", {})
         if data and data.get("calib_version") != CALIB_VERSION:
             # Ny regnemetode: tallene regnes forfra (opsamlede timer beholdes)
             self.accepted, self.fits, self.runs = {}, {}, []
@@ -126,7 +128,7 @@ class VarmemodelCoordinator:
     def _data(self) -> dict[str, Any]:
         return (
             {"collected": self.collected, "accepted": self.accepted, "fits": self.fits, "runs": self.runs[-30:], "mode": self.mode,
-             "calib_version": CALIB_VERSION, "slots": self.slots, "daily": self.daily}
+             "calib_version": CALIB_VERSION, "slots": self.slots, "daily": self.daily, "rooms": self.rooms}
         )
 
     async def _save(self) -> None:
@@ -168,11 +170,12 @@ class VarmemodelCoordinator:
         end = agg.hour_start(now)
         done = [int(k) for k in self.collected]
         start = max(done) + agg.HOUR if done else end - BACKFILL_DAYS * 86400
-        if self._id(CONF_WEATHER):
-            # Vejr tilføjet efter opstart: hent vejret ind for de timer, der mangler det
-            missing = [int(k) for k, v in self.collected.items() if "ws" not in v and int(k) >= end - BACKFILL_DAYS * 86400]
-            if missing:
-                start = min(start, min(missing))
+        # Nye datakilder (vejr, udluftningstjek) hentes ind for de timer, der mangler dem
+        need = (["ws"] if self._id(CONF_WEATHER) else []) + (["airchk"] if self.conf.get(CONF_INDOOR) else [])
+        missing = [int(k) for k, v in self.collected.items()
+                   if any(n not in v for n in need) and int(k) >= end - BACKFILL_DAYS * 86400]
+        if missing:
+            start = min(start, min(missing))
         start = max(start, end - BACKFILL_DAYS * 86400)
         if start >= end:
             return
@@ -234,6 +237,20 @@ class VarmemodelCoordinator:
                     if h in out:
                         out[h][key] = v
 
+        # Udluftning: et rum faldt mindst 0,3 °C på et kvarter (5-minutters statistik, ca. 10 dage tilbage)
+        indoor = list(self.conf.get(CONF_INDOOR) or [])
+        if indoor:
+            five = statistics_during_period(self.hass, a - timedelta(hours=1), b, set(indoor), "5minute", {"temperature": "°C"}, {"mean"})
+            for h in out:
+                out[h]["airchk"] = 1
+            for eid in indoor:
+                pts = [(int(_ts(x["start"])), _num(x.get("mean"))) for x in five.get(eid, [])]
+                for h in detect_airing([(t, v) for t, v in pts if v is not None]):
+                    if h in out:
+                        out[h].setdefault("air", [])
+                        if eid not in out[h]["air"]:
+                            out[h]["air"].append(eid)
+
         if eid := self._id(CONF_SETPOINT):
             for h, v in agg.step_mean(attr_series(eid, self.conf.get(CONF_SETPOINT_ATTR) or None, 0.0, False), start, end).items():
                 if h in out:
@@ -254,6 +271,7 @@ class VarmemodelCoordinator:
             fits = await self.hass.async_add_executor_job(calibrate, hours)
             steady, loss = await get_instance(self.hass).async_add_executor_job(self._steady_sync)
             fits["cop_steady"], fits["cop_loss"] = steady, loss
+            room_fits = await self.hass.async_add_executor_job(self._rooms_fit, hours)
         except Exception as err:  # noqa: BLE001 – vis fejlen i status i stedet for at stoppe
             _LOGGER.exception("Kalibrering fejlede")
             self.status, self.status_note = "error", str(err)
@@ -276,6 +294,16 @@ class VarmemodelCoordinator:
             self._accept(key, fits[key], now)
             if self.accepted.get(key, {}).get("guard") not in (None, "ok", "ny", "beholdt (ingen ny værdi)"):
                 changed.append(key)
+        for eid, f in room_fits.items():
+            prev = self.rooms.get(eid)
+            value, note = guard(f.value, prev.get("value") if prev else None, (f.t_out_min, f.t_out_max),
+                                (prev.get("t_out_min"), prev.get("t_out_max")) if prev else (None, None))
+            if self.mode == MODE_FROZEN and prev:
+                continue
+            self.rooms[eid] = {"value": value, "guard": note, "n": f.n, "r2": None if f.r2 is None else round(f.r2, 2),
+                               "t_out_min": f.t_out_min, "t_out_max": f.t_out_max, "note": f.note,
+                               "fitted_at": now if f.value is not None else (prev or {}).get("fitted_at"),
+                               "extra": (prev or {}).get("extra", {}) if note.startswith("begrænset") or f.value is None else f.extra}
         n_ok = sum(1 for f in fits.values() if f.source == "fit")
         self.status = "frozen" if self.mode == MODE_FROZEN else ("ok" if n_ok == len(fits) else "partial" if n_ok else "insufficient")
         self.status_note = f"{n_ok} af {len(fits)} tal kunne regnes ud af {len(hours)} timer"
@@ -323,6 +351,7 @@ class VarmemodelCoordinator:
             for x in lst:
                 rows.setdefault(int(_ts(x["start"])), {})[sid] = x
         hours: list[Hour] = []
+        self._room_t: dict[int, dict[str, float | None]] = {}
         for ts in sorted(rows):
             r = rows[ts]
 
@@ -331,6 +360,7 @@ class VarmemodelCoordinator:
                 return _num((r.get(eid) or {}).get(field)) if eid else None
 
             tin = [v for v in (_num((r.get(i) or {}).get("mean")) for i in indoor) if v is not None]
+            self._room_t[ts] = {i: _num((r.get(i) or {}).get("mean")) for i in indoor}
             c = self.collected.get(str(ts), {})
             hours.append(
                 Hour(
@@ -391,3 +421,17 @@ class VarmemodelCoordinator:
         all_slots = [Slot(int(k), *v) for k, v in self.slots.items()]
         steady = fit_cop_steady(all_slots)
         return steady, fit_cop_loss(steady, five, comp, dhw)
+
+    # ------------------------------------------------------------ rum
+    def _rooms_fit(self, hours: list[Hour]) -> dict[str, Fit]:
+        """Én model pr. rum. Timer med udluftning i rummet udelades."""
+        out: dict[str, Fit] = {}
+        room_t = getattr(self, "_room_t", {})
+        for eid in list(self.conf.get(CONF_INDOOR) or []):
+            rh = []
+            for h in hours:
+                c = self.collected.get(str(h.ts), {})
+                rh.append(RoomHour(ts=h.ts, t_room=(room_t.get(h.ts) or {}).get(eid), t_out=h.t_out, q=h.q,
+                                   sun=sun_factor(h), aired=eid in (c.get("air") or [])))
+            out[eid] = fit_room(rh)
+        return out

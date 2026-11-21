@@ -20,7 +20,8 @@ PRECISION = {"heat_loss": 0, "cop": 2, "cop_steady": 2, "cop_loss": 1, "emission
 
 async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     c = entry.runtime_data
-    async_add_entities([FitSensor(c, k) for k in FIT_KEYS] + [DailyCopSensor(c, "yesterday"), DailyCopSensor(c, "week"), StatusSensor(c)])
+    rooms = [RoomSensor(c, eid) for eid in (c.conf.get("indoor_temps") or [])]
+    async_add_entities([FitSensor(c, k) for k in FIT_KEYS] + [DailyCopSensor(c, "yesterday"), DailyCopSensor(c, "week"), StatusSensor(c)] + rooms)
 
 
 class FitSensor(VarmemodelEntity, SensorEntity):
@@ -124,3 +125,46 @@ class DailyCopSensor(VarmemodelEntity, SensorEntity):
                 for x in (self.coordinator.daily or {}).get("days") or [] if x
             ]
         return attrs
+
+
+class RoomSensor(VarmemodelEntity, SensorEntity):
+    """Et rums afkøling (°C pr. time ved 20 graders forskel) – falder når rummet isoleres bedre."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "°C/h"
+    _attr_suggested_display_precision = 3
+
+    def __init__(self, coordinator: VarmemodelCoordinator, source: str) -> None:
+        super().__init__(coordinator, f"room_{source}")
+        self.source = source
+        self._attr_translation_key = "room"
+        st = coordinator.hass.states.get(source)
+        name = (st.name if st else source.split(".")[-1]).removesuffix(" Temperature").removesuffix(" temperatur")
+        self._attr_translation_placeholders = {"room": name}
+
+    @property
+    def native_value(self) -> float | None:
+        r = self.coordinator.rooms.get(self.source)
+        return r.get("value") if r else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        r = self.coordinator.rooms.get(self.source) or {}
+        e = r.get("extra") or {}
+        ts = r.get("fitted_at")
+        return {
+            "kilde": self.source,
+            "tidskonstant_timer": e.get("time_constant_h"),
+            "opvarmning_pr_kwh_nu": e.get("heat_now_k_per_kwh"),
+            "opvarmning_pr_kwh_forsinket": e.get("heat_delayed_k_per_kwh"),
+            "gratis_varme_grader_pr_døgn": e.get("free_heat_k_per_day"),
+            "sol_grader_pr_klar_time": e.get("sun_k_per_clear_hour"),
+            "præcision_6_timer": e.get("accuracy_6h_k"),
+            "forklaringsgrad": r.get("r2"),
+            "blokke": r.get("n"),
+            "udeladt_udluftning": e.get("aired_blocks_skipped"),
+            "udeladt_afvigere": e.get("outliers_skipped"),
+            "begrænsning": r.get("guard"),
+            "beregnet": dt_util.as_local(dt_util.utc_from_timestamp(ts)).isoformat() if ts else None,
+            "note": r.get("note") or None,
+        }
