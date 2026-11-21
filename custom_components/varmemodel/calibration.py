@@ -48,6 +48,7 @@ class Hour:
     wind_v: float | None = None  # vindvektor nord-syd (m/s)
     cloud: float | None = None  # skydække %, middel
     uv: float | None = None  # UV-indeks, middel (> 0 = dagslys)
+    humidity: float | None = None  # relativ luftfugtighed ude, % (styrer afrimning)
 
 
 @dataclass
@@ -138,6 +139,31 @@ def ols(rows: list[list[float]], y: list[float]) -> tuple[list[float], list[floa
     return beta, se
 
 
+def wls_cluster(rows: list[list[float]], y: list[float], w: list[float], cluster: list[Any]) -> tuple[list[float], list[float]] | None:
+    """Vægtet mindste kvadrater med standardfejl, der tager højde for at målinger
+    i samme klynge (fx samme kompressorkørsel) ikke er uafhængige."""
+    k = len(rows[0]) if rows else 0
+    if len(rows) <= k:
+        return None
+    xtwx = [[sum(wi * r[i] * r[j] for r, wi in zip(rows, w)) for j in range(k)] for i in range(k)]
+    xtwy = [sum(wi * r[i] * v for r, v, wi in zip(rows, y, w)) for i in range(k)]
+    inv = _invert(xtwx)
+    if inv is None:
+        return None
+    beta = [sum(inv[i][j] * xtwy[j] for j in range(k)) for i in range(k)]
+    groups: dict[Any, list[float]] = {}
+    for r, v, wi, g in zip(rows, y, w, cluster):
+        e = v - sum(b * x for b, x in zip(beta, r))
+        acc = groups.setdefault(g, [0.0] * k)
+        for i in range(k):
+            acc[i] += wi * r[i] * e
+    meat = [[sum(u[i] * u[j] for u in groups.values()) for j in range(k)] for i in range(k)]
+    g = len(groups)
+    corr = g / (g - 1) if g > 1 else 1.0
+    cov = [[corr * sum(inv[i][a] * meat[a][b] * inv[b][j] for a in range(k) for b in range(k)) for j in range(k)] for i in range(k)]
+    return beta, [sqrt(max(cov[i][i], 0.0)) for i in range(k)]
+
+
 def _invert(m: list[list[float]]) -> list[list[float]] | None:
     n = len(m)
     a = [row[:] + [1.0 if i == j else 0.0 for j in range(n)] for i, row in enumerate(m)]
@@ -204,14 +230,12 @@ def fit_heat_loss(hours: list[Hour], block_hours: int = 48, min_blocks: int = 8,
     for hs in blocks.values():
         if len(hs) < block_hours * 0.9:
             continue
-        q = 0.0
-        for h in hs:
-            if h.dhw is not None and h.dhw >= 30:
-                dhw_corrected += 1
-                continue
-            q += max(h.q or 0.0, 0.0)
+        clean = [h for h in hs if not (h.dhw is not None and h.dhw > 0)]
+        dhw_corrected += len(hs) - len(clean)
+        if len(clean) < len(hs) * 0.7:
+            continue
         x.append(sum(h.t_in - h.t_out for h in hs) / len(hs))
-        y.append(q / len(hs))
+        y.append(sum(max(h.q or 0.0, 0.0) for h in clean) / len(clean))
         touts.append(sum(h.t_out for h in hs) / len(hs))
     lo, hi = _range(touts)
     if len(x) < min_blocks or (max(x) - min(x) if x else 0) < min_spread:
@@ -504,61 +528,75 @@ def steady_slots(
     return out
 
 
-def fit_cop_steady(slots: list[Slot], min_n: int = 100) -> Fit:
-    """COP i stabil drift = a + b·ude + c·fremløb (uden opstart og afrimning)."""
+def fit_cop_steady(slots: list[Slot], min_n: int = 100, min_runs: int = 20) -> Fit:
+    """COP i stabil drift = a + b·ude + c·fremløb + d·effekt (uden opstart og afrimning).
+
+    Portionerne vægtes efter varme (så små portioner ikke fylder for meget), og
+    usikkerheden regnes pr. kompressorkørsel – portioner fra samme kørsel ligner
+    hinanden og er ikke uafhængige målinger. Fremløbsleddet c bruges kun, hvis
+    det er tydeligt negativt (mindst 2 standardfejl); ellers standardværdi.
+    """
     s = [x for x in slots if COP_LIMITS[0] <= x.q / x.e <= COP_LIMITS[1]]
     lo, hi = _range([x.t_out for x in s])
-    if len(s) < min_n:
-        return Fit(None, len(s), t_out_min=lo, t_out_max=hi, note="for få 5-minutters portioner i stabil drift")
+    runs = {round(x.ts - x.run_min * 60, -2) for x in s}
+    if len(s) < min_n or len(runs) < min_runs:
+        return Fit(None, len(s), t_out_min=lo, t_out_max=hi, note="for få kørsler i stabil drift")
     y = [x.q / x.e for x in s]
-    res = ols([[1.0, x.t_out, x.t_flow] for x in s], y)
+    w = [x.q for x in s]
+    cl = [round(x.ts - x.run_min * 60, -2) for x in s]
+    kw = [x.q * 12 for x in s]  # 5 minutter → kW
+    res = wls_cluster([[1.0, x.t_out, x.t_flow, p] for x, p in zip(s, kw)], y, w, cl)
     if not res:
         return Fit(None, len(s), t_out_min=lo, t_out_max=hi, note="kunne ikke tilpasses")
-    (a, b, c), (_, sb, sc) = res
+    (a, b, c, d), (_, sb, sc, sd) = res
     c_source = "fit"
     if not (c < 0 and sc < abs(c) / 2):
-        c, c_source = PRIOR_COP_PER_K_FLOW / 2, "prior"
-        r2 = ols([[1.0, x.t_out] for x in s], [v - c * x.t_flow for v, x in zip(y, s)])
+        c_source = "prior"
+        c = PRIOR_COP_PER_K_FLOW / 2
+        r2 = wls_cluster([[1.0, x.t_out, p] for x, p in zip(s, kw)], [v - c * x.t_flow for v, x in zip(y, s)], w, cl)
         if r2:
-            (a, b), _ = r2
-    pred = [a + b * x.t_out + c * x.t_flow for x in s]
+            (a, b, d), (_, sb, sd) = r2
+    p_ref = 4.0
+    pred = [a + b * x.t_out + c * x.t_flow + d * p for x, p in zip(s, kw)]
     r2v, rmse = _r2_rmse(y, pred)
+    cop_ref = a + b * 5 + c * 33 + d * p_ref
     return Fit(
-        round(a + c * 35.0, 3), len(s), r2v, rmse and round(rmse, 3), lo, hi, "fit",
-        {"a": round(a, 4), "b": round(b, 4), "c": round(c, 4), "c_source": c_source, "c_se": round(sc, 4),
-         "per_k_flow_pct": round(-c / (a + b * 5 + c * 33) * 100, 1),
-         "formula": "COP = a + b·ude + c·fremløb", "value_is": "COP i stabil drift ved 0 °C ude og 35 °C fremløb",
-         "method": "5-minutters portioner fra 10 min efter start til afrimning, varmt vand eller stop"},
+        round(a + c * 35.0 + d * p_ref, 3), len(s), r2v, rmse and round(rmse, 3), lo, hi, "fit",
+        {"a": round(a, 4), "b": round(b, 4), "c": round(c, 4), "d": round(d, 4), "c_source": c_source,
+         "c_se_per_run": round(sc, 4), "c_ci95": [round(c - 1.96 * sc, 3), round(c + 1.96 * sc, 3)],
+         "d_se_per_run": round(sd, 4), "runs": len(runs),
+         "per_k_flow_pct": round(-c / cop_ref * 100, 1), "per_kw_pct": round(-d / cop_ref * 100, 1),
+         "formula": "COP = a + b·ude + c·fremløb + d·effekt(kW)",
+         "value_is": "COP i stabil drift ved 0 °C ude, 35 °C fremløb og 4 kW",
+         "method": "5-minutters portioner fra 10 min efter start til afrimning, varmt vand eller stop; vægtet efter varme; usikkerhed pr. kørsel"},
     )
 
 
 def fit_cop_loss(steady: Fit, five: dict[int, dict[str, float | None]], comp: list[tuple[float, float]],
                  dhw: list[tuple[float, float]]) -> Fit:
-    """Tab ved opstart og afrimning: målt COP over al kompressortid mod stabil COP for samme varme."""
+    """Tab ved opstart og afrimning: målt COP over al kompressortid mod stabil COP
+    for den samme varme (samme 5-minutters portioner på begge sider)."""
     if steady.value is None:
         return Fit(None, 0, note="kræver COP i stabil drift")
-    a, b, c = steady.extra["a"], steady.extra["b"], steady.extra["c"]
-    qa = ea = qs = es = 0.0
+    a, b, c, d = (steady.extra.get(k, 0.0) for k in ("a", "b", "c", "d"))
+    qa = ea = es = 0.0
     n = 0
     for x, y in comp:
         t = int(x // 300 * 300)
         while t < y:
             r = five.get(t) or {}
             q, e, u, f = r.get("q"), r.get("e"), r.get("t_out"), r.get("t_flow")
-            if None not in (q, e) and not any(p < t + 300 and k > t for p, k in dhw):
+            if None not in (q, e, u, f) and q > 0 and not any(p < t + 300 and k > t for p, k in dhw):
                 qa += q
                 ea += e
+                es += q / max(1.2, a + b * u + c * f + d * q * 12)
                 n += 1
-                if None not in (u, f) and q > 0:
-                    qs += q
-                    es += q / max(1.2, a + b * u + c * f)
             t += 300
     if ea <= 1 or es <= 0:
         return Fit(None, n, note="for lidt kompressortid")
-    eff, st = qa / ea, qs / es
+    eff, st = qa / ea, qa / es
     return Fit(round((1 - eff / st) * 100, 1), n, None, None, steady.t_out_min, steady.t_out_max, "fit",
                {"cop_effective": round(eff, 2), "cop_steady_same_heat": round(st, 2), "value_is": "% lavere COP end stabil drift"})
-
 
 # ---------------------------------------------------------------- COP pr. døgn
 def daily_cop(hours: list[Hour], day_of, steady: Fit | None, days: list[str]) -> dict[str, Any] | None:
@@ -577,8 +615,8 @@ def daily_cop(hours: list[Hour], day_of, steady: Fit | None, days: list[str]) ->
     es = sum(max(h.e, 0.0) for h in sp)
     exp = None
     if steady is not None and steady.value is not None:
-        a, b, c = steady.extra["a"], steady.extra["b"], steady.extra["c"]
-        w = [(h.q, a + b * h.t_out + c * h.t_flow) for h in sp if h.q and h.q > 0.3 and h.t_out is not None and h.t_flow is not None]
+        a, b, c, d = (steady.extra.get(k, 0.0) for k in ("a", "b", "c", "d"))
+        w = [(h.q, a + b * h.t_out + c * h.t_flow + d * h.q) for h in sp if h.q and h.q > 0.3 and h.t_out is not None and h.t_flow is not None]
         if w:
             exp = sum(x for x, _ in w) / sum(x / max(1.2, m) for x, m in w)
     cop = q / e if e > 0.5 else None

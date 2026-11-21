@@ -123,11 +123,14 @@ class VarmemodelCoordinator:
         self._unsubs.clear()
         await self._save()
 
-    async def _save(self) -> None:
-        await self.store.async_save(
+    def _data(self) -> dict[str, Any]:
+        return (
             {"collected": self.collected, "accepted": self.accepted, "fits": self.fits, "runs": self.runs[-30:], "mode": self.mode,
              "calib_version": CALIB_VERSION, "slots": self.slots, "daily": self.daily}
         )
+
+    async def _save(self) -> None:
+        await self.store.async_save(self._data())
 
     @callback
     def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
@@ -147,7 +150,7 @@ class VarmemodelCoordinator:
 
     async def _on_hour(self, _now: datetime) -> None:
         await self.async_collect()
-        await self._save()
+        self.store.async_delay_save(self._data, 300)
 
     async def async_set_mode(self, mode: str) -> None:
         self.mode = mode
@@ -210,7 +213,7 @@ class VarmemodelCoordinator:
             return pts
 
         if eid := self._id(CONF_WEATHER):
-            ws, wu, wv, cc, uv = [], [], [], [], []
+            ws, wu, wv, cc, uv, rh = [], [], [], [], [], []
             for st in changes(eid):
                 a = st.attributes
                 t = st.last_updated.timestamp()
@@ -225,7 +228,8 @@ class VarmemodelCoordinator:
                 wv.append((t, None if speed is None or bearing is None else speed * cos(radians(bearing))))
                 cc.append((t, _num(a.get("cloud_coverage"))))
                 uv.append((t, _num(a.get("uv_index"))))
-            for key, series in (("ws", ws), ("wu", wu), ("wv", wv), ("cc", cc), ("uv", uv)):
+                rh.append((t, _num(a.get("humidity"))))
+            for key, series in (("ws", ws), ("wu", wu), ("wv", wv), ("cc", cc), ("uv", uv), ("rh", rh)):
                 for h, v in agg.step_mean(series, start, end).items():
                     if h in out:
                         out[h][key] = v
@@ -300,7 +304,7 @@ class VarmemodelCoordinator:
             "t_out_min": lo,
             "t_out_max": hi,
             "fitted_at": now if fit.value is not None else (prev or {}).get("fitted_at"),
-            "extra": fit.extra or (prev or {}).get("extra", {}),
+            "extra": (prev or {}).get("extra", {}) if note.startswith("begrænset") else (fit.extra or (prev or {}).get("extra", {})),
             "note": fit.note,
         }
 
@@ -347,6 +351,7 @@ class VarmemodelCoordinator:
                     wind_v=c.get("wv"),
                     cloud=c.get("cc"),
                     uv=c.get("uv"),
+                    humidity=c.get("rh"),
                 )
             )
         # Målefejl (spring i måleren) sorteres fra

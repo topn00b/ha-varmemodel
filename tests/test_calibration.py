@@ -155,11 +155,14 @@ def test_cop_steady_recovers_coefficients() -> None:
         u = rnd.uniform(-3, 10)
         f = 30 + rnd.uniform(-3, 6) - 0.5 * u
         cop = 4.0 + 0.15 * u - 0.04 * f + rnd.gauss(0, 0.05)
-        slots.append(Slot(i * 300, cop * 0.1, 0.1, u, f, 20.0))
+        q = rnd.uniform(0.25, 0.45)  # effekt uafhængig af COP
+        slots.append(Slot(i * 300, q, q / cop, u, f, 20.0 + (i % 6) * 5))
     fit = fit_cop_steady(slots)
     assert fit.extra["c_source"] == "fit"
     assert abs(fit.extra["c"] + 0.04) < 0.01
-    assert abs(fit.value - (4.0 - 0.04 * 35)) < 0.05
+    assert abs(fit.extra["d"]) < 0.02
+    assert abs(fit.value - (4.0 - 0.04 * 35)) < 0.08
+    assert fit.extra["c_ci95"][0] < -0.04 < fit.extra["c_ci95"][1]
 
 
 def test_daily_cop_and_expected_steady() -> None:

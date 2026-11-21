@@ -42,5 +42,13 @@ jobs:
       - uses: actions/checkout@v4
       # Kun eksempel-entiteter må stå i repoet (sensor.vp_el, sensor.ude, sensor.rum_1 …).
       - run: |
-          if grep -rnE "nordpool_|danfoss|termostat_|bthome|shelly|lg_|@gmail|token" --include=*.py --include=*.json --include=*.md . ; then
+          if grep -rnE "nordpool_|danfoss|termostat_|bthome|shelly|lg_|@gmail|token" --include=*.py --include=*.json --include=*.md --include=*.yaml --include=*.html --exclude-dir=.github . ; then
             echo "Mulige personlige data fundet"; exit 1; fi
+
+  version:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Udgivelsens tag skal passe med versionen i manifest.json, ellers henter HACS den forkerte
+      - run: test "v$(jq -r .version custom_components/varmemodel/manifest.json)" = "${GITHUB_REF_NAME}"
