@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.5.1';
+  const VERSION = '0.5.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -119,7 +119,7 @@
     const passive = a.i_plan === false && !valve && r.src.kind === 'hydronic';
     return { r, a, tE, t, fc, f3: fc && fc.length > 2 ? fc[2] : null, f6: fc && fc.length > 5 ? fc[5] : null, low, lowT, chk, status, cls, valve, vs, passive };
   }
-  const statusTxt = (d) => (!d.chk ? 'ingen forudsigelse endnu' : d.status === 'ramt' ? 'ramt' : `${d.status} ${sgn(d.chk['afvigelse'])}`);
+  const statusTxt = (d) => (!d.chk ? (d.fc ? 'tjekkes efter 6 t' : 'ingen forudsigelse') : d.status === 'ramt' ? 'ramt' : `${d.status} ${sgn(d.chk['afvigelse'])}`);
   // Hvor meget et rum varmer eller køler sine naborum lige nu (fx en kælder under et køkken)
   function pulls(h, vm, r, t) {
     let best = null;
