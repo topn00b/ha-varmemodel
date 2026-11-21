@@ -190,8 +190,10 @@ def _room_name(coordinator: VarmemodelCoordinator, source: str) -> str:
 class RoomEntity(VarmemodelEntity):
     def __init__(self, coordinator: VarmemodelCoordinator, room: dict[str, Any], key: str) -> None:
         sub = room.get("subentry_id")
+        src = coordinator.room_source(room)
         super().__init__(coordinator, key, sub_id=sub, sub_name=room.get("name"), model="Rum",
-                         unique_id=f"{coordinator.entry.entry_id}_{key}_{room['key']}")
+                         unique_id=f"{coordinator.entry.entry_id}_{key}_{room['key']}",
+                         parent_sub_id=src.sid if src is not None else None)
         self.source = room["key"]
         if sub:
             self._attr_translation_key = f"{key}_device"

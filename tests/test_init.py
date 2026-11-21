@@ -217,3 +217,21 @@ async def test_room_new_shape_skips_guard(ha: HomeAssistant, entry: MockConfigEn
     assert "ny model" in c.rooms["sensor.rum_1"]["guard"]
     assert set(c.rooms["sensor.rum_1"]["extra"]["sources"]) == {"A", "B"}
     del co
+
+
+async def test_device_tree(ha: HomeAssistant) -> None:
+    """Rummets enhed er forbundet via sin varmekildes enhed, som er forbundet via huset."""
+    from homeassistant.helpers import device_registry as dr
+
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data=HOUSE, subentries_data=[_sub(HYD, "source")])
+    e.add_to_hass(ha)
+    hyd_id = next(iter(e.subentries))
+    ha.config_entries.async_add_subentry(e, __import__("homeassistant.config_entries", fromlist=["ConfigSubentry"]).ConfigSubentry(
+        data={"name": "Stue", "temperature": "sensor.rum_1", "heat_source": hyd_id}, subentry_type="room", title="Stue", unique_id=None))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done(wait_background_tasks=True)
+    reg = dr.async_get(ha)
+    devs = {next(iter(d.identifiers))[1]: d for d in dr.async_entries_for_config_entry(reg, e.entry_id)}
+    room_sid = next(s for s, x in e.subentries.items() if x.subentry_type == "room")
+    house, src, room = devs[e.entry_id], devs[f"{e.entry_id}_{hyd_id}"], devs[f"{e.entry_id}_{room_sid}"]
+    assert house.name == "Hus" and src.via_device_id == house.id and room.via_device_id == src.id
