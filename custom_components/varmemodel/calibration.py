@@ -744,9 +744,12 @@ def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: i
     """Hvordan et rum opfører sig, lært af historikken (blokke à 6 timer).
 
     Temperaturændring over blokken = Σ_kilder (a·kWh nu + a2·kWh de foregående 6
-    timer) + b·(ude − rum)·timer + c (gratis varme) [+ s·sol]. Hver varmekilde får
-    sin egen virkning, så modellen selv finder ud af, hvem der varmer rummet.
-    En kilde med for lidt data (under 60 % af blokkene) tages ikke med endnu.
+    timer) + b·(ude − rum)·timer + c (gratis varme) [+ s·sol] [+ Σ_naboer n·(nabo − rum)·timer].
+    Hver varmekilde får sin egen virkning, så modellen selv finder ud af, hvem der
+    varmer rummet. En kilde med data i hele perioden (mindst 60 % af blokkene) er
+    altid med. En nyere kilde tages med, så snart der er blokke nok med data fra
+    alle kilder, og den har en tydelig virkning på netop dette rum (mindst 2
+    standardfejl) – ellers bruges hele perioden uden den.
     Blokke med udluftning udelades, og afvigere (over 3× den typiske afvigelse)
     sorteres fra, før der tilpasses igen.
 
@@ -770,71 +773,92 @@ def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: i
             continue
         cands.append((cur, prev))
     cover = {k: sum(1 for cur, prev in cands if all(_inp(h, k) is not None for h in cur + prev)) / max(1, len(cands)) for k in keys}
-    use = [k for k in keys if cover[k] >= min_coverage]
-    skipped_sources = [k for k in keys if k not in use]
-    base_extra = {"aired_blocks_skipped": aired_blocks, "sources_too_little_data": skipped_sources}
-    if not use:
-        return Fit(None, 0, note="ingen varmekilde med data nok endnu", extra=base_extra)
+    dense = [k for k in keys if cover[k] >= min_coverage]
+    sparse = sorted((k for k in keys if k not in dense and cover[k] > 0), key=lambda k: -cover[k])
     use_sun = sum(1 for h in hs if h.sun is not None) > len(hs) * 0.5
     nkeys = sorted({k for h in hs for k in (h.neighbours or {})})
     ncover = {k: sum(1 for cur, _ in cands if all((h.neighbours or {}).get(k) is not None for h in cur)) / max(1, len(cands)) for k in nkeys}
     nuse = [k for k in nkeys if ncover[k] >= min_coverage]
-    rows, y, touts = [], [], []
-    for cur, prev in cands:
-        if any(_inp(h, k) is None for k in use for h in cur + prev):
+
+    def fit(use: list[str]) -> dict[str, Any] | None:
+        rows, y, touts = [], [], []
+        for cur, prev in cands:
+            if any(_inp(h, k) is None for k in use for h in cur + prev):
+                continue
+            if any((h.neighbours or {}).get(k) is None for k in nuse for h in cur):
+                continue
+            r: list[float] = []
+            for k in use:
+                r += [sum(max(_inp(h, k), 0.0) for h in cur), sum(max(_inp(h, k), 0.0) for h in prev)]
+            r += [sum(h.t_out - cur[0].t_room for h in cur), 1.0]
+            if use_sun:
+                r.append(sum(h.sun or 0.0 for h in cur))
+            for k in nuse:
+                r.append(sum(h.neighbours[k] - cur[0].t_room for h in cur))
+            rows.append(r)
+            y.append(cur[-1].t_room - cur[0].t_room)
+            touts += [h.t_out for h in cur]
+        if len(rows) < min_blocks:
+            return None
+        res = ols(rows, y)
+        if not res:
+            return None
+        beta, _ = res
+        resid = [v - sum(b * x for b, x in zip(beta, r)) for r, v in zip(rows, y)]
+        mad = median(abs(e) for e in resid) or 1e-6
+        keep = [k for k, e in enumerate(resid) if abs(e) <= 3 * 1.4826 * mad]
+        rows2, y2 = [rows[k] for k in keep], [y[k] for k in keep]
+        res = ols(rows2, y2)
+        if not res:
+            return None
+        beta, se = res
+        pred = [sum(bb * x for bb, x in zip(beta, r)) for r in rows2]
+        r2, rmse = _r2_rmse(y2, pred)
+        return {"use": use, "beta": beta, "se": se, "n": len(rows2), "r2": r2, "rmse": rmse, "outliers": len(rows) - len(keep),
+                "touts": touts}
+
+    best = fit(dense) if dense else None
+    added: list[str] = []
+    for k in sparse:
+        base_use = (best or {}).get("use", dense)
+        cand = fit(base_use + [k])
+        if cand is None:
             continue
-        if any((h.neighbours or {}).get(k) is None for k in nuse for h in cur):
-            continue
-        r: list[float] = []
-        for k in use:
-            r += [sum(max(_inp(h, k), 0.0) for h in cur), sum(max(_inp(h, k), 0.0) for h in prev)]
-        r += [sum(h.t_out - cur[0].t_room for h in cur), 1.0]
-        if use_sun:
-            r.append(sum(h.sun or 0.0 for h in cur))
-        for k in nuse:
-            r.append(sum(h.neighbours[k] - cur[0].t_room for h in cur))
-        rows.append(r)
-        y.append(cur[-1].t_room - cur[0].t_room)
-        touts += [h.t_out for h in cur]
-    lo, hi = _range(touts)
-    if len(rows) < min_blocks:
-        return Fit(None, len(rows), t_out_min=lo, t_out_max=hi, note="for få blokke à 6 timer endnu", extra=base_extra)
-    res = ols(rows, y)
-    if not res:
-        return Fit(None, len(rows), note="kunne ikke tilpasses", extra=base_extra)
-    beta, _ = res
-    resid = [v - sum(b * x for b, x in zip(beta, r)) for r, v in zip(rows, y)]
-    mad = median(abs(e) for e in resid) or 1e-6
-    keep = [k for k, e in enumerate(resid) if abs(e) <= 3 * 1.4826 * mad]
-    outliers = len(rows) - len(keep)
-    rows, y = [rows[k] for k in keep], [y[k] for k in keep]
-    res = ols(rows, y)
-    if not res:
-        return Fit(None, len(rows), note="kunne ikke tilpasses", extra=base_extra)
-    beta, se = res
+        i = 2 * cand["use"].index(k)
+        tot = cand["beta"][i] + cand["beta"][i + 1]
+        se_tot = sqrt(cand["se"][i] ** 2 + cand["se"][i + 1] ** 2) or 1e-9
+        if best is None or (tot > 0 and tot / se_tot >= 2):
+            best = cand
+            added.append(k)
+    use = (best or {}).get("use", [])
+    skipped = [k for k in keys if k not in use]
+    base_extra = {"aired_blocks_skipped": aired_blocks, "sources_too_little_data": skipped}
+    if best is None:
+        return Fit(None, 0, note="for få blokke à 6 timer endnu" if keys else "ingen varmekilde", extra=base_extra)
+    beta, se, rmse = best["beta"], best["se"], best["rmse"]
+    lo, hi = _range(best["touts"])
     n_src = 2 * len(use)
     b, c = beta[n_src], beta[n_src + 1]
     s = beta[n_src + 2] if use_sun else None
     nb0 = n_src + 2 + (1 if use_sun else 0)
     neighbours = {k: {"per_h_k": round(beta[nb0 + i], 4), "se": round(se[nb0 + i], 4),
                       "k_per_hour_at_5k": round(beta[nb0 + i] * 5, 3)} for i, k in enumerate(nuse)}
-    pred = [sum(bb * x for bb, x in zip(beta, r)) for r in rows]
-    r2, rmse = _r2_rmse(y, pred)
     if b <= 0:
-        return Fit(None, len(rows), r2, rmse, lo, hi, note="rummet falder ikke med kulden – for lidt data", extra=base_extra)
+        return Fit(None, best["n"], best["r2"], rmse, lo, hi, note="rummet falder ikke med kulden – for lidt data", extra=base_extra)
     per_source = {k: {"now": round(beta[2 * i], 4), "delayed": round(beta[2 * i + 1], 4),
                       "total": round(beta[2 * i] + beta[2 * i + 1], 4), "se_now": round(se[2 * i], 4)} for i, k in enumerate(use)}
     first = per_source[use[0]]
     return Fit(
-        round(b * 20, 3), len(rows), r2, rmse and round(rmse, 2), lo, hi, "fit",
+        round(b * 20, 3), best["n"], best["r2"], rmse and round(rmse, 2), lo, hi, "fit",
         {"time_constant_h": round(1 / b, 0),
          "heat_now_k_per_kwh": first["now"], "heat_delayed_k_per_kwh": first["delayed"],
          "sources": per_source,
+         "sources_added_recent": added or None,
          "neighbours": neighbours or None,
          "free_heat_k_per_day": round(c * 24 / block, 2),
          "sun_k_per_clear_hour": None if s is None else round(s, 3),
          "accuracy_6h_k": rmse and round(rmse, 2),
-         "aired_blocks_skipped": aired_blocks, "outliers_skipped": outliers, "sources_too_little_data": skipped_sources,
+         "aired_blocks_skipped": aired_blocks, "outliers_skipped": best["outliers"], "sources_too_little_data": skipped or None,
          "value_is": "°C pr. time rummet falder ved 20 graders forskel mellem inde og ude"},
     )
 

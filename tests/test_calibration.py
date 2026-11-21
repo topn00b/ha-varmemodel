@@ -242,3 +242,24 @@ def test_detect_airing() -> None:
     hours = detect_airing(pts)
     assert {0, 3600, 7200, 10800} <= hours and 14400 not in hours
     assert not detect_airing([(i * 300, 21.0 - i * 0.01) for i in range(24)])
+
+
+def test_room_model_adds_recent_source_when_it_matters() -> None:
+    """En ny varmekilde med kun få dages data tages med for det rum, den tydeligt varmer."""
+    from custom_components.varmemodel.calibration import RoomHour, fit_room
+
+    rnd = random.Random(5)
+    t = 20.0
+    hours = []
+    n = 24 * 50
+    for i in range(n):
+        t_out = 4 + 3 * math.sin(i / 60)
+        floor = 4.0 if (i % 24) < 8 else 0.0
+        new = 1.0 if (i % 17) < 5 else 0.0  # ny kilde (uregelmæssig), kun data de sidste 8 døgn
+        known = i >= n - 24 * 8
+        t = t + 0.01 * floor + 0.08 * new + 0.005 * (t_out - t) + rnd.gauss(0, 0.01)
+        hours.append(RoomHour(ts=i * 3600, t_room=t, t_out=t_out, inputs={"Gulv": floor, "Ny": new if known else None}))
+    f = fit_room(hours)
+    assert f.source == "fit"
+    assert "Ny" in f.extra["sources"] and f.extra["sources_added_recent"] == ["Ny"]
+    assert abs(f.extra["sources"]["Ny"]["total"] - 0.08) < 0.03
