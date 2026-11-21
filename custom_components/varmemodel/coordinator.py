@@ -63,6 +63,7 @@ from .const import (
     CONF_ROOM_NAME,
     CONF_ROOM_NEIGHBOURS,
     CONF_ROOM_SOURCE,
+    CONF_ROOM_EXTRA_SOURCES,
     CONF_ROOM_TEMP,
     CONF_ROOM_VALVE,
     CONF_ROOM_WEIGHT,
@@ -186,11 +187,12 @@ class VarmemodelCoordinator:
                  "always_open": bool(s.data.get(CONF_ROOM_ALWAYS_OPEN)), "weight": float(s.data.get(CONF_ROOM_WEIGHT) or 1.0),
                  "min_entity": s.data.get(CONF_ROOM_MIN_ENTITY), "min": s.data.get(CONF_ROOM_MIN),
                  "in_plan": s.data.get(CONF_ROOM_IN_PLAN, True), "neighbours": list(s.data.get(CONF_ROOM_NEIGHBOURS) or []),
-                 "source": s.data.get(CONF_ROOM_SOURCE), "subentry_id": sid}
+                 "source": s.data.get(CONF_ROOM_SOURCE), "extra_sources": list(s.data.get(CONF_ROOM_EXTRA_SOURCES) or []),
+                 "subentry_id": sid}
                 for sid, s in subs
             ]
         return [{"key": e, "name": None, "valve": None, "always_open": False, "weight": 1.0, "min_entity": None, "min": None,
-                 "in_plan": True, "neighbours": [], "source": None, "subentry_id": None} for e in (self.conf.get(CONF_INDOOR) or [])]
+                 "in_plan": True, "neighbours": [], "source": None, "extra_sources": [], "subentry_id": None} for e in (self.conf.get(CONF_INDOOR) or [])]
 
     def room_source(self, room: dict[str, Any]) -> SourceState | None:
         """Varmekilden som rummets termostat/telestat styrer: den valgte, ellers den første vandbårne
@@ -644,10 +646,16 @@ class VarmemodelCoordinator:
         out: dict[str, Fit] = {}
         for room in self.rooms_cfg:
             eid = room["key"]
+            # Rummet lærer af sin egen varmekilde og de valgte ekstra kilder; uden valg af alle kilder.
+            # (Kilder der kører på samme tider kan ikke skilles ad af data alene.)
+            if room.get("source") in self.sources:
+                allowed = {room["source"], *[x for x in room.get("extra_sources") or [] if x in self.sources]}
+            else:
+                allowed = set(self.sources)
             rh = []
             for h in base:
                 c = self.collected.get(str(h.ts), {})
-                inputs = {s.name: self._source_input(s, idx[sid].get(h.ts) or Hour(ts=h.ts)) for sid, s in self.sources.items()}
+                inputs = {s.name: self._source_input(s, idx[sid].get(h.ts) or Hour(ts=h.ts)) for sid, s in self.sources.items() if sid in allowed}
                 rt = self._room_t.get(h.ts) or {}
                 nb = {self._label(n): rt.get(n) for n in room.get("neighbours") or []}
                 rh.append(RoomHour(ts=h.ts, t_room=rt.get(eid), t_out=h.t_out, sun=sun_factor(h),

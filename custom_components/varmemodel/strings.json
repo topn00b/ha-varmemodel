@@ -212,7 +212,8 @@
             "loop_weight": "Relative loop size",
             "in_plan": "Included in the plan",
             "neighbours": "Neighbouring zones",
-            "heat_source": "Heat source"
+            "heat_source": "Heat source",
+            "extra_sources": "Other heat sources"
           },
           "data_description": {
             "minimum_entity": "E.g. an input_number with the lowest comfort temperature.",
@@ -220,7 +221,8 @@
             "loop_weight": "1 = normal. A room with twice the loop length: 2.",
             "in_plan": "Off = shown and learned, but not considered by the plan (e.g. a basement).",
             "neighbours": "Temperature sensors in adjacent zones, e.g. the basement or a stairwell. The model learns how much heat flows between them.",
-            "heat_source": "The heat source controlled by the room's thermostat or valve. The model still learns the effect of all sources."
+            "heat_source": "The heat source controlled by the room's thermostat or valve, which heats it directly. Empty = the room learns from all sources.",
+            "extra_sources": "Sources that also heat the room directly. The room only learns from its own and these sources – heat from other rooms is learned via neighbouring zones. Sources that run at the same times cannot be separated by data alone."
           }
         },
         "reconfigure": {
@@ -235,7 +237,8 @@
             "loop_weight": "Relative loop size",
             "in_plan": "Included in the plan",
             "neighbours": "Neighbouring zones",
-            "heat_source": "Heat source"
+            "heat_source": "Heat source",
+            "extra_sources": "Other heat sources"
           },
           "data_description": {
             "minimum_entity": "E.g. an input_number with the lowest comfort temperature.",
@@ -243,7 +246,8 @@
             "loop_weight": "1 = normal. A room with twice the loop length: 2.",
             "in_plan": "Off = shown and learned, but not considered by the plan (e.g. a basement).",
             "neighbours": "Temperature sensors in adjacent zones, e.g. the basement or a stairwell. The model learns how much heat flows between them.",
-            "heat_source": "The heat source controlled by the room's thermostat or valve. The model still learns the effect of all sources."
+            "heat_source": "The heat source controlled by the room's thermostat or valve, which heats it directly. Empty = the room learns from all sources.",
+            "extra_sources": "Sources that also heat the room directly. The room only learns from its own and these sources – heat from other rooms is learned via neighbouring zones. Sources that run at the same times cannot be separated by data alone."
           }
         }
       },

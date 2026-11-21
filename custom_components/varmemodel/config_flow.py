@@ -40,6 +40,7 @@ from .const import (
     CONF_ROOM_NAME,
     CONF_ROOM_NEIGHBOURS,
     CONF_ROOM_SOURCE,
+    CONF_ROOM_EXTRA_SOURCES,
     CONF_ROOM_TEMP,
     CONF_ROOM_VALVE,
     CONF_ROOM_WEIGHT,
@@ -258,7 +259,10 @@ class RoomSubentryFlow(ConfigSubentryFlow):
         return ROOM_SCHEMA.extend({
             vol.Optional(CONF_ROOM_SOURCE): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=sources, mode=selector.SelectSelectorMode.DROPDOWN)
-            )
+            ),
+            vol.Optional(CONF_ROOM_EXTRA_SOURCES): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=sources, multiple=True, mode=selector.SelectSelectorMode.DROPDOWN)
+            ),
         })
 
     @callback
