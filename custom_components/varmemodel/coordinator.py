@@ -850,7 +850,7 @@ class VarmemodelCoordinator:
                     name=r["name"] or r["key"], t_now=t_room, t_min=t_min + boost,
                     heat_now=float(src.get("now") or 0.0), heat_delayed=float(src.get("delayed") or 0.0),
                     cool_per_hk=float(fitd["value"]) / 20, free_per_h=float(ex.get("free_heat_k_per_day") or 0.0) / 24,
-                    margin=min(1.0, max(0.2, 1.65 * float(ex.get("accuracy_6h_k") or 0.3))), neighbours=nbs,
+                    margin=min(0.6, max(0.2, float(ex.get("accuracy_6h_k") or 0.3))), neighbours=nbs,
                 ))
             target = (sum(mins) / len(mins) + offset) if mins else 20.5 + boost
             p = make_plan(hours, model, rooms, target, int(self.conf.get(CONF_MAX_PAUSE) or 0))

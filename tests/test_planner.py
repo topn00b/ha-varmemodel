@@ -67,3 +67,14 @@ def test_shift_and_flow() -> None:
 def test_deterministic() -> None:
     hs = hours(price=lambda i: 1.0 + (i % 7) * 0.13)
     assert make_plan(hs, M, [], 20.5).hours == make_plan(hs, M, [], 20.5).hours
+
+
+def test_unfixable_room_does_not_stop_other_rooms() -> None:
+    """Et rum der allerede er for koldt i en blokeret time må ikke forhindre, at de andre rum tjekkes."""
+    cold = PlanRoom("Stue", t_now=19.0, t_min=20.0, heat_now=0.03, heat_delayed=0.02, cool_per_hk=0.005, margin=0.3)
+    other = PlanRoom("Gang", t_now=20.4, t_min=20.0, heat_now=0.03, heat_delayed=0.02, cool_per_hk=0.01, margin=0.3)
+    hs = hours(n=24, t_out=lambda i: -2.0, blocked=lambda i: i < 3)
+    p = make_plan(hs, M, [cold, other], 20.5)
+    assert any("Stue" in w for w in p.warnings)
+    late = p.rooms["Gang"][6:]
+    assert min(late) >= other.t_min + other.margin - 0.05 or any("Gang" in w for w in p.warnings)

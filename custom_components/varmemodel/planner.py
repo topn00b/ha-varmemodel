@@ -138,22 +138,34 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
             plan.warnings.append("behovet kan ikke dækkes i de frie timer")
             break
 
-    # 3) rummene: kommer et rum under min + usikkerhed, lægges varme i den billigste time før
-    for _ in range(200):
+    # 3) rummene: kommer et rum under min + usikkerhed, lægges varme i den billigste time før.
+    #    Kan det ikke rettes (fx allerede nu i en blokeret time), springes det over, og de andre rum
+    #    tjekkes stadig. Hvert rum kan højst kræve 10 kWh ekstra, så ét svagt rum ikke trækker hele planen.
+    skip: set[tuple[str, int]] = set()
+    extra: dict[str, float] = {}
+    warned: set[str] = set()
+    for _ in range(400):
         sim = simulate_rooms(rooms, hours, q, past_q)
         worst = None
         for r in rooms:
             for i, t in enumerate(sim[r.name]):
-                if t < r.t_min + r.margin:
+                if t < r.t_min + r.margin and (r.name, i) not in skip:
                     if worst is None or i < worst[0]:
                         worst = (i, r.name)
                     break
         if worst is None:
             break
-        before = [j for j in free if j <= worst[0]]
-        if not before or not add_cheapest(before, STEP):
-            plan.warnings.append(f"{worst[1]} kan ikke holdes over min. (time {worst[0]})")
-            break
+        i_bad, name = worst
+        before = [j for j in free if j <= i_bad]
+        if extra.get(name, 0.0) >= 10.0 or not before or not add_cheapest(before, STEP):
+            # kan ikke rettes: resten af timerne for dette rum accepteres, men der advares
+            for k in range(i_bad, n):
+                skip.add((name, k))
+            if name not in warned:
+                warned.add(name)
+                plan.warnings.append(f"{name} forventes under min. + usikkerhed fra time {i_bad}")
+            continue
+        extra[name] = extra.get(name, 0.0) + STEP
 
     # 4) for lange pauser brydes med pausens billigste frie time
     if max_pause > 0:
