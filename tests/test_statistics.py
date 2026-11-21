@@ -73,3 +73,39 @@ async def test_calibration_from_recorder_statistics(ha: HomeAssistant) -> None:
     assert abs(s.accepted["cop"]["value"] - (A + C * 35)) < 0.1
     assert s.accepted["cop"]["extra"]["c_source"] == "fit"
     assert c.status in ("partial", "ok")
+
+
+
+async def test_backup_meter_scaled_where_main_missing(ha: HomeAssistant) -> None:
+    """Den supplerende elmåler bruges, hvor hovedmåleren mangler, skaleret med forholdet i overlappet."""
+    from homeassistant.config_entries import ConfigSubentryData
+
+    end = dt_util.utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    n = 24 * 10
+    start = end - timedelta(hours=n - 1)
+    main, bak, outs = [], [], []
+    ms = bs = 0.0
+    for i in range(n):
+        t = start + timedelta(hours=i)
+        bs += 0.4  # skyen: 0,4 kWh i timen
+        bak.append({"start": t, "sum": bs, "state": bs})
+        outs.append({"start": t, "mean": 5.0, "min": 5.0, "max": 5.0})
+        if i >= n - 24 * 4:  # hovedmåleren kun de sidste 4 døgn og 25 % højere
+            ms += 0.5
+            main.append({"start": t, "sum": ms, "state": ms})
+    async_import_statistics(ha, _meta("sensor.ll_el", "kWh", True, "energy"), main)
+    async_import_statistics(ha, _meta("sensor.ll_sky", "kWh", True, "energy"), bak)
+    async_import_statistics(ha, _meta("sensor.ude", "°C", False, "temperature"), outs)
+    await async_wait_recording_done(ha)
+    entry = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={"name": "Hus", "outdoor_temp": "sensor.ude"}, subentries_data=[
+        ConfigSubentryData(data={"name": "LL", "source_type": "air_air", "electricity_energy": "sensor.ll_el",
+                                 "electricity_backup": "sensor.ll_sky"}, subentry_type="source", title="LL", unique_id=None)])
+    entry.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(entry.entry_id)
+    await ha.async_block_till_done()
+    c = entry.runtime_data
+    hours = await ha.async_add_executor_job(c._hours_sync)
+    s = next(iter(c.sources.values()))
+    assert abs(s.el_backup["factor"] - 1.25) < 0.01
+    early = [h for h in hours[s.sid] if h.e is not None][:24]
+    assert all(abs(h.e - 0.5) < 0.01 for h in early)

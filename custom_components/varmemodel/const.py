@@ -7,6 +7,7 @@ DOMAIN = "varmemodel"
 CONF_NAME = "name"
 CONF_HEAT = "heat_energy"
 CONF_ELECTRICITY = "electricity_energy"
+CONF_ELECTRICITY_BACKUP = "electricity_backup"  # supplerende/ældre elmåler, bruges hvor hovedmåleren mangler data
 CONF_OUTDOOR = "outdoor_temp"
 CONF_INDOOR = "indoor_temps"
 CONF_FLOW = "flow_temp"

@@ -146,7 +146,10 @@ class DailyElSensor(SourceEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         d = (self.src.daily or {}).get(self.period) or {}
-        return {"ude_snit": d.get("t_out_mean"), "døgn": d.get("days")}
+        b = self.src.el_backup or {}
+        return {"ude_snit": d.get("t_out_mean"), "døgn": d.get("days"),
+                "supplerende_måler_faktor": b.get("factor"), "supplerende_måler_timer_brugt": b.get("used_hours"),
+                "supplerende_måler_timer_overlap": b.get("overlap_hours")}
 
 
 class StatusSensor(VarmemodelEntity, SensorEntity):

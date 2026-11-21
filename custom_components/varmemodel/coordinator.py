@@ -45,6 +45,7 @@ from .const import (
     CONF_DEFROST,
     CONF_DHW,
     CONF_ELECTRICITY,
+    CONF_ELECTRICITY_BACKUP,
     CONF_FLOW,
     CONF_HEAT,
     CONF_INDOOR,
@@ -117,6 +118,7 @@ class SourceState:
     slots: dict[str, list[float]] = field(default_factory=dict)
     daily: dict[str, Any] = field(default_factory=dict)
     last_hours: list[Hour] = field(default_factory=list)
+    el_backup: dict[str, Any] = field(default_factory=dict)  # faktor og timer for den supplerende elmåler
 
     def eid(self, key: str) -> str | None:
         return self.conf.get(key) or None
@@ -528,12 +530,23 @@ class VarmemodelCoordinator:
         outdoor = self._id(CONF_OUTDOOR)
         want = set(self._room_temps()) | set(self._neighbour_temps()) | ({outdoor} if outdoor else set())
         for s in self.sources.values():
-            want |= {s.eid(k) for k in (CONF_HEAT, CONF_ELECTRICITY, CONF_FLOW, CONF_RETURN)} - {None}
+            want |= {s.eid(k) for k in (CONF_HEAT, CONF_ELECTRICITY, CONF_ELECTRICITY_BACKUP, CONF_FLOW, CONF_RETURN)} - {None}
         stats = statistics_during_period(self.hass, start, end, want, "hour", {"energy": "kWh", "temperature": "°C"}, {"change", "mean"})
         rows: dict[int, dict[str, Any]] = {}
         for stat_id, lst in stats.items():
             for x in lst:
                 rows.setdefault(int(_ts(x["start"])), {})[stat_id] = x
+        # Supplerende elmåler: faktor = hovedmåler ÷ supplerende i timer hvor begge har data
+        for s in self.sources.values():
+            main, bak = s.eid(CONF_ELECTRICITY), s.eid(CONF_ELECTRICITY_BACKUP)
+            if not bak:
+                s.el_backup = {}
+                continue
+            pairs = [(_num((r.get(main) or {}).get("change")), _num((r.get(bak) or {}).get("change"))) for r in rows.values()]
+            both = [(m, b) for m, b in pairs if m is not None and b is not None and m >= 0 and b >= 0]
+            sb = sum(b for _, b in both)
+            ratio = (sum(m for m, _ in both) / sb) if len(both) >= 48 and sb > 1 else 1.0
+            s.el_backup = {"factor": round(ratio, 3), "overlap_hours": len(both), "used_hours": 0}
         indoor = self._indoor_for_mean()
         self._room_t = {}
         out: dict[str, list[Hour]] = {sid: [] for sid in self.sources}
@@ -548,8 +561,14 @@ class VarmemodelCoordinator:
             c = self.collected.get(str(ts), {})
             for sid, s in self.sources.items():
                 sc = s.collected.get(str(ts), {})
+                e = val(s.eid(CONF_ELECTRICITY), "change")
+                if e is None and s.el_backup:
+                    b = val(s.eid(CONF_ELECTRICITY_BACKUP), "change")
+                    if b is not None:
+                        e = b * s.el_backup["factor"]
+                        s.el_backup["used_hours"] += 1
                 out[sid].append(Hour(
-                    ts=ts, q=val(s.eid(CONF_HEAT), "change"), e=val(s.eid(CONF_ELECTRICITY), "change"), t_out=val(outdoor, "mean"),
+                    ts=ts, q=val(s.eid(CONF_HEAT), "change"), e=e, t_out=val(outdoor, "mean"),
                     t_in=sum(tin) / len(tin) if tin and len(tin) >= max(1, len(indoor) // 2) else None,
                     t_flow=val(s.eid(CONF_FLOW), "mean"), t_ret=val(s.eid(CONF_RETURN), "mean"),
                     comp=sc.get("comp"), dhw=sc.get("dhw"), defrost=sc.get("df_n"), setpoint=sc.get("sp"), offset=sc.get("off"),

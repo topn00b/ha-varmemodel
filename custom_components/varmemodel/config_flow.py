@@ -23,6 +23,7 @@ from .const import (
     CONF_DEFROST,
     CONF_DHW,
     CONF_ELECTRICITY,
+    CONF_ELECTRICITY_BACKUP,
     CONF_FLOW,
     CONF_HEAT,
     CONF_INDOOR,
@@ -72,7 +73,7 @@ TYPE = selector.SelectSelector(
 )
 
 # Felter, der kræver langtidsstatistik
-STAT_KEYS = (CONF_ELECTRICITY, CONF_HEAT, CONF_OUTDOOR, CONF_FLOW, CONF_RETURN)
+STAT_KEYS = (CONF_ELECTRICITY, CONF_ELECTRICITY_BACKUP, CONF_HEAT, CONF_OUTDOOR, CONF_FLOW, CONF_RETURN)
 
 
 def _house_schema(with_name: bool) -> vol.Schema:
@@ -90,6 +91,7 @@ def _house_schema(with_name: bool) -> vol.Schema:
 
 HYDRONIC_SCHEMA = vol.Schema({
     vol.Required(CONF_ELECTRICITY): ENERGY,
+    vol.Optional(CONF_ELECTRICITY_BACKUP): ENERGY,
     vol.Optional(CONF_HEAT): ENERGY,
     vol.Optional(CONF_FLOW): TEMP,
     vol.Optional(CONF_RETURN): TEMP,
@@ -105,6 +107,7 @@ HYDRONIC_SCHEMA = vol.Schema({
 
 AIR_AIR_SCHEMA = vol.Schema({
     vol.Required(CONF_ELECTRICITY): ENERGY,
+    vol.Optional(CONF_ELECTRICITY_BACKUP): ENERGY,
     vol.Optional(CONF_UNIT_TEMP): selector.EntitySelector(selector.EntitySelectorConfig(domain=["climate", "sensor"])),
     vol.Optional(CONF_UNIT_TEMP_ATTR): TEXT,
     vol.Optional(CONF_COMPRESSOR): BINARY,

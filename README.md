@@ -48,6 +48,7 @@ Opbygningen er **huset** med **varmekilder** og **rum** som underpunkter. Rummen
 | Felt | Luft-vand / vandbåren | Luft-luft |
 |---|---|---|
 | El (kWh, samlet) | påkrævet | påkrævet |
+| Supplerende elmåler (fx skyen) | valgfrit | valgfrit – bruges hvor hovedmåleren mangler data, skaleret til hovedmålerens niveau |
 | Varme leveret (kWh, samlet) | anbefalet | – |
 | Fremløb / retur | valgfrit | – |
 | Kompressor / afrimning / varmt vand | valgfrit | kompressor / afrimning valgfrit |

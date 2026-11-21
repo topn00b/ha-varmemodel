@@ -158,14 +158,16 @@
             "flow_setpoint_attribute": "Flow setpoint: attribute (empty = state)",
             "curve_offset": "Curve offset (entity)",
             "curve_offset_attribute": "Curve offset: attribute (empty = state)",
-            "curve_offset_zero": "Curve offset: value meaning 0"
+            "curve_offset_zero": "Curve offset: value meaning 0",
+            "electricity_backup": "Additional electricity meter (e.g. cloud)"
           },
           "data_description": {
             "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
             "compressor": "Used for full running hours, starts and splitting heat between rooms.",
             "dhw": "Hours with hot water are excluded from space heating.",
             "flow_setpoint": "E.g. the water setpoint. Used to fit the heating curve.",
-            "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0."
+            "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0.",
+            "electricity_backup": "Used for hours where the main meter has no data, e.g. before it was installed. Scaled automatically to the main meter using the hours where both have data."
           }
         },
         "air_air": {
@@ -175,10 +177,12 @@
             "unit_temp": "The unit's own temperature sensor",
             "unit_temp_attribute": "Unit sensor: attribute (e.g. current_temperature)",
             "compressor": "Compressor running",
-            "defrost": "Defrost"
+            "defrost": "Defrost",
+            "electricity_backup": "Additional electricity meter (e.g. cloud)"
           },
           "data_description": {
-            "electricity_energy": "Without a heat meter the rooms learn how many degrees they get per kWh of electricity."
+            "electricity_energy": "Without a heat meter the rooms learn how many degrees they get per kWh of electricity.",
+            "electricity_backup": "Used for hours where the main meter has no data, e.g. before it was installed. Scaled automatically to the main meter using the hours where both have data."
           }
         }
       },

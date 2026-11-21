@@ -158,14 +158,16 @@
             "flow_setpoint_attribute": "Fremløbs-setpunkt: attribut (tom = tilstand)",
             "curve_offset": "Kurve-forskydning (entitet)",
             "curve_offset_attribute": "Kurve-forskydning: attribut (tom = tilstand)",
-            "curve_offset_zero": "Kurve-forskydning: værdi der betyder 0"
+            "curve_offset_zero": "Kurve-forskydning: værdi der betyder 0",
+            "electricity_backup": "Supplerende elmåler (fx skyen)"
           },
           "data_description": {
             "heat_energy": "Uden den kan COP, varmetab og gulvets afgivelse ikke regnes ud.",
             "compressor": "Bruges til fulde driftstimer, starter og fordeling af varmen på rummene.",
             "dhw": "Timer med varmt vand holdes ude af rumopvarmningen.",
             "flow_setpoint": "Fx varmepumpens vand-setpunkt. Bruges til at finde varmekurven.",
-            "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0."
+            "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0.",
+            "electricity_backup": "Bruges i timer, hvor hovedmåleren ikke har data – fx før den blev sat op. Skaleres automatisk til hovedmålerens niveau ud fra de timer, hvor begge har data."
           }
         },
         "air_air": {
@@ -175,10 +177,12 @@
             "unit_temp": "Enhedens egen temperaturføler",
             "unit_temp_attribute": "Enhedens føler: attribut (fx current_temperature)",
             "compressor": "Kompressor kører",
-            "defrost": "Afrimning"
+            "defrost": "Afrimning",
+            "electricity_backup": "Supplerende elmåler (fx skyen)"
           },
           "data_description": {
-            "electricity_energy": "Uden varmemåler lærer rummene, hvor mange grader de får pr. kWh el."
+            "electricity_energy": "Uden varmemåler lærer rummene, hvor mange grader de får pr. kWh el.",
+            "electricity_backup": "Bruges i timer, hvor hovedmåleren ikke har data – fx før den blev sat op. Skaleres automatisk til hovedmålerens niveau ud fra de timer, hvor begge har data."
           }
         }
       },
