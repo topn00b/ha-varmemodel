@@ -99,7 +99,7 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 2. Varmen lægges i portioner i de timer, hvor den koster mindst el (pris ÷ COP). COP falder med fremløbet, så jævn, lav drift vinder, når priserne er nogenlunde ens. Hver time med varme får mindst den laveste effekt, varmepumpen kan holde.
 3. **Rummene forudsiges** time for time med rummodellerne (varme nu og forsinket, afkøling, gratis varme, nabozoner). Kommer et rum under min. + sin usikkerhed, lægges der varme i den billigste time før. Den forsinkede del af de første 6 timer kommer fra den målte varme i de seneste 6 timer, fordi gulvet afgiver den med forsinkelse.
 4. For lange pauser brydes med den billigste time.
-5. **Fremløb** = mål + effekt ÷ gulvets afgivelse, og **kurve-forskydning** = fremløb − varmekurven.
+5. **Fremløbsmål** = mål + effekt ÷ gulvets typiske afgivelse (medianen), begrænset til 25–45 °C og rundet til 0,5 °C. Varmepumpen sættes i heat-tilstand og får fremløbsmålet direkte, så der er ingen omregning via varmekurven. Kurve-forskydningen (fremløb − varmekurven) vises kun til orientering. Den anbefalede styring giver fremløbsmålet (`flow_setpoint`); det ændres højst én gang i timen og med mindst 1 °C.
 
 **Indstillinger (tal-entiteter på huset):** *Maks. pause uden gulvvarme*, *Komfort over min.*, *»Jeg fryser« hæver målet*, *»Jeg fryser« gælder højst* (timer), *Må falde under min. i blokerede timer*, *Forsigtighed ved kulde* (%) og *Forvarm pr. 6 timers blokering* (°C). De påvirker kun planen.
 

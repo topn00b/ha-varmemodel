@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.6.2';
+  const VERSION = '0.6.3';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -485,7 +485,7 @@
         o += row('Periode', `${pa.horizon_h ?? '–'} timer · ca. ${fmt(pa.cost_kr, 0)} kr`);
         o += row('Jeg fryser', pa.boost ? `+${fmt(pa.boost_delta)} °C til ${when(pa.boost_until)}` : 'fra');
         const ce = s.e('command'); const ca = at(h, ce);
-        if (ce) o += row('Anbefalet styring', `<span class="v" data-e="${esc(ce)}">${(st(h, ce) || {}).state === 'heat' ? 'varme' : 'slukket'}${ca.shift != null ? ' · kurve ' + sgn(ca.shift, 0) : ''}</span> <span class="mut sm">${esc(ca.reason || '')}</span>`);
+        if (ce) o += row('Anbefalet styring', `<span class="v" data-e="${esc(ce)}">${(st(h, ce) || {}).state === 'heat' ? 'varme' : 'slukket'}${ca.flow_setpoint != null ? ` · fremløb ${fmt(ca.flow_setpoint, 0)} °C` : ca.shift != null ? ' · kurve ' + sgn(ca.shift, 0) : ''}</span> <span class="mut sm">${esc(ca.reason || '')}</span>`);
         if (ce) o += row('I dag', `${ca.writes_today ?? 0} skrivninger · ${ca.switches_today ?? 0} tænd/sluk ${ca.within_limits === false ? '<span class="amber">over grænsen</span>' : '<span class="green">inden for grænsen</span>'}`);
         o += row('Frisk plan i dag', `${fmt(pa.fresh_pct_today, 0)} % af kvartererne`);
         o += '</div>';
@@ -584,7 +584,7 @@
       if (live !== null && exp !== null && live < exp - 0.5) this._low[main.name] = this._low[main.name] || Date.now(); else delete this._low[main.name];
       const lowMin = this._low[main.name] ? (Date.now() - this._low[main.name]) / 60e3 : 0;
       const planHeat = pst === 'heat', actHeat = compOn && !dhw;
-      const differs = pst !== 'unknown' && (planHeat !== actHeat || (planHeat && actHeat && shift !== null && pa.shift != null && Math.abs(shift - pa.shift) >= 1));
+      const differs = pst !== 'unknown' && (planHeat !== actHeat);
       const pumpOn = cfg.pump_running ? isOn(h, cfg.pump_running) : null;
       const bal = compOn && onMin >= 15 && !defr && !dhw && pumpOn !== false;
       Object.assign(D, { f, cfg, pa, pst, flow, ret, compOn, onMin, defr, dhw, shift, clim, hpk, ep, steady, live, exp, lowMin, differs, pumpOn, bal,
@@ -607,7 +607,7 @@
       const ico = zc === RE ? '🔴' : zc === YE ? '🟡' : zc === GR ? '🟢' : '';
       const price = c.price ? sv(h, c.price) : num(pa.price);
       let plan = main ? `${PS[pst] || pst}` : 'ingen vandbåren varmekilde';
-      if (pst === 'heat') plan += ` ${fmt(pa.heat_kw)} kW` + (pa.shift != null ? ` · kurve ${sgn(pa.shift, 0)}` : '') + (pa.next_off ? ` · stop ${when(pa.next_off)}` : '');
+      if (pst === 'heat') plan += ` ${fmt(pa.heat_kw)} kW` + (pa.flow != null ? ` · fremløb ${fmt(pa.flow, 1)} °C` : '') + (pa.next_off ? ` · stop ${when(pa.next_off)}` : '');
       else if (pa.next_on) plan += ` · start ${when(pa.next_on)}`;
       if (pa.boost) plan += ' · jeg fryser' + (pa.boost_until && pa.boost_until !== 'udløbet' ? ` til ${when(pa.boost_until)}` : '');
       const flags = (c.flags || []).filter((x) => (st(h, x.entity) || {}).state === String(x.state ?? 'on')).map((x) => x.text || x.entity);
@@ -715,7 +715,7 @@
       else s0 = (D.compOn ? 'varmer' : 'pause');
       if (D.shift !== null && !(D.clim && D.clim.state === 'off')) s0 += ` · kurve ${sgn(D.shift, 0)}`;
       p.status = [s0, cfg.climate || f.compressor, { bg }];
-      p.plan = `plan: ${PS[D.pst] || D.pst}${D.pst === 'heat' && pa.shift != null ? ' · kurve ' + sgn(pa.shift, 0) : ''}`;
+      p.plan = `plan: ${PS[D.pst] || D.pst}${D.pst === 'heat' && pa.flow != null ? ` · fremløb ${fmt(pa.flow, 1)} °C` : ''}`;
       p.ud = [`ud ${fmt(D.flow)} °C${D.pst === 'heat' && pa.flow != null ? ' · mål ' + fmt(pa.flow) : ''}`, f.flow_temp];
       p.ind = [`ind ${fmt(D.ret)} °C`, f.return_temp];
       p.cop = [D.steady ? `${fmt(D.hpk)} kW · COP ${fmt(D.live)} / ${fmt(D.exp)}` : `${fmt(D.hpk)} kW · COP –`, cfg.heat_power || f.heat_energy, { bg: D.lowMin >= 30 ? YE : null }];

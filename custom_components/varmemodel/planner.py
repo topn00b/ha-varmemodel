@@ -75,12 +75,18 @@ class Plan:
 STEP = 0.25  # kWh pr. portion
 PRELOAD_MAX = 1.0  # forvarmning: højst så mange °C ekstra krav sidst i en lang blokering
 AIR_STEP = 0.1  # kWh el pr. portion for luft-luft
+FLOW_MIN, FLOW_MAX = 25.0, 45.0  # fremløbsmål, varmepumpen kan sætte
+
+
+def flow_for(m: SourceModel, p: float, target: float) -> float:
+    """Fremløbsmålet for p kW varme: rummål + p ÷ gulvets afgivelse, begrænset og rundet til 0,5 °C."""
+    f = target + (p / m.emission_kw_k if m.emission_kw_k > 0 else 0.0)
+    return round(2 * max(FLOW_MIN, min(FLOW_MAX, f))) / 2
 
 
 def _cop(m: SourceModel, t_out: float, p: float, target: float) -> float:
     a, b, c, d = m.cop
-    flow = target + (p / m.emission_kw_k if m.emission_kw_k > 0 else 0.0)
-    return max(1.2, a + b * t_out + c * flow + d * p)
+    return max(1.2, a + b * t_out + c * flow_for(m, p, target) + d * p)
 
 
 def _el(m: SourceModel, t_out: float, p: float, target: float) -> float:
@@ -246,14 +252,14 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
             plan.warnings.append(f"{r.name}: {s[k]:.1f} °C {lab(hours[k].ts)} er under planens grænse ({limit(r, k):.1f})")
     for i, h in enumerate(hours):
         p = round(q[i], 2)
-        flow = target + (p / model.emission_kw_k if p > 0 and model.emission_kw_k > 0 else 0.0)
+        flow = flow_for(model, p, target) if p > 0 else None
         shift = None
         if p > 0:
             shift = round(flow - (model.curve_c0 + model.curve_slope * h.t_out))
             shift = max(model.shift_min, min(model.shift_max, shift))
         cop = _cop(model, h.t_out, p, target) if p > 0 else None
         el = p / cop if cop else 0.0
-        plan.hours.append({"ts": h.ts, "heat_kw": p, "flow": round(flow, 1) if p > 0 else None, "shift": shift,
+        plan.hours.append({"ts": h.ts, "heat_kw": p, "flow": flow, "shift": shift,
                            "price": round(h.price, 3), "t_out": round(h.t_out, 1), "blocked": h.blocked,
                            "cop": round(cop, 2) if cop else None, "cost": round(el * h.price, 2)})
         plan.heat_kwh += p

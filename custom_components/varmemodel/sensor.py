@@ -365,9 +365,22 @@ class PlanValueSensor(SourceEntity, SensorEntity):
         self._attr_suggested_display_precision = prec
 
     @property
+    def _next(self) -> dict[str, Any] | None:
+        p = self.coordinator.plans.get(self.src.sid) or {}
+        h = _now_hour(p) or {}
+        return next((x for x in p.get("hours") or [] if x.get(self.field) is not None and x["ts"] >= (h.get("ts") or 0)), None)
+
+    @property
     def native_value(self) -> float | None:
-        h = _now_hour(self.coordinator.plans.get(self.src.sid) or {})
-        return h.get(self.field) if h else None
+        # Varmer planen ikke nu, vises næste planlagte værdi (attributterne siger fra hvornår)
+        x = self._next
+        return x.get(self.field) if x else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        h = _now_hour(self.coordinator.plans.get(self.src.sid) or {}) or {}
+        x = self._next
+        return {"varmer_nu": bool(h.get("heat_kw")), "gælder_fra": _ts_local(x["ts"]) if x else None}
 
 
 class PlanCostSensor(SourceEntity, SensorEntity):
@@ -461,7 +474,10 @@ class CommandSensor(SourceEntity, SensorEntity):
         c = self._c
         since = c.get("since_onoff")
         return {
-            "shift": c.get("shift"), "setpoint": c.get("setpoint"), "reason": c.get("reason"),
+            # Vandbåren: fremløbsmålet (heat-tilstand, ingen kurve). Luft-luft: setpunkt.
+            "flow_setpoint": c.get("shift") if self.src.kind == SOURCE_HYDRONIC else None,
+            "shift": None if self.src.kind == SOURCE_HYDRONIC else c.get("shift"),
+            "setpoint": c.get("setpoint"), "reason": c.get("reason"),
             "since": _ts_local(since) if since and since > 0 else None,
             "writes_today": c.get("writes", 0), "switches_today": c.get("flips", 0), "heat_in_blocked_today": c.get("blocked_on", 0),
             "within_limits": c.get("writes", 0) <= 20 and c.get("flips", 0) <= 8 and c.get("blocked_on", 0) == 0,

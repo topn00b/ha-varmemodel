@@ -233,3 +233,14 @@ def test_air_plan_respects_cap_of_warm_room() -> None:
     p2 = make_air_plan(hs, [_air_room("Rum A", t_now=19.4), hot], e_min=0.3, e_max=1.0)
     assert "over loftet (23.8 mod 22.5 °C)" in p2.reason
     assert sum(x["heat_kw"] for x in p2.hours[:3]) == 0
+
+
+def test_flow_target_is_direct_and_bounded() -> None:
+    """Fremløbsmålet regnes direkte (rummål + effekt ÷ gulvets afgivelse) og holdes inden for 25–45 °C."""
+    from custom_components.varmemodel.planner import flow_for
+
+    m = SourceModel(heat_loss_w_k=90, emission_kw_k=0.283)
+    assert flow_for(m, 5.2, 19.9) == 38.5  # 19,9 + 5,2 ÷ 0,283 = 38,3 → nærmeste 0,5
+    assert flow_for(m, 0.5, 19.9) == 25.0 and flow_for(m, 9.0, 21.0) == 45.0
+    p = make_plan(hours(12, t_out=lambda i: 2.0), m, [], 20.0)
+    assert all(x["flow"] is None or 25.0 <= x["flow"] <= 45.0 for x in p.hours)

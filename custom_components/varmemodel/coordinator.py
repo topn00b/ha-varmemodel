@@ -1198,7 +1198,9 @@ class VarmemodelCoordinator:
                 # Er effektleddet positivt, holdes det fast ved 4 kW (kalibreringens referenceeffekt), så niveauet passer.
                 cop=(float(st_extra.get("a", 3.0)) + max(float(st_extra.get("d", 0.0)), 0.0) * 4.0, float(st_extra.get("b", 0.15)),
                      min(float(st_extra.get("c", -0.04)), 0.0), min(float(st_extra.get("d", 0.0)), 0.0)),
-                emission_kw_k=v("emission", 0.25), curve_c0=v("curve", 34.0),
+                # Gulvets typiske afgivelse (median) – 25 %-fraktilen gav et urealistisk højt fremløb
+                emission_kw_k=float(((a.get("emission") or {}).get("extra") or {}).get("median") or v("emission", 0.25)),
+                curve_c0=v("curve", 34.0),
                 curve_slope=float(((a.get("curve") or {}).get("extra") or {}).get("slope", -0.6)),
             )
             rooms: list[PlanRoom] = []  # rum med komfortgulv: styrer planen
@@ -1312,7 +1314,8 @@ class VarmemodelCoordinator:
             # Anbefalet styring: planens ønske nu omsat efter reglerne, der skåner varmepumpen
             cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
             cmd = step(Command.load(self.commands.get(sid)), now, dt_util.now().date().isoformat(),
-                       bool(cur and cur["heat_kw"] > 0), cur["shift"] if cur else None, bool(cur and cur["blocked"]))
+                       bool(cur and cur["heat_kw"] > 0), (round(cur["flow"]) if cur and cur.get("flow") is not None else None),
+                       bool(cur and cur["blocked"]))
             self.commands[sid] = cmd.dump()
         self.plans = plans
         self._flag_missing(now, out_flag)
