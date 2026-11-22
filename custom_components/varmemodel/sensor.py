@@ -231,6 +231,10 @@ class RoomSensor(RoomEntity, SensorEntity):
             "min_entitet": (cfg := next((x for x in self.coordinator.rooms_cfg if x["key"] == self.source), {})).get("min_entity"),
             "telestat": cfg.get("valve") or ("altid åben" if cfg.get("always_open") else None),
             "i_plan": cfg.get("in_plan"),
+            # Rummets gulv (min.) og loft (maks.) lige nu – til kortenes farver og planens grænser
+            "gulv": (self.coordinator._state_num(cfg.get("min_entity")) if cfg.get("min_entity")
+                     else (float(cfg["min"]) if cfg.get("min") is not None else None)),
+            "loft": float(cfg["max"]) if cfg.get("max") is not None else None,
             "varmekilde": (lambda s: s.name if s else None)(self.coordinator.room_source(next((x for x in self.coordinator.rooms_cfg if x["key"] == self.source), {}))),
             "tidskonstant_timer": e.get("time_constant_h"),
             "varmekilder_grader_pr_kwh": {k: v.get("total") for k, v in (e.get("sources") or {}).items()} or None,

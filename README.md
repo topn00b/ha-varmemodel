@@ -167,7 +167,7 @@ Til planlægning bruges COP-formlen fra *COP i stabil drift*, men højere effekt
 
 ## Kort til dashboardet
 
-Integrationen leverer fem kort, som selv finder Varmemodels entiteter (Hus → varmekilde → rum). Tilføj dem med *Tilføj kort* eller i YAML:
+Integrationen leverer seks kort, som selv finder Varmemodels entiteter (Hus → varmekilde → rum). Tilføj dem med *Tilføj kort* eller i YAML:
 
 | Kort | Viser |
 |---|---|
@@ -176,6 +176,7 @@ Integrationen leverer fem kort, som selv finder Varmemodels entiteter (Hus → v
 | `custom:varmemodel-kilde-card` | varmekildernes tal: effektivitet, COP for 14 døgn, bygning og anlæg |
 | `custom:varmemodel-tiltag-card` | energitiltag: hvilke rum taber varmen hurtigst, vaner, vind og før/efter |
 | `custom:varmemodel-hus-card` | status, planen og planens indstillinger |
+| `custom:varmemodel-plan-card` | rummene på din plantegning farvet efter temperatur, nu og de næste timer |
 
 Kortene tilføjes automatisk som dashboard-ressource, så de også indlæses i mobilappen. Har du dashboards i YAML-tilstand, skal du selv tilføje `/varmemodel/varmemodel-cards.js` som ressource af typen *module*.
 
@@ -226,6 +227,35 @@ sources:
 ```
 
 Live COP vises kun i stabil drift (kompressoren har kørt i 10 min., ingen afrimning eller varmt vand) og sammenlignes med den forventede fra *COP i stabil drift*. Er den mere end 0,5 under i 30 min., markeres det.
+
+**Plantegningskortet** tegner rummene efter din plantegning og farver dem efter temperaturen i forhold til rummets gulv og loft: blå under gulvet, lyseblå tæt på, grøn godt, gul tæt på loftet og rød over. Knapperne viser forudsigelsen om 3, 6 og 12 timer, og et tryk på et rum åbner føleren. Koordinaterne er i cm og kan tages fra en salgstegning. Med `source` vises varmekildens plan time for time og den anbefalede styring under tegningen. Det gør kortet til et anlægskort for netop den varmepumpe.
+
+```yaml
+type: custom:varmemodel-plan-card
+title: 1. sal
+source: Luft-luft          # valgfri: varmekildens plan og anbefalede styring
+hours: [0, 3, 6, 12]
+floors:
+  - name: 1. sal
+    width: 720             # cm
+    height: 900
+    rooms:
+      - name: Værelse 1    # rummets navn i Varmemodel
+        rect: [0, 0, 280, 325]          # x, y, bredde, højde
+      - name: Gang
+        points: [[280, 0], [420, 0], [420, 520], [280, 520]]
+      - room: Gang         # samme rum, kun farve (fx trappeopgang)
+        rect: [0, 325, 280, 105]
+      - label: Teknik      # ikke et rum: gråt
+        rect: [145, 520, 430, 150]
+    doors:
+      - [280, 235, 280, 275]            # åbning: x1, y1, x2, y2
+    units:
+      - name: Varmepumpe
+        x: 25
+        y: 378
+        to: [[330, 378], [330, 470]]    # luftens vej (pil); flere veje med paths
+```
 
 **Rumkortet** grupperer efter varmekilde eller efter dine egne grupper:
 

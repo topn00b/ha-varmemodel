@@ -1106,7 +1106,10 @@ class VarmemodelCoordinator:
         cmd = step(Command.load(self.commands.get(s.sid)), now, dt_util.now().date().isoformat(),
                    bool(cur and cur["heat_kw"] > 0), None, bool(cur and cur["blocked"]), min_on=1800, min_off=900, min_gap=900)
         d = cmd.dump()
-        d["setpoint"] = cur.get("setpoint") if cmd.on and cur else None
+        # Setpunkt når styringen står på »tændt« – også når den holder sine 30 min., mens planens time er 0
+        caps = [r.t_max for r in show if r.t_max is not None]
+        sp = cur.get("setpoint") if cur and cur.get("setpoint") is not None else (min(caps) - 0.5 if caps else None)
+        d["setpoint"] = sp if cmd.on else None
         self.commands[s.sid] = d
         return {"plan": plan, "rooms": show, "rq": rq}
 

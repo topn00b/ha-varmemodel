@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.6.0';
+  const VERSION = '0.6.1';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -188,6 +188,8 @@
           const path = ev.composedPath();
           const act = path.find((x) => x.dataset && x.dataset.act);
           if (act) { this._h.callService('homeassistant', 'toggle', { entity_id: act.dataset.act }); return; }
+          const kk = path.find((x) => x.dataset && x.dataset.k !== undefined);
+          if (kk && this._setK) { this._setK(kk.dataset.k); return; }
           const nav = path.find((x) => x.dataset && x.dataset.nav);
           if (nav) { history.pushState(null, '', nav.dataset.nav); window.dispatchEvent(new CustomEvent('location-changed')); return; }
           const t = path.find((x) => x.dataset && x.dataset.e);
@@ -201,6 +203,84 @@
       catch (e) { body = `<div class="red">Fejl i kortet: ${esc(e && e.message)}</div>`; }
       this.shadowRoot.innerHTML = `<style>${CSS}${this.css || ''}</style><ha-card>${this._c.title ? `<div class="h">${esc(this._c.title)}</div>` : ''}${body}</ha-card>`;
       for (const id of this._open) { const d = this.shadowRoot.getElementById(id); if (d) d.open = true; }
+    }
+  }
+
+
+  // ------------------------------------------------------------------ plantegning (heatmap)
+  // Rummene tegnes efter din plantegning (cm) og farves efter temperaturen i forhold til rummets gulv og loft:
+  // blå under gulvet, lyseblå tæt på, grøn godt, gul tæt på loftet, rød over. Knapper viser forudsigelsen de næste timer.
+  const TCOL = (t, lo, hi) => {
+    if (t === null) return '#e0e0e0';
+    const fl = lo ?? 19.5, cap = hi ?? fl + 3;
+    if (t < fl) return '#7fb2e5';
+    if (t < fl + 0.5) return '#b9dcf2';
+    if (t <= cap - 0.5) return '#a8dbb5';
+    if (t <= cap) return '#f6d98b';
+    return '#ef9a8f';
+  };
+  const pts = (x) => (x.points || (x.rect ? [[x.rect[0], x.rect[1]], [x.rect[0] + x.rect[2], x.rect[1]], [x.rect[0] + x.rect[2], x.rect[1] + x.rect[3]], [x.rect[0], x.rect[1] + x.rect[3]]] : []));
+  const mid = (p) => [p.reduce((a, q) => a + q[0], 0) / (p.length || 1), p.reduce((a, q) => a + q[1], 0) / (p.length || 1)];
+  class PlanCard extends Base {
+    static getStubConfig() { return { floors: [{ name: 'Stueplan', width: 700, height: 500, rooms: [{ name: 'Stue', rect: [0, 0, 400, 300] }] }] }; }
+    _setK(k) { this._k = +k || 0; this._draw(); }
+    body(h, vm) {
+      const c = this._c; const k = this._k || 0; const hrs = c.hours || [0, 3, 6, 12];
+      let o = `<div class="sm" style="margin:2px 0 8px">${hrs.map((x) => `<span class="pill${x === k ? ' on' : ''}" data-k="${x}">${x === 0 ? 'nu' : `om ${x} t`}</span>`).join(' ')}</div>`;
+      o += '<div class="pl">';
+      for (const f of c.floors || []) {
+        const W = f.width || 700, H = f.height || 500;
+        let g = '';
+        for (const rr of f.rooms || []) {
+          const p = pts(rr); if (!p.length) continue;
+          const poly = p.map((q) => q.join(',')).join(' ');
+          const r = vm.rooms.find((x) => x.name === (rr.room || rr.name));
+          if (!r) { g += `<polygon points="${poly}" fill="#f1f1f1" stroke="#555" stroke-width="4"/>`; const [cx, cy] = mid(p); g += `<text x="${cx}" y="${cy}" class="pn" text-anchor="middle">${esc(rr.label || rr.name || '')}</text>`; continue; }
+          const d = room(h, vm, r); const a = d.a;
+          const t = k === 0 ? d.t : (d.fc && d.fc.length >= k ? d.fc[k - 1] : null);
+          const col = TCOL(t, num(a.gulv), num(a.loft));
+          g += `<polygon points="${poly}" fill="${col}" stroke="#444" stroke-width="4" data-e="${esc(d.tE || r.model)}"/>`;
+          if (rr.room) continue;  // del af et andet rum: kun farven
+          const [cx, cy] = rr.label_at || mid(p);
+          const est = k === 0 && d.est;
+          g += `<text x="${cx}" y="${cy - 8}" class="pn" text-anchor="middle" data-e="${esc(d.tE || r.model)}">${esc(rr.label || r.name)}</text>`
+            + `<text x="${cx}" y="${cy + 30}" class="pt" text-anchor="middle" data-e="${esc(d.tE || r.model)}">${t === null ? '–' : `${est ? '≈' : ''}${fmt(t)} °C`}</text>`;
+          const lim = [num(a.gulv) !== null ? `gulv ${fmt(a.gulv)}` : '', num(a.loft) !== null ? `loft ${fmt(a.loft)}` : ''].filter(Boolean).join(' · ');
+          if (lim && !rr.compact) g += `<text x="${cx}" y="${cy + 58}" class="ps" text-anchor="middle">${lim}</text>`;
+        }
+        for (const dd of f.doors || []) g += `<line x1="${dd[0]}" y1="${dd[1]}" x2="${dd[2]}" y2="${dd[3]}" stroke="#fff" stroke-width="9"/>`;
+        for (const u of f.units || []) {
+          const w = u.w || 90, hh = u.h || 26;
+          g += `<rect x="${u.x - w / 2}" y="${u.y - hh / 2}" width="${w}" height="${hh}" rx="4" fill="#5b9bd5" stroke="#2c6aa0" stroke-width="2"${u.entity ? ` data-e="${esc(u.entity)}"` : ''}/>`
+            + `<text x="${u.x}" y="${u.y + 6}" class="pu" text-anchor="middle"${u.entity ? ` data-e="${esc(u.entity)}"` : ''}>${esc(u.name || '')}</text>`;
+          for (const path of u.paths || (u.to ? [u.to] : [])) {
+            if (path.length) g += `<polyline points="${[[u.x, u.y], ...path].map((q) => q.join(',')).join(' ')}" fill="none" stroke="#2c6aa0" stroke-width="5" stroke-dasharray="14,8" marker-end="url(#vmpil)"/>`;
+          }
+        }
+        o += `<div class="pf"><div class="h2">${esc(f.name || '')}</div><svg viewBox="-10 -10 ${W + 20} ${H + 20}" class="psvg">`
+          + '<defs><marker id="vmpil" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#2c6aa0"/></marker></defs>'
+          + `${g}</svg></div>`;
+      }
+      o += '</div>';
+      o += `<div class="sm mut" style="margin-top:6px"><span class="sw" style="background:#7fb2e5"></span>under gulvet <span class="sw" style="background:#b9dcf2"></span>tæt på <span class="sw" style="background:#a8dbb5"></span>godt <span class="sw" style="background:#f6d98b"></span>tæt på loftet <span class="sw" style="background:#ef9a8f"></span>over loftet${k ? ' · forudsigelse' : ''}</div>`;
+      // Valgfri varmekilde: planen time for time og den anbefalede styring (anlæg pr. varmepumpe)
+      const s = c.source ? vm.sources.find((x) => x.name === c.source) : null;
+      if (s && s.plan) {
+        const pa = at(h, s.plan); const ca = at(h, s.e('command')); const cst = (st(h, s.e('command')) || {}).state;
+        const pl = (pa.plan || []).slice(0, 24); const mx = Math.max(0.1, ...pl.map((x) => x.heat_kw || 0));
+        o += `<div class="h2">${esc(s.name)}: plan</div><div class="tl">${pl.map((x) => `<div class="tc${x.blocked ? ' rd' : ''}" title="${esc(`${when(x.t)}: ${fmt(x.heat_kw, 2)} ${s.kind === 'hydronic' ? 'kW varme' : 'kWh el'} · ${fmt(x.price, 2)} kr${x.blocked ? ' · blokeret' : ''}`)}"><div class="tb" style="height:${Math.round(100 * (x.heat_kw || 0) / mx)}%"></div><div class="tt">${hh(new Date(x.t).getHours())}</div></div>`).join('')}</div>`;
+        o += `<div class="sm" style="margin-top:4px"><span class="v" data-e="${esc(s.e('command'))}">Anbefalet: ${cst === 'heat' ? 'varme' : cst === 'off' ? 'slukket' : '–'}${ca.setpoint != null ? ` · setpunkt ${fmt(ca.setpoint)} °C` : ''}</span> · ${esc(ca.reason || '')}<br>${esc(pa.reason || '')}</div>`;
+      }
+      return o;
+    }
+    get css() {
+      return `.pl{display:flex;flex-wrap:wrap;gap:14px}.pf{flex:1 1 320px;min-width:280px}.psvg{width:100%;height:auto;display:block}
+        .pn{font-size:34px;fill:#222}.pt{font-size:40px;font-weight:700;fill:#111}.ps{font-size:22px;fill:#444}.pu{font-size:18px;fill:#fff}
+        .pill{display:inline-block;padding:2px 10px;border-radius:12px;border:1px solid var(--divider-color,#ccc);cursor:pointer;margin-right:4px}
+        .pill.on{background:var(--primary-color,#03a9f4);color:#fff;border-color:transparent}
+        .sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin:0 4px 0 10px;vertical-align:-1px}
+        .tl{display:flex;gap:2px;height:52px;align-items:flex-end}.tc{flex:1;position:relative;height:100%;background:var(--secondary-background-color,#f4f4f4);border-radius:3px;display:flex;flex-direction:column;justify-content:flex-end}
+        .tc.rd{box-shadow:inset 0 0 0 2px #d6453d}.tb{background:#5b9bd5;border-radius:3px 3px 0 0}.tt{font-size:9px;text-align:center;color:var(--secondary-text-color,#666)}`;
     }
   }
 
@@ -812,6 +892,7 @@
     ['varmemodel-kilde-card', KildeCard, 'Varmemodel: varmekilder', 'Effektivitet, bygning og anlæg for hver varmekilde'],
     ['varmemodel-tiltag-card', TiltagCard, 'Varmemodel: energitiltag', 'Afkøling, vaner, vind og før/efter for tiltag'],
     ['varmemodel-hus-card', HusCard, 'Varmemodel: hus', 'Status, plan og indstillinger'],
+    ['varmemodel-plan-card', PlanCard, 'Varmemodel: plantegning', 'Rummene på din plantegning farvet efter temperatur – nu og de næste timer'],
   ];
   window.customCards = window.customCards || [];
   for (const [tag, cls, name, description] of DEFS) {
