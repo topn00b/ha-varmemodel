@@ -326,6 +326,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "t_out": h.get("t_out"), "cop": h.get("cop"),
             "reason": p.get("reason"), "warnings": p.get("warnings") or None, "target": p.get("target"),
             "boost": p.get("boost"), "rooms_skipped": p.get("rooms_skipped") or None, "rooms_held": p.get("rooms_held") or None,
+            "rooms_estimated": p.get("rooms_estimated") or None,
             "demand_kwh": p.get("demand_kwh"), "heat_kwh": p.get("heat_kwh"), "el_kwh": p.get("el_kwh"), "cost_kr": p.get("cost_kr"),
             "next_on": _ts_local(nxt_on), "next_off": _ts_local(nxt_off),
             "updated": _ts_local(upd), "valid_until": _ts_local(upd + 2700) if upd else None,

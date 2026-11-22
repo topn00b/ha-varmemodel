@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.5.11';
+  const VERSION = '0.5.12';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -40,6 +40,7 @@
     const day = { '-1': 'i går ', 0: '', 1: 'i morgen ', 2: 'i overmorgen ' }[k];
     return (day ?? d.toLocaleDateString('da-DK', { day: 'numeric', month: 'numeric' }) + ' ') + 'kl. ' + hh(d.getHours());
   };
+  const whenM = (iso) => { const d = new Date(iso); return isNaN(d) ? '–' : `${when(iso)}:${hh(d.getMinutes())}`; };
   const kW = (h, e) => { const v = sv(h, e); if (v === null) return null; return String(at(h, e).unit_of_measurement || '').toLowerCase() === 'w' ? v / 1000 : v; };
   const GR = '#2e9e5b', YE = '#d29b12', RE = '#d6453d', BL = '#3b82c4', OR = '#f2711c', ORT = '#e8890c';
   const mixCol = (v) => (v === null ? null : v > 1.5 ? RE : v > 0.5 ? YE : v < -0.5 ? BL : GR);
@@ -109,7 +110,10 @@
   // Et rum: målt, forudsagt for 6 timer siden (ramt/over/under) og de næste timer
   function room(h, vm, r) {
     const a = at(h, r.model); const pa = at(h, vm.plan);
-    const tE = a['temperaturføler']; const t = sv(h, tE);
+    const tE = a['temperaturføler']; let t = sv(h, tE);
+    // Føleren har været væk i over 30 min.: planen bruger rummets forudsigelse – vis den med »≈«
+    const est = t === null ? ((pa.rooms_estimated || {})[r.name] || null) : null;
+    if (est) t = num(est['forudsagt']);
     const fc = (pa.rooms_forecast || {})[r.name] || null; const pl = pa.plan || [];
     const chk = (pa.rooms_check || {})[r.name] || null;
     let low = null, lowT = null;
@@ -119,9 +123,12 @@
     const valve = a.telestat || null;
     const vs = valve === 'altid åben' ? 'on' : valve ? (st(h, valve) || {}).state : null;
     const passive = a.i_plan === false && !valve && r.src.kind === 'hydronic';
-    return { r, a, tE, t, fc, f3: fc && fc.length > 2 ? fc[2] : null, f6: fc && fc.length > 5 ? fc[5] : null, low, lowT, chk, status, cls, valve, vs, passive };
+    return { r, a, tE, t, est, fc, f3: fc && fc.length > 2 ? fc[2] : null, f6: fc && fc.length > 5 ? fc[5] : null, low, lowT, chk, status, cls, valve, vs, passive };
   }
-  const statusTxt = (d) => (!d.chk ? (d.fc ? 'tjekkes efter 6 t' : 'ingen forudsigelse') : d.status === 'ramt' ? 'ramt' : `${d.status} ${sgn(d.chk['afvigelse'])}`);
+  // Rummets temperatur nu som tekst: målt, eller »≈« forudsagt, når føleren er væk
+  const tTxt = (d) => (d.t === null ? '–' : `${d.est ? '≈' : ''}${fmt(d.t)} °C`);
+  const estTip = (d) => (d.est ? `forudsagt – føleren har ikke målt siden ${whenM(d.est['sidste_måling'])}; planen bruger forudsigelsen` : '');
+  const statusTxt = (d) => (d.est ? 'uden måling' : !d.chk ? (d.fc ? 'tjekkes efter 6 t' : 'ingen forudsigelse') : d.status === 'ramt' ? 'ramt' : `${d.status} ${sgn(d.chk['afvigelse'])}`);
   // Hvor meget et rum varmer eller køler sine naborum lige nu (fx en kælder under et køkken)
   function pulls(h, vm, r, t) {
     let best = null;
@@ -213,7 +220,7 @@
         for (const d of ds) {
           const a = d.a; const per = a.varmekilder_grader_pr_kwh || {};
           o += `<tr><td><span class="v" data-e="${esc(d.r.model)}">${esc(d.r.name)}</span>${d.chk && d.chk.flag ? `<span class="flag" data-e="${esc(d.r.model)}" title="afviger mere end dobbelt så meget som normalt">!</span>` : ''}</td>`
-            + `<td class="n">${M(h, d.tE, 1, '°C', d.cls)}</td>`
+            + `<td class="n">${d.est ? `<span class="v amber" data-e="${esc(d.tE)}" title="${esc(estTip(d))}">${tTxt(d)}</span>` : M(h, d.tE, 1, '°C', d.cls)}</td>`
             + `<td class="n">${d.chk ? `<span title="${esc(String(d.chk.grundlag || '').startsWith('målt') ? `regnet med ${d.chk.grundlag === 'målt el' ? 'den målte el' : 'den målte varme'} · planen ventede ${fmt(d.chk.ventet_med_plan)} °C` : 'regnet med planens varme')}">${fmt(d.chk.ventet)}</span>` : '–'}</td><td class="${d.cls}">${statusTxt(d)}</td>`
             + `<td class="n">${fmt(d.f3)}</td><td class="n">${fmt(d.f6)}</td>`;
           if (!compact) {
@@ -575,6 +582,7 @@
         if (a.inputs_ok === false) w.push(['❗', `${s.name}: planen mangler ${(a.missing || []).join(', ')}`]);
         if (a.safety) w.push(['❗', `${s.name}: nødplan uden priser`]);
         if ((a.rooms_held || []).length) w.push(['⚠️', `${s.name}: bruger sidst kendte temperatur for ${a.rooms_held.join(', ')} (føleren svarer ikke)`]);
+        for (const [r, e] of Object.entries(a.rooms_estimated || {})) w.push(['❗', `Mangler data: ${r} har ikke målt siden ${whenM(e['sidste_måling'])} (${e.minutter} min.) – planen bruger forudsigelsen ≈${fmt(e['forudsagt'])} °C. Tjek føleren.`]);
         if ((a.rooms_skipped || []).length) w.push(['❗', `${s.name}: ${a.rooms_skipped.join(', ')} er ikke med i planen (føler eller rummodel mangler)`]);
         const ca = at(h, s.e('command')); if (ca.within_limits === false) w.push(['⚠️', `${s.name}: styringen har i dag ${ca.writes_today} skrivninger og ${ca.switches_today} tænd/sluk (grænse 20 og 8)`]);
         for (const [r, k] of Object.entries(a.rooms_check || {})) if (k.flag) w.push(['❗', `${r}: ${fmt(k['målt'])} °C, ventet ${fmt(k.ventet)} °C – åben dør eller vindue?`]);
@@ -583,7 +591,12 @@
       if (D.differs && !this._c.dry_run) w.push(['⚠️', 'Varmepumpen følger ikke planen']);
       const ids = [...Object.entries(D.f).filter(([k, v]) => typeof v === 'string' && v.includes('.') && !k.endsWith('_attribute')).map(([, v]) => v),
         D.outdoor, ...vm.rooms.map((r) => at(h, r.model)['temperaturføler'])].filter(Boolean);
-      const bad = [...new Set(ids)].filter((e) => { const s = st(h, e); return !s || ['unavailable', 'unknown'].includes(s.state); });
+      // Datapunkter væk i over 30 min. står for sig (»Mangler data«); resten under »Svarer ikke«
+      const md = at(h, vm.e('missing_data')); const out = md['udeføler'];
+      if (out) w.push(['❗', `Mangler data: udeføleren har ikke målt ${out['sidste_måling'] ? 'siden ' + whenM(out['sidste_måling']) : 'endnu'} – planen bruger ${out.bruger}. Tjek føleren.`]);
+      for (const [r, x] of Object.entries(md.rum || {})) if (x['forudsagt'] === null || x['forudsagt'] === undefined) w.push(['❗', `Mangler data: ${r} har ikke målt ${x['sidste_måling'] ? 'siden ' + whenM(x['sidste_måling']) : 'endnu'} og kan ikke forudsiges – rummet er ude af planen. Tjek føleren.`]);
+      const known = new Set([...Object.values(md.rum || {}).map((x) => x['føler']), out && out['føler']].filter(Boolean));
+      const bad = [...new Set(ids)].filter((e) => { const s = st(h, e); return !known.has(e) && (!s || ['unavailable', 'unknown'].includes(s.state)); });
       if (bad.length) w.push(['❗', 'Svarer ikke: ' + bad.map((e) => (at(h, e).friendly_name || e)).join(', ')]);
       for (const x of this._c.alerts || []) { const s = st(h, x.entity); if (s && s.state === String(x.state ?? 'on')) w.push([x.icon || '⚠️', x.text || x.entity]); }
       return w.length ? w.map(([i, t]) => `<div>${i} ${esc(t)}</div>`).join('') : '<div>✅ Ingen afvigelser</div>';
@@ -643,13 +656,13 @@
         if (flag) g += TX(x + 30 + d.r.name.length * 9.5, y + (two ? 20 : 24), '!', 'flg', nameEx);
         if (sub1) g += TX(x + 22, y + 37, sub1, 'vt');
         g += TX(x + 22, y + (two ? 51 : 41), sub2, 'vt', col ? ` style="fill:${col}"` : '');
-        g += TX(x + 215, y + ht / 2 + 8, d.t === null ? '–' : `${fmt(d.t)} °C`, 'rt c', ` data-e="${esc(d.tE)}"${col ? ` style="fill:${col}"` : ''}`);
+        g += TX(x + 215, y + ht / 2 + 8, tTxt(d), 'rt c', ` data-e="${esc(d.tE)}"${d.est ? ` style="fill:${YE}"` : col ? ` style="fill:${col}"` : ''}`);
         fc.forEach((s, i) => { g += TX(x + w - 12, y + ht / 2 - 4 + i * 17, s, 'vt r', nameEx); });
       } else {
         g += TX(x + 16, y + 26, d.r.name, 'rn', nameEx);
         if (flag) g += TX(x + 24 + d.r.name.length * 9.5, y + 26, '!', 'flg', nameEx);
         if (sub1) g += TX(x + w - 12, y + 26, sub1.replace('telestat ', ''), 'vt r');
-        g += TX(x + 16, y + 58, d.t === null ? '–' : `${fmt(d.t)} °C`, 'rt', ` data-e="${esc(d.tE)}"${col ? ` style="fill:${col}"` : ''}`);
+        g += TX(x + 16, y + 58, tTxt(d), 'rt', ` data-e="${esc(d.tE)}"${d.est ? ` style="fill:${YE}"` : col ? ` style="fill:${col}"` : ''}`);
         if (fc.length) g += TX(x + w - 12, y + 56, `${fmt(d.f3)} → ${fmt(d.f6)}`, 'vt r', nameEx);
         g += TX(x + 16, y + 80, sub2, 'vt', col ? ` style="fill:${col}"` : '');
       }

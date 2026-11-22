@@ -196,6 +196,11 @@
       "red_allowance": {
         "name": "May drop below minimum in blocked hours"
       }
+    },
+    "binary_sensor": {
+      "missing_data": {
+        "name": "Missing data"
+      }
     }
   },
   "config_subentries": {
@@ -336,6 +341,20 @@
         "hydronic": "Air-to-water / hydronic",
         "air_air": "Air-to-air"
       }
+    }
+  },
+  "issues": {
+    "missing_room": {
+      "title": "{name}: no measurement since {since}",
+      "description": "The temperature sensor {entity} has not reported a value since {since}. The plan and the recommended control now use the room's forecast, calculated from the last measurement with the heat actually delivered. Check the sensor (battery, connection or cloud service). This message disappears when the sensor measures again."
+    },
+    "missing_room_unplanned": {
+      "title": "{name}: no measurement since {since}",
+      "description": "The temperature sensor {entity} has not reported a value since {since}, and the room cannot be forecast (no earlier measurement or no room model yet). The room is left out of the plan until it measures again. Check the sensor (battery, connection or cloud service)."
+    },
+    "missing_outdoor": {
+      "title": "Outdoor sensor: no measurement since {since}",
+      "description": "The outdoor sensor {entity} has not reported a value since {since}. The plan uses the weather forecast for the current hour. Check the sensor. This message disappears when the sensor measures again."
     }
   }
 }

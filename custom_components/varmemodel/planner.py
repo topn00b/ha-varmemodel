@@ -41,7 +41,8 @@ class PlanRoom:
     margin: float = 0.3  # usikkerhed (°C) – rummet skal holdes over min + margin
     accuracy: float = 0.0  # rummodellens ærlige præcision (°C) uden loft – tjekkets afvigelsesgrænse
     neighbours: list[tuple[float, float]] = field(default_factory=list)  # (°C pr. time pr. grad, naboens temperatur)
-    held: bool = False  # temperaturen er den sidst kendte (føleren er væk lige nu)
+    held: bool = False  # temperaturen er ikke målt nu: den sidst kendte eller forudsagt (føleren er væk)
+    estimated: bool = False  # føleren har været væk i over 30 min.: temperaturen er forudsagt fra sidste måling
 
 
 @dataclass
@@ -97,6 +98,28 @@ def simulate_rooms(rooms: list[PlanRoom], hours: list[PlanHour], q: list[float],
             series.append(round(t, 2))
         out[r.name] = series
     return out
+
+
+def estimate_room(r: PlanRoom, t0: float, ts0: float, end: float, q5: dict[int, float], out5: dict[int, float],
+                  t_out: float) -> float:
+    """Rummets temperatur ved ``end``, regnet frem fra sidste måling ``t0`` (kl. ``ts0``) i 5-minutters trin.
+
+    Samme rummodel som planen: varme nu pr. kWh i trinnet, gulvets forsinkede varme fra 6 timer før, afkøling mod
+    ude, gratis varme og naboer (timeleddene × 5/60). ``q5`` er kWh pr. 5-minutters trin (trinnets start, sekunder),
+    ``out5`` udetemperaturen pr. trin (ellers ``t_out``). Et trin uden måling af tilførslen tæller som 0 kWh."""
+    step = 300
+    t, ts = t0, ts0
+    while ts < end - 1:
+        b = int(ts // step * step)
+        nxt = min(b + step, end)
+        f = (nxt - ts) / step  # andel af trinnet: det første og det sidste kan være delvise
+        q = max(q5.get(b, 0.0), 0.0) * f
+        qd = max(q5.get(b - 6 * 3600, 0.0), 0.0) * f
+        h = f * step / 3600
+        t = (t + r.heat_now * q + r.heat_delayed * qd
+             + (r.cool_per_hk * (out5.get(b, t_out) - t) + r.free_per_h + sum(k * (tn - t) for k, tn in r.neighbours)) * h)
+        ts = nxt
+    return t
 
 
 def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,

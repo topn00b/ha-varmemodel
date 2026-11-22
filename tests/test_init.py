@@ -321,7 +321,10 @@ async def test_replan_with_prices_blocks_and_rooms(ha: HomeAssistant) -> None:
 
 
 async def test_replan_holds_last_known_room_temperature(ha: HomeAssistant) -> None:
-    """Falder en rumføler ud, bruges den sidst kendte værdi i højst 2 timer. Imens logges og tjekkes rummet ikke."""
+    """Falder en rumføler ud, bruges den sidst kendte værdi i op til 30 min., derefter forudsigelsen – og »Mangler data«
+    slår til med en reparation. Imens logges og tjekkes rummet ikke. Måler føleren igen, forsvinder alarmen."""
+    from homeassistant.helpers import issue_registry as ir
+
     now = time.time()
     h0 = int(now // 3600 * 3600)
     loc = dt_util.get_default_time_zone()
@@ -356,10 +359,65 @@ async def test_replan_holds_last_known_room_temperature(ha: HomeAssistant) -> No
     await ha.async_block_till_done()
     st = next(s for s in ha.states.async_all("sensor") if s.entity_id.endswith("plan_now"))
     assert st.attributes["rooms_held"] == ["Stue"]
-    # Mere end 2 timer gammel: rummet udelades
-    c.last_known["sensor.rum_1"][1] -= 3 * 3600
+    flag = lambda: next(s for s in ha.states.async_all("binary_sensor") if s.entity_id.endswith("missing_data"))  # noqa: E731
+    issues = lambda: [i for d, i in ir.async_get(ha).issues if d == DOMAIN]  # noqa: E731
+    assert flag().state == "off" and not issues()  # kortvarigt væk: ingen alarm
+    # Væk i 45 min.: rummet regnes frem fra sidste måling med den målte varme (6 kWh i timen), og planen kører videre på det
+    c._started -= 3600  # ude af de første 10 min. efter start
+    c.last_known["sensor.rum_1"][1] -= 45 * 60
+    b0 = int(now // 300 * 300)
+    q5 = {b0 - k * 300: 0.5 for k in range(0, 100)}
+    c._recent5_sync = lambda s, a, b: (q5, {k: 2.0 for k in q5})
     await c.async_replan()
-    assert c.plans[hyd]["rooms_skipped"] == ["Stue"] and not c.plans[hyd]["rooms_held"]
+    await ha.async_block_till_done()
+    p = c.plans[hyd]
+    assert p["rooms_planned"] == ["Stue"] and not p["rooms_skipped"] and not p["rooms_held"]
+    est = p["rooms_estimated"]["Stue"]
+    # 45 min.: 4,5 kWh × 0,03 + forsinket 4,5 kWh × 0,02 − afkøling 0,005 × 18,5 × 0,75 ≈ +0,16 °C
+    assert 20.6 < est["forudsagt"] < 20.75 and est["minutter"] >= 45
+    assert "Stue" not in (c.fc_log.get(str(h0)) or {})
+    assert c.missing_data["rum"]["Stue"]["bruger"] == "forudsigelsen"
+    assert flag().state == "on" and flag().attributes["rum"]["Stue"]["føler"] == "sensor.rum_1"
+    assert issues() == [f"missing_{e.entry_id}_sensor.rum_1"]
+    assert ir.async_get(ha).async_get_issue(DOMAIN, issues()[0]).translation_key == "missing_room"
+    # Føleren måler igen: forudsigelsen og alarmen forsvinder
+    ha.states.async_set("sensor.rum_1", "20.7")
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert not c.plans[hyd]["rooms_estimated"] and flag().state == "off" and not issues()
+
+
+async def test_outdoor_missing_uses_forecast_and_flags(ha: HomeAssistant) -> None:
+    """Udeføleren væk i over 30 min.: planen bruger vejrudsigten (her ingen: 5 °C), og »Mangler data« slår til."""
+    from homeassistant.helpers import issue_registry as ir
+
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "unavailable")
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub(HYD, "source")])
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c.last_known["sensor.ude"] = [3.0, now - 40 * 60]
+    await c.async_replan()
+    assert not c.missing_data  # de første 10 min. efter start: ingen alarm
+    c._started -= 3600
+    await c.async_replan()
+    await ha.async_block_till_done()
+    out = c.missing_data["udeføler"]
+    assert out["føler"] == "sensor.ude" and out["bruger"] == "5 °C (ingen vejrudsigt)" and out["minutter"] >= 40
+    iid = f"missing_{e.entry_id}_sensor.ude"
+    assert ir.async_get(ha).async_get_issue(DOMAIN, iid).translation_key == "missing_outdoor"
+    ha.states.async_set("sensor.ude", "2.5")
+    await c.async_replan()
+    assert "udeføler" not in c.missing_data and ir.async_get(ha).async_get_issue(DOMAIN, iid) is None
 
 
 async def test_replan_uses_measured_heat(ha: HomeAssistant) -> None:

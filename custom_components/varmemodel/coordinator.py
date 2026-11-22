@@ -16,6 +16,7 @@ from homeassistant.components.recorder import get_instance, history
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, State, callback
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_call_later, async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -41,7 +42,7 @@ from .calibration import (
 )
 from .command import Command, step
 from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
-from .planner import PlanHour, PlanRoom, SourceModel, make_plan, simulate_rooms
+from .planner import PlanHour, PlanRoom, SourceModel, estimate_room, make_plan, simulate_rooms
 from .const import (
     BACKFILL_DAYS,
     CALIB_VERSION,
@@ -109,7 +110,11 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
 # Opsamlede felter der hører til en bestemt varmekilde (resten hører til huset)
-HOLD_S = 2 * 3600  # rum- og udeføler: den sidst kendte værdi bruges i højst 2 timer, fx når en skytjeneste er nede
+# Rum- og udeføler: den sidst kendte værdi bruges i op til 30 min. (fx når en skytjeneste er kortvarigt nede).
+# Derefter forudsiges rummet fra sidste måling med den målte tilførsel (udeføleren: vejrudsigten), og »Mangler data« slår til.
+HOLD_S = 30 * 60
+EST_MARGIN_MAX = 1.0  # forudsagte rum: usikkerheden vokser med rummets præcision pr. 6 timer uden måling, højst 1 °C
+STARTUP_GRACE_S = 10 * 60  # ingen »Mangler data« de første 10 min. efter start (forudsigelsen bruges dog)
 SOURCE_FIELDS = ("comp", "comp_n", "dhw", "dhw_n", "df", "df_n", "sp", "off", "ut")
 
 
@@ -183,6 +188,9 @@ class VarmemodelCoordinator:
         self.commands: dict[str, dict[str, Any]] = {}  # anbefalet styring pr. vandbåren kilde
         self.plan_stats: dict[str, Any] = {}  # andel kvarterer med frisk plan i dag
         self.last_known: dict[str, list[float]] = {}  # føler -> [værdi, tidspunkt]: bro over korte udfald
+        self.estimates: dict[str, dict[str, Any]] = {}  # rumføler væk i over 30 min. -> forudsagt temperatur nu
+        self.missing_data: dict[str, Any] = {}  # datapunkter der har manglet i over 30 min. (»Mangler data«)
+        self._started = time.time()
         self.device_ids: dict[str | None, str] = {}  # underpunkt (None = huset) -> enheds-id i HA
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[CALLBACK_TYPE] = []
@@ -301,6 +309,7 @@ class VarmemodelCoordinator:
         for u in self._unsubs:
             u()
         self._unsubs.clear()
+        self._sync_issues({})
         await self._save()
 
     def _data(self) -> dict[str, Any]:
@@ -804,9 +813,17 @@ class VarmemodelCoordinator:
             for k, a in acc.items()
         }
 
-    def _plan_room(self, r: dict[str, Any], s: SourceState, t_min: float) -> PlanRoom | None:
-        """Rummets model til planen og forudsigelsen (None hvis rummet mangler måling eller model for kilden)."""
+    def _plan_room(self, r: dict[str, Any], s: SourceState, t_min: float, start: float | None = None) -> PlanRoom | None:
+        """Rummets model til planen og forudsigelsen (None hvis rummet mangler måling eller model for kilden).
+
+        Har føleren været væk i over 30 min., bruges den forudsagte temperatur (``estimates``). ``start`` giver
+        modellen med en bestemt starttemperatur (til at regne rummet frem fra sidste måling)."""
         t_room, held = self._held_num(r["key"])
+        est = None
+        if start is not None:
+            t_room, held = start, True
+        elif t_room is None and (est := self.estimates.get(r["key"])) is not None:
+            t_room, held = float(est["t"]), True
         fitd = self.rooms.get(r["key"]) or {}
         ex = fitd.get("extra") or {}
         src = (ex.get("sources") or {}).get(s.name)
@@ -815,17 +832,112 @@ class VarmemodelCoordinator:
         nbs = []
         for nb_name, nb in (ex.get("neighbours") or {}).items():
             nb_eid = next((n for n in r.get("neighbours") or [] if self._label(n) == nb_name), None)
-            tn, _ = self._held_num(nb_eid)
-            if tn is not None:
+            if (tn := self._nb_value(nb_eid)) is not None:
                 nbs.append((float(nb.get("per_h_k") or 0.0), tn))
         acc = max(float(ex.get("accuracy_6h_k") or 0.3), float(ex.get("validated_6h_k") or 0.0))
+        margin = min(0.6, max(0.2, acc)) + (0.2 if (fitd.get("r2") or 0) < 0.3 else 0.0)
+        if est is not None:
+            # Uden måling vokser usikkerheden: + rummets præcision for hver 6 timer ud over de første 6, højst 1 °C
+            blind_h = (time.time() - float(est["since"])) / 3600
+            margin = max(margin, min(EST_MARGIN_MAX, margin + acc * max(0.0, blind_h / 6 - 1)))
         return PlanRoom(
             name=r["name"] or r["key"], t_now=t_room, t_min=t_min,
             heat_now=float(src.get("now") or 0.0), heat_delayed=float(src.get("delayed") or 0.0),
             cool_per_hk=float(fitd["value"]) / 20, free_per_h=float(ex.get("free_heat_k_per_day") or 0.0) / 24,
-            margin=min(0.6, max(0.2, acc)) + (0.2 if (fitd.get("r2") or 0) < 0.3 else 0.0), accuracy=acc,
-            neighbours=nbs, held=held,
+            margin=margin, accuracy=acc, neighbours=nbs, held=held, estimated=est is not None,
         )
+
+    def _nb_value(self, eid: str | None) -> float | None:
+        """Naboens temperatur: målt eller holdt, ellers forudsagt (et rum uden føler), ellers sidst kendte."""
+        tn, _ = self._held_num(eid)
+        if tn is None and eid:
+            if (e := self.estimates.get(eid)) is not None:
+                tn = float(e["t"])
+            elif lk := self.last_known.get(eid):
+                tn = float(lk[0])
+        return tn
+
+    def _recent5_sync(self, s: SourceState, start: int, end: int) -> tuple[dict[int, float], dict[int, float]]:
+        """Kildens tilførsel (som ``_recent_sync``) og udetemperaturen pr. 5 minutter i [start, end)."""
+        heat, outdoor = s.eid(CONF_HEAT) or s.eid(CONF_ELECTRICITY), self._id(CONF_OUTDOOR)
+        if not heat:
+            return {}, {}
+        stats = statistics_during_period(self.hass, dt_util.utc_from_timestamp(start), dt_util.utc_from_timestamp(end),
+                                         {x for x in (heat, outdoor) if x}, "5minute", {"energy": "kWh", "temperature": "°C"},
+                                         {"change", "mean"})
+        q: dict[int, float] = {}
+        for x in stats.get(heat, []):
+            if (v := _num(x.get("change"))) is not None:
+                b = int(_ts(x["start"]))
+                dhw = ((s.collected.get(str(b // 3600 * 3600)) or {}).get("dhw") or 0.0) if s.eid(CONF_HEAT) else 0.0
+                q[b] = max(v, 0.0) * (1 - min(dhw, 60.0) / 60)
+        out = {int(_ts(x["start"])): v for x in (stats.get(outdoor, []) if outdoor else []) if (v := _num(x.get("mean"))) is not None}
+        return q, out
+
+    async def _estimate_missing(self, now: float, t_out: float | None) -> None:
+        """Rum hvis føler har været væk i over 30 min.: temperaturen nu regnes frem fra sidste måling med den
+        tilførsel, kilden faktisk gav. Planen og den anbefalede styring kører så videre på forudsigelsen."""
+        todo: dict[str, list[dict[str, Any]]] = {}
+        for r in self.rooms_cfg:
+            lk = self.last_known.get(r["key"])
+            if self._state_num(r["key"]) is not None or not lk or now - float(lk[1]) <= HOLD_S:
+                continue
+            if (s := self.room_source(r)) is not None:
+                todo.setdefault(s.sid, []).append(r)
+        est: dict[str, dict[str, Any]] = {}
+        for sid, rs in todo.items():
+            s = self.sources[sid]
+            first = min(float(self.last_known[r["key"]][1]) for r in rs)
+            try:
+                q5, out5 = await get_instance(self.hass).async_add_executor_job(self._recent5_sync, s, int(first) - 6 * 3600 - 300, int(now))
+            except Exception:  # noqa: BLE001 – uden statistik regnes uden tilførsel (rummet køler: planen varmer hellere for meget)
+                q5, out5 = {}, {}
+            # De seneste 5-minutters tal kommer få minutter forsinket: regn kun frem til det sidste, medmindre de mangler i over 15 min.
+            end = now if not q5 or now - (max(q5) + 300) > 900 else min(now, max(q5) + 300)
+            for r in rs:
+                v0, ts0 = (float(x) for x in self.last_known[r["key"]])
+                if (pr := self._plan_room(r, s, -99.0, start=v0)) is None:
+                    continue
+                t = estimate_room(pr, v0, ts0, end, q5, out5, t_out if t_out is not None else 5.0)
+                est[r["key"]] = {"t": round(t, 2), "since": ts0, "name": r["name"] or r["key"]}
+        self.estimates = est
+
+    def _flag_missing(self, now: float, outdoor: dict[str, Any] | None) -> None:
+        """»Mangler data«: rum- og udeføler der har været væk i over 30 min. Hver får en reparation i HA, så den kan udbedres."""
+        rooms: dict[str, dict[str, Any]] = {}
+        if now - self._started < STARTUP_GRACE_S:
+            return  # lige efter en genstart: andre integrationer (fx en skytjeneste) er måske ikke klar endnu
+        for r in self.rooms_cfg:
+            eid = r["key"]
+            if self._state_num(eid) is not None:
+                continue
+            lk = self.last_known.get(eid)
+            if (lk and now - float(lk[1]) <= HOLD_S) or (not lk and now - self._started <= HOLD_S):
+                continue  # kortvarigt væk, eller lige startet: ingen alarm endnu
+            e = self.estimates.get(eid)
+            rooms[r["name"] or eid] = {
+                "føler": eid, "sidste_måling": _ts_local_iso(float(lk[1])) if lk else None,
+                "minutter": round((now - float(lk[1])) / 60) if lk else None, "forudsagt": e["t"] if e else None,
+                "bruger": "forudsigelsen" if e else "intet – rummet er ikke med i planen",
+            }
+        self.missing_data = {"rum": rooms, **({"udeføler": outdoor} if outdoor else {})}
+        want: dict[str, tuple[str, dict[str, str]]] = {}
+        for name, x in rooms.items():
+            want[x["føler"]] = ("missing_room" if x["forudsagt"] is not None else "missing_room_unplanned",
+                                {"name": name, "entity": x["føler"], "since": _hhmm(x["sidste_måling"])})
+        if outdoor:
+            want[outdoor["føler"]] = ("missing_outdoor", {"entity": outdoor["føler"], "since": _hhmm(outdoor["sidste_måling"])})
+        self._sync_issues(want)
+
+    def _sync_issues(self, want: dict[str, tuple[str, dict[str, str]]]) -> None:
+        """Én reparation pr. manglende datapunkt; den forsvinder, når føleren måler igen."""
+        prefix = f"missing_{self.entry.entry_id}_"
+        for eid, (key, ph) in want.items():
+            ir.async_create_issue(self.hass, DOMAIN, prefix + eid, is_fixable=False, severity=ir.IssueSeverity.WARNING,
+                                  translation_key=key, translation_placeholders=ph)
+        for dom, iid in list(ir.async_get(self.hass).issues):
+            if dom == DOMAIN and iid.startswith(prefix) and iid[len(prefix):] not in want:
+                ir.async_delete_issue(self.hass, DOMAIN, iid)
 
     def _yesterday(self, day_of: Callable[[int], str], day: str) -> dict[str, dict[str, Any]]:
         """Gårsdagen time for time: det planlagte (ved timens start) mod det, der faktisk skete."""
@@ -976,8 +1088,17 @@ class VarmemodelCoordinator:
                 fc = hourly_forecast(((resp or {}).get(w) or {}).get("forecast") or [], self._parse_local)
             except Exception:  # noqa: BLE001
                 missing.append("vejrudsigt")
-        t_now, _ = self._held_num(self._id(CONF_OUTDOOR))
+        out_eid = self._id(CONF_OUTDOOR)
+        t_now, _ = self._held_num(out_eid)
+        out_flag: dict[str, Any] | None = None
+        if t_now is None and out_eid and ((lk := self.last_known.get(out_eid)) or now - self._started > HOLD_S):
+            # Udeføleren har været væk i over 30 min.: vejrudsigten for timen tager over
+            t_now = fc.get(h0)
+            out_flag = {"føler": out_eid, "sidste_måling": _ts_local_iso(float(lk[1])) if lk else None,
+                        "minutter": round((now - float(lk[1])) / 60) if lk else None, "forudsagt": t_now,
+                        "bruger": "vejrudsigten" if t_now is not None else "5 °C (ingen vejrudsigt)"}
         hours, safety = build_hours(h0, prices, fc, blocks, t_now, PLAN_HORIZON_H)
+        await self._estimate_missing(now, t_now)
         # »Jeg fryser«: gælder fra den blev slået til, i højst boost_hours timer og kun til næste blokerede periode starter
         boost_on, boost_h, boost_note = False, 0, None
         if (be := self._id(CONF_BOOST_ENTITY)) and (bs := self.hass.states.get(be)) and bs.state == "on":
@@ -1119,7 +1240,13 @@ class VarmemodelCoordinator:
             plans[sid] = {"hours": p.hours, "rooms": fc_all, "rooms_planned": [r.name for r in rooms], "cautious": cold, "safety": safety,
                           "rooms_band": {r.name: round(r.margin, 2) for r in show}, "demand_kwh": p.demand_kwh, "heat_kwh": p.heat_kwh,
                           "el_kwh": p.el_kwh, "cost_kr": p.cost_kr, "reason": p.reason, "warnings": p.warnings,
-                          "target": round(target, 1), "rooms_skipped": skipped, "rooms_held": held, "boost": boost_on, "boost_until": boost_note,
+                          "target": round(target, 1), "rooms_skipped": skipped,
+                          "rooms_held": sorted({r.name for r in show if r.held and not r.estimated}),
+                          "rooms_estimated": {r.name: {"forudsagt": round(r.t_now, 2), "sidste_måling": _ts_local_iso(float(e["since"])),
+                                                       "minutter": round((now - float(e["since"])) / 60), "usikkerhed": round(r.margin, 2)}
+                                              for r in show if r.estimated
+                                              for e in [next((x for x in self.estimates.values() if x["name"] == r.name), None)] if e},
+                          "boost": boost_on, "boost_until": boost_note,
                           "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
                           "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
             # Anbefalet styring: planens ønske nu omsat efter reglerne, der skåner varmepumpen
@@ -1128,6 +1255,7 @@ class VarmemodelCoordinator:
                        bool(cur and cur["heat_kw"] > 0), cur["shift"] if cur else None, bool(cur and cur["blocked"]))
             self.commands[sid] = cmd.dump()
         self.plans = plans
+        self._flag_missing(now, out_flag)
         if len(hours) < 6:
             missing.append("for få timer med pris")
         # P2: andel af dagens kvarterer med en frisk plan med alle input
@@ -1153,3 +1281,12 @@ def _clock(ts: int) -> str:
 
 def _ts_local_iso(ts: float) -> str:
     return dt_util.as_local(dt_util.utc_from_timestamp(ts)).isoformat()
+
+
+def _hhmm(iso: str | None) -> str:
+    """Kort lokal tid til beskeder: »HH:MM« i dag, ellers »d/m HH:MM«."""
+    d = dt_util.parse_datetime(iso) if iso else None
+    if d is None:
+        return "–"
+    d = dt_util.as_local(d)
+    return d.strftime("%H:%M") if d.date() == dt_util.now().date() else f"{d.day}/{d.month} {d:%H:%M}"

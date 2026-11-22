@@ -196,6 +196,11 @@
       "red_allowance": {
         "name": "Må falde under min. i blokerede timer"
       }
+    },
+    "binary_sensor": {
+      "missing_data": {
+        "name": "Mangler data"
+      }
     }
   },
   "config_subentries": {
@@ -336,6 +341,20 @@
         "hydronic": "Luft-vand / vandbåren",
         "air_air": "Luft-luft"
       }
+    }
+  },
+  "issues": {
+    "missing_room": {
+      "title": "{name}: ingen måling siden {since}",
+      "description": "Temperaturføleren {entity} har ikke målt siden {since}. Planen og den anbefalede styring bruger nu rummets forudsigelse, regnet frem fra sidste måling med den varme, der faktisk kom. Tjek føleren (batteri, forbindelse eller skytjeneste). Beskeden forsvinder, når føleren måler igen."
+    },
+    "missing_room_unplanned": {
+      "title": "{name}: ingen måling siden {since}",
+      "description": "Temperaturføleren {entity} har ikke målt siden {since}, og rummet kan ikke forudsiges (ingen tidligere måling eller ingen rummodel endnu). Rummet er ude af planen, til føleren måler igen. Tjek føleren (batteri, forbindelse eller skytjeneste)."
+    },
+    "missing_outdoor": {
+      "title": "Udeføler: ingen måling siden {since}",
+      "description": "Udeføleren {entity} har ikke målt siden {since}. Planen bruger vejrudsigten for den aktuelle time. Tjek føleren. Beskeden forsvinder, når føleren måler igen."
     }
   }
 }

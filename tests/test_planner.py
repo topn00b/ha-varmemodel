@@ -158,3 +158,21 @@ def test_dst_prices_are_keyed_in_utc() -> None:
     p = hourly_prices({"timer": items}, None, parse_local)
     hs, _ = build_hours(min(p), p, {}, {}, 3.0, 48)
     assert all(b.ts - a.ts == 3600 for a, b in zip(hs, hs[1:])) and len(hs) == 4
+
+
+def test_estimate_room_matches_hourly_model() -> None:
+    """Rummet regnet frem i 5-minutters trin giver det samme som planens timetrin (føleren væk)."""
+    from custom_components.varmemodel.planner import estimate_room, simulate_rooms
+
+    r = PlanRoom(name="Stue", t_now=20.0, t_min=19.0, heat_now=0.04, heat_delayed=0.03, cool_per_hk=0.006, free_per_h=0.01,
+                 neighbours=[(0.02, 22.0)])
+    t0 = 1_700_000_400  # på en timegrænse
+    q5 = {t0 + k * 300: 0.4 for k in range(-72, 36)}  # 4,8 kWh i timen, også 6 timer før (gulvets forsinkede varme)
+    out5 = {t0 + k * 300: 2.0 for k in range(-72, 36)}
+    hourly = simulate_rooms([r], [PlanHour(ts=t0 + i * 3600, price=1.0, t_out=2.0) for i in range(3)], [4.8] * 3, [4.8] * 6)["Stue"]
+    est = estimate_room(r, 20.0, t0, t0 + 3 * 3600, q5, out5, 5.0)
+    assert abs(est - hourly[2]) < 0.01
+    # Et delvist trin og trin uden måling: halvanden time, de sidste 30 min. uden tal = ingen tilførsel
+    q5b = {k: v for k, v in q5.items() if k < t0 + 3600}
+    est2 = estimate_room(r, 20.0, t0, t0 + 5400, q5b, out5, 5.0)
+    assert hourly[0] - 0.05 < est2 < hourly[1]

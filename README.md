@@ -128,10 +128,21 @@ Attributterne tæller pr. døgn skrivninger, tænd/sluk-skift og varme i blokere
 - Status er *ramt*, *over* eller *under*. Afviger et rum mere end grænsen, vises det som afvigelse.
 - *Ramt* er inden for rummets margen. *Grænsen* er 2 × rummets ærlige præcision, dvs. den største af fittets og den afprøvede. Margenens loft på 0,6 °C gælder kun planen, så et svagt rum (fx ±1,2 °C) ikke giver falske afvigelser.
 
-**Følere der falder ud:** svarer en rum- eller udeføler ikke, bruges den sidst kendte værdi i højst 2 timer. Det sker fx, når en skytjeneste er nede.
-- Rummet er stadig med i planen og står under *rooms_held* på *Plan nu*.
+**Følere der falder ud:** svarer en rum- eller udeføler ikke, bruges den sidst kendte værdi i op til 30 min. Korte udfald, fx når en skytjeneste er nede et øjeblik, giver ingen alarm. Rummet står under *rooms_held* på *Plan nu*.
+
+**Over 30 min. uden måling tager forudsigelsen over:**
+- Rummets temperatur regnes frem fra sidste måling i 5-minutters trin med den samme rummodel som planen. Den bygger på den varme eller el, kilden faktisk gav (5-minutters statistik), udetemperaturen og naboerne.
+- Planen og *Anbefalet styring* kører videre på forudsigelsen. Rummet står under *rooms_estimated* med forudsagt temperatur, sidste måling, minutter og usikkerhed.
+- Usikkerheden vokser, jo længere rummet er uden måling. For hver 6 timer ud over de første 6 lægges rummets præcision til, dog højst til 1 °C. Planen varmer derfor hellere lidt for meget end for lidt.
+- Udeføleren erstattes af vejrudsigten for den aktuelle time.
 - Imens logges og tjekkes rummets forudsigelse ikke, fordi startpunktet ikke er målt.
-- Efter 2 timer udelades rummet og står under *rooms_skipped*. Begge dele vises som afvigelse i kortene.
+
+**Mangler data** (problem-sensor på huset) slår til, så det kan udbedres hurtigst muligt:
+- Den er tændt, så længe et datapunkt har manglet i over 30 min. De første 10 min. efter en genstart slår den ikke til, fordi andre integrationer måske ikke er klar endnu. Attributterne viser hvert rum og udeføleren med føler, sidste måling, minutter og det, planen bruger i stedet.
+- Hvert manglende datapunkt får også en reparation under *Indstillinger → System → Reparationer*. Den forsvinder af sig selv, når føleren måler igen.
+- Brug sensoren i en automation, hvis du vil have besked på telefonen.
+- Kortene viser rummet med »≈« og en linje under afvigelser.
+- Et rum, der aldrig har målt eller ikke har en rummodel endnu, kan ikke forudsiges. Det udelades og står under *rooms_skipped*.
 
 **Huller og sommertid:**
 - Planen regner i UTC-timer.
