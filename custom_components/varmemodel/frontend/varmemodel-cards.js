@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.5.4';
+  const VERSION = '0.5.5';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -564,7 +564,7 @@
     alerts(h, vm, D) {
       const w = []; const now = Date.now();
       const sa = at(h, vm.status); const sst = (st(h, vm.status) || {}).state;
-      if (!['ok', 'frozen'].includes(sst)) w.push(['❗', `Varmemodel: ${STATUS[sst] || sst || 'mangler'}${sa.note ? ' – ' + sa.note : ''}`]);
+      if (!['ok', 'frozen'].includes(sst)) w.push([sst === 'partial' ? 'ℹ️' : '❗', `Varmemodel: ${STATUS[sst] || sst || 'mangler'}${sa.note ? ' – ' + sa.note : ''}`]);
       const lc = sa.seneste_kalibrering ? Date.parse(sa.seneste_kalibrering) : 0;
       if (!lc || now - lc > 26 * 3600e3) w.push(['❗', 'Varmemodel er ikke kalibreret i 26 timer']);
       for (const s of vm.sources.filter((x) => x.kind === 'hydronic')) {
@@ -572,6 +572,8 @@
         if (!up || now - up > 30 * 60e3) w.push(['❗', `${s.name}: planen er over 30 min. gammel`]);
         if (a.inputs_ok === false) w.push(['❗', `${s.name}: planen mangler ${(a.missing || []).join(', ')}`]);
         if (a.safety) w.push(['❗', `${s.name}: nødplan uden priser`]);
+        if ((a.rooms_held || []).length) w.push(['⚠️', `${s.name}: bruger sidst kendte temperatur for ${a.rooms_held.join(', ')} (føleren svarer ikke)`]);
+        if ((a.rooms_skipped || []).length) w.push(['❗', `${s.name}: ${a.rooms_skipped.join(', ')} er ikke med i planen (føler eller rummodel mangler)`]);
         const ca = at(h, s.e('command')); if (ca.within_limits === false) w.push(['⚠️', `${s.name}: styringen har i dag ${ca.writes_today} skrivninger og ${ca.switches_today} tænd/sluk (grænse 20 og 8)`]);
         for (const [r, k] of Object.entries(a.rooms_check || {})) if (k.flag) w.push(['❗', `${r}: ${fmt(k['målt'])} °C, ventet ${fmt(k.ventet)} °C – åben dør eller vindue?`]);
       }

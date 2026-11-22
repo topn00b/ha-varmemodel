@@ -278,3 +278,45 @@ async def test_replan_with_prices_blocks_and_rooms(ha: HomeAssistant) -> None:
     assert c.commands[hyd]["day"] and c.plan_meta["fresh_pct_today"] > 0
     cmd = next(s for s in ha.states.async_all("sensor") if "recommended_control" in s.entity_id)
     assert cmd.state in ("heat", "off") and cmd.attributes["within_limits"] is True
+
+
+async def test_replan_holds_last_known_room_temperature(ha: HomeAssistant) -> None:
+    """Falder en rumføler ud, bruges den sidst kendte værdi i højst 2 timer. Imens logges og tjekkes rummet ikke."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0 + (k % 6) * 0.3} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.5", {"timer": items})
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.rum_1", "20.5", {"state_class": "measurement"})
+    ha.states.async_set("input_number.min_1", "20")
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub(HYD, "source")])
+    e.add_to_hass(ha)
+    hyd = next(iter(e.subentries))
+    from homeassistant.config_entries import ConfigSubentry
+    ha.config_entries.async_add_subentry(e, ConfigSubentry(data={"name": "Stue", "temperature": "sensor.rum_1", "minimum_entity": "input_number.min_1",
+                                                                 "heat_source": hyd}, subentry_type="room", title="Stue", unique_id=None))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c.rooms["sensor.rum_1"] = {"value": 0.1, "extra": {"sources": {"Luft-vand": {"now": 0.03, "delayed": 0.02}}, "accuracy_6h_k": 0.2}}
+    await c.async_replan()
+    assert c.plans[hyd]["rooms_planned"] == ["Stue"] and not c.plans[hyd]["rooms_held"]
+    assert "Stue" in c.fc_log[str(h0)]
+    # Føleren falder ud: rummet planlægges stadig med 20,5 °C, men logges ikke som ny forudsigelse
+    ha.states.async_set("sensor.rum_1", "unavailable")
+    c.fc_log.clear()
+    await c.async_replan()
+    p = c.plans[hyd]
+    assert p["rooms_planned"] == ["Stue"] and p["rooms_held"] == ["Stue"] and not p["rooms_skipped"]
+    assert "Stue" not in (c.fc_log.get(str(h0)) or {})
+    await ha.async_block_till_done()
+    st = next(s for s in ha.states.async_all("sensor") if s.entity_id.endswith("plan_now"))
+    assert st.attributes["rooms_held"] == ["Stue"]
+    # Mere end 2 timer gammel: rummet udelades
+    c.last_known["sensor.rum_1"][1] -= 3 * 3600
+    await c.async_replan()
+    assert c.plans[hyd]["rooms_skipped"] == ["Stue"] and not c.plans[hyd]["rooms_held"]

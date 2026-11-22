@@ -122,6 +122,11 @@ Attributterne tæller pr. døgn skrivninger, tænd/sluk-skift og varme i blokere
 
 **Nødplan:** mangler elprisen helt, planlægges med flad pris, så rummene stadig holdes over komfortgulvet. Det står i begrundelsen, og *inputs_ok* er falsk.
 
+**Følere der falder ud:** svarer en rum- eller udeføler ikke, bruges den sidst kendte værdi i højst 2 timer. Det sker fx, når en skytjeneste er nede.
+- Rummet er stadig med i planen og står under *rooms_held* på *Plan nu*.
+- Imens logges og tjekkes rummets forudsigelse ikke, fordi startpunktet ikke er målt.
+- Efter 2 timer udelades rummet og står under *rooms_skipped*. Begge dele vises som afvigelse i kortene.
+
 **Huller og sommertid:**
 - Planen regner i UTC-timer.
 - Mangler prisen for én enkelt time, bruges snittet af nabotimerne. Det sker fx, når uret stilles tilbage, og to lokale timer hedder det samme.
