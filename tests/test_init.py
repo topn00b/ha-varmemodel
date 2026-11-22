@@ -522,3 +522,32 @@ async def test_check_limit_follows_honest_precision(ha: HomeAssistant) -> None:
     k = c.rooms_check["Loft"]
     assert k["grundlag"] == "planens varme" and k["afvigelse"] == 1.5
     assert k["grænse"] == 2.4 and k["status"] == "over" and k["flag"] is False
+
+
+async def test_cold_caution_setting(ha: HomeAssistant) -> None:
+    """Forsigtighed ved kulde: standard +10 % varmetab, når det er koldere end målt; 0 slår den fra."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub(HYD, "source")])
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    hyd = next(iter(e.subentries))
+    # Varmetabet er målt ned til 5 °C; i dag er det 2 °C (mere end 1 °C koldere)
+    c.sources[hyd].accepted["heat_loss"] = {"value": 100.0, "t_out_min": 5.0, "extra": {"gains_w": 0.0}}
+    await c.async_replan()
+    p = c.plans[hyd]
+    assert p["cautious"] is True and "+10 % varmetab" in p["reason"]
+    d10 = p["demand_kwh"]
+    await c.async_set_setting("cold_caution", 0)
+    await c.async_replan()
+    p = c.plans[hyd]
+    assert p["cautious"] is False and abs(d10 / p["demand_kwh"] - 1.1) < 0.01

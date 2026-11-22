@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.5.12';
+  const VERSION = '0.5.13';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -394,7 +394,7 @@
       }
       o += '<div class="h2">Planens indstillinger</div><div class="grid">';
       for (const [k, n, u] of [['max_pause', 'Maks. pause uden gulvvarme', 't'], ['comfort_offset', 'Komfort over komfortgulvet', '°C'], ['boost_delta', 'Jeg fryser hæver med', '°C'],
-        ['boost_hours', 'Jeg fryser gælder højst', 't'], ['red_allowance', 'Må falde i blokerede timer', '°C']]) {
+        ['boost_hours', 'Jeg fryser gælder højst', 't'], ['red_allowance', 'Må falde i blokerede timer', '°C'], ['cold_caution', 'Forsigtighed ved kulde', '%']]) {
         const e = vm.e(k); o += row(n, e ? `<span class="v" data-e="${esc(e)}">${fmt(sv(h, e))} ${u}</span>` : '–');
       }
       return o + '</div>';

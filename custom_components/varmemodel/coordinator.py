@@ -94,6 +94,7 @@ from .const import (
     PLAN_HORIZON_H,
     CONF_BOOST_HOURS,
     CONF_RED_ALLOWANCE,
+    CONF_COLD_CAUTION,
     CONF_MEASURES_CALENDAR,
     SETTINGS,
     DEFAULT_WINDOW_DAYS,
@@ -1157,12 +1158,13 @@ class VarmemodelCoordinator:
                 if r["in_plan"] and t_min is not None:
                     rooms.append(pr)
                     mins.append(t_min)
-            # Koldere end det, modellen er målt ved: forsigtig plan (+10 % varmetab, +0,2 °C margen i rummene)
+            # Koldere end det, modellen er målt ved: forsigtig plan (+ indstillingens % varmetab, +0,2 °C margen i rummene)
+            caution = self.setting(CONF_COLD_CAUTION)
             cold_lim = (a.get("heat_loss") or {}).get("t_out_min")
             coldest = min((x.t_out for x in hours), default=None)
-            cold = cold_lim is not None and coldest is not None and coldest < cold_lim - 1
+            cold = caution > 0 and cold_lim is not None and coldest is not None and coldest < cold_lim - 1
             if cold:
-                model.heat_loss_w_k *= 1.1
+                model.heat_loss_w_k *= 1 + caution / 100
                 for pr in show:
                     pr.margin += 0.2
             target = (sum(mins) / len(mins) + offset) if mins else 20.5
@@ -1231,7 +1233,8 @@ class VarmemodelCoordinator:
                                       "grænse": lim, "status": "ramt" if abs(dev) <= hit else ("over" if dev > 0 else "under"), "flag": abs(dev) > lim}
             self.rooms_check = checks
             if cold:
-                note = f"koldere end det kalibrerede område ({coldest:.0f} °C mod {cold_lim:.0f} °C) – planen er forsigtig"
+                note = (f"koldere end det kalibrerede område ({coldest:.0f} °C mod {cold_lim:.0f} °C) – "
+                        f"planen er forsigtig (+{caution:.0f} % varmetab)")
                 p.warnings.append(note)
                 p.reason += " – " + note
             if safety:

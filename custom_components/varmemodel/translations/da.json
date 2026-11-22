@@ -195,6 +195,9 @@
       },
       "red_allowance": {
         "name": "Må falde under min. i blokerede timer"
+      },
+      "cold_caution": {
+        "name": "Forsigtighed ved kulde"
       }
     },
     "binary_sensor": {

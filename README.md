@@ -101,7 +101,9 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 4. For lange pauser brydes med den billigste time.
 5. **Fremløb** = mål + effekt ÷ gulvets afgivelse, og **kurve-forskydning** = fremløb − varmekurven.
 
-**Indstillinger (tal-entiteter på huset):** *Maks. pause uden gulvvarme*, *Komfort over min.*, *»Jeg fryser« hæver målet*, *»Jeg fryser« gælder højst* (timer) og *Må falde under min. i blokerede timer*. De påvirker kun planen.
+**Indstillinger (tal-entiteter på huset):** *Maks. pause uden gulvvarme*, *Komfort over min.*, *»Jeg fryser« hæver målet*, *»Jeg fryser« gælder højst* (timer), *Må falde under min. i blokerede timer* og *Forsigtighed ved kulde* (%). De påvirker kun planen.
+
+**Forsigtighed ved kulde:** er vejrudsigten mere end 1 °C koldere end det laveste, varmetabet er målt ved, regnes der med så mange % større varmetab, og rummenes margen hæves 0,2 °C. Standard er 10 %, og 0 slår det fra.
 
 **»Jeg fryser«** gælder fra den slås til, i højst det valgte antal timer og kun til næste blokerede periode begynder. Der varmes aldrig i blokerede timer.
 

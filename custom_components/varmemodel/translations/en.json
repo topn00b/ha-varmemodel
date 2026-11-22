@@ -195,6 +195,9 @@
       },
       "red_allowance": {
         "name": "May drop below minimum in blocked hours"
+      },
+      "cold_caution": {
+        "name": "Caution when colder than calibrated"
       }
     },
     "binary_sensor": {

@@ -95,6 +95,7 @@ CONF_BOOST_DELTA = "boost_delta"
 PLAN_HORIZON_H = 48
 CONF_BOOST_HOURS = "boost_hours"
 CONF_RED_ALLOWANCE = "red_allowance"
+CONF_COLD_CAUTION = "cold_caution"
 CONF_MEASURES_CALENDAR = "measures_calendar"
 # Planens indstillinger (tal-entiteter): nøgle, min, maks, trin, enhed, standard
 SETTINGS = (
@@ -103,4 +104,6 @@ SETTINGS = (
     ("boost_delta", 0, 5, 0.5, "°C", 1.0),
     ("boost_hours", 1, 12, 1, "h", 5),
     ("red_allowance", 0, 3, 0.5, "°C", 0.0),
+    # Koldere end varmetabet er målt ved: + så mange % varmetab (og +0,2 °C margen i rummene); 0 = slået fra
+    ("cold_caution", 0, 30, 1, "%", 10),
 )
