@@ -889,10 +889,11 @@ class VarmemodelCoordinator:
         return _num(st.state) if st else None
 
     def _recent_sync(self, s: SourceState, start: int, end: int) -> tuple[dict[int, float], dict[int, float]]:
-        """Målt varme til huset (kWh uden varmt vand) og udetemperatur time for time i [start, end) fra 5-minutters statistik."""
-        heat, outdoor = s.eid(CONF_HEAT), self._id(CONF_OUTDOOR)
+        """Det kilden faktisk gav huset time for time i [start, end) fra 5-minutters statistik – varme uden varmt vand,
+        eller el, hvis varmen ikke måles (samme som rummodellerne lærer af) – og udetemperaturen."""
+        heat, outdoor = s.eid(CONF_HEAT) or s.eid(CONF_ELECTRICITY), self._id(CONF_OUTDOOR)
         want = {x for x in (heat, outdoor) if x}
-        if not heat or not want:
+        if not heat:
             return {}, {}
         stats = statistics_during_period(self.hass, dt_util.utc_from_timestamp(start), dt_util.utc_from_timestamp(end), want,
                                          "5minute", {"energy": "kWh", "temperature": "°C"}, {"change", "mean"})
@@ -906,7 +907,7 @@ class VarmemodelCoordinator:
             if (v := _num(x.get("mean"))) is not None:
                 tsum.setdefault(int(_ts(x["start"]) // 3600 * 3600), []).append(v)
         for h in list(q):
-            dhw = (s.collected.get(str(h)) or {}).get("dhw") or 0.0
+            dhw = ((s.collected.get(str(h)) or {}).get("dhw") or 0.0) if s.eid(CONF_HEAT) else 0.0
             q[h] = max(q[h], 0.0) * (1 - min(dhw, 60.0) / 60)
         return q, {h: sum(v) / len(v) for h, v in tsum.items()}
 
@@ -1043,7 +1044,7 @@ class VarmemodelCoordinator:
             # Forudsigelse for alle rum: varmekildens rum med planens varme, luft-luft-kilders rum med
             # samme tilførsel som de seneste 24 timer (de har ingen plan endnu)
             fc_all = simulate_rooms(show, hours, [x["heat_kw"] for x in p.hours], past_q) if show else {}
-            hyd_rooms = {r.name for r in show}
+            measured: dict[str, tuple[dict[int, float], str]] = {r.name: (recent_q, "målt varme") for r in show}
             for s2 in self.sources.values():
                 if s2.kind == SOURCE_HYDRONIC:
                     continue
@@ -1052,6 +1053,12 @@ class VarmemodelCoordinator:
                     recent = [v for hr in s2.last_hours[-24:] if (v := self._source_input(s2, hr)) is not None]
                     avg = sum(recent) / len(recent) if recent else 0.0
                     fc_all.update(simulate_rooms(air, hours, [avg] * len(hours), [avg] * 6))
+                    try:
+                        rq2, _ = await get_instance(self.hass).async_add_executor_job(self._recent_sync, s2, h0 - 12 * 3600, h0)
+                    except Exception:  # noqa: BLE001
+                        rq2 = {}
+                    for x in air:
+                        measured[x.name] = (rq2, "målt varme" if s2.eid(CONF_HEAT) else "målt el")
                     show += air
             # Rum med holdt temperatur forudsiges og planlægges, men logges og tjekkes ikke (startpunktet er ikke målt nu)
             held = sorted({r.name for r in show if r.held})
@@ -1065,16 +1072,16 @@ class VarmemodelCoordinator:
             t0s = old_fc.get("_t0") or {}
             h6 = [PlanHour(ts=h0 - (6 - k) * 3600, price=0.0, t_out=recent_out.get(h0 - (6 - k) * 3600, t_now if t_now is not None else 0.0))
                   for k in range(6)]
-            q6 = [recent_q.get(h.ts, 0.0) for h in h6]
-            past6 = [recent_q.get(h.ts - 6 * 3600, 0.0) for h in h6]
             for r in show:
                 f = old_fc.get(r.name) or []
                 if len(f) > 5 and not r.held:
                     exp, basis = f[5], "planens varme"
-                    if r.name in hyd_rooms and r.name in t0s and recent_q:
-                        # Samme rummodel, men med den varme der faktisk kom: tjekker modellen, også når planen ikke blev fulgt
-                        exp = simulate_rooms([replace(r, t_now=float(t0s[r.name]))], h6, q6, past6)[r.name][5]
-                        basis = "målt varme"
+                    rq, label = measured.get(r.name) or ({}, "")
+                    if r.name in t0s and rq and all(h.ts in rq and h.ts - 6 * 3600 in rq for h in h6):
+                        # Samme rummodel, men med det kilden faktisk gav: tjekker modellen, også når planen ikke blev fulgt
+                        exp = simulate_rooms([replace(r, t_now=float(t0s[r.name]))], h6, [rq[h.ts] for h in h6],
+                                             [rq[h.ts - 6 * 3600] for h in h6])[r.name][5]
+                        basis = label
                     dev = round(r.t_now - exp, 2)
                     hit, lim = max(0.15, r.margin), round(max(0.3, 2 * r.margin), 2)
                     checks[r.name] = {"ventet": exp, "ventet_med_plan": f[5], "grundlag": basis, "målt": round(r.t_now, 2), "afvigelse": dev,

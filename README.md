@@ -123,7 +123,7 @@ Attributterne tæller pr. døgn skrivninger, tænd/sluk-skift og varme i blokere
 **Nødplan:** mangler elprisen helt, planlægges med flad pris, så rummene stadig holdes over komfortgulvet. Det står i begrundelsen, og *inputs_ok* er falsk.
 
 **Tjek af forudsigelsen:** hver time tjekkes rummene mod det, rummodellen forudsagde for 6 timer siden.
-- Det *ventede* regnes fra rummets temperatur dengang med den varme, der faktisk kom (*grundlag: målt varme*). Så tjekkes modellen også, når planen ikke blev fulgt, fx mens en automation styrer efter noget andet.
+- Det *ventede* regnes fra rummets temperatur dengang med den varme, der faktisk kom (*grundlag: målt varme*). For rum på en luft-luft-kilde uden varmemåler bruges den målte el (*målt el*). Så tjekkes modellen også, når planen ikke blev fulgt, fx mens en automation styrer efter noget andet.
 - Planens egen forudsigelse står som *ventet_med_plan*.
 - Status er *ramt*, *over* eller *under*. Afviger et rum mere end grænsen, vises det som afvigelse.
 

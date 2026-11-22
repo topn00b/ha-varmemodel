@@ -361,3 +361,35 @@ async def test_replan_uses_measured_heat(ha: HomeAssistant) -> None:
     k = c.rooms_check["Stue"]
     assert k["grundlag"] == "målt varme" and k["ventet_med_plan"] == 20.0 and k["ventet"] > 20.2
     assert k["status"] in ("ramt", "over", "under") and k["målt"] == 20.5
+
+
+async def test_check_air_room_with_measured_electricity(ha: HomeAssistant) -> None:
+    """Rum på en luft-luft-kilde tjekkes med den målte el (ikke døgnets gennemsnit)."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.rum_2", "21.0", {"state_class": "measurement"})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub(HYD, "source"), _sub(AIR, "source")])
+    e.add_to_hass(ha)
+    air = next(sid for sid, x in e.subentries.items() if x.data.get("source_type") == "air_air")
+    from homeassistant.config_entries import ConfigSubentry
+    ha.config_entries.async_add_subentry(e, ConfigSubentry(data={"name": "Loft", "temperature": "sensor.rum_2", "heat_source": air},
+                                                           subentry_type="room", title="Loft", unique_id=None))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c.rooms["sensor.rum_2"] = {"value": 0.4, "extra": {"sources": {"Luft-luft": {"now": 0.5, "delayed": 0.0}}, "accuracy_6h_k": 0.3}}
+    el = {h0 - k * 3600: 0.8 for k in range(1, 13)}
+    c._recent_sync = lambda s, a, b: (el, {h: 2.0 for h in el}) if s.sid == air else ({}, {})
+    c.fc_log = {str(h0 - 6 * 3600): {"Loft": [17.0] * 8, "_t0": {"Loft": 21.0}}}
+    await c.async_replan()
+    k = c.rooms_check["Loft"]
+    assert k["grundlag"] == "målt el" and k["ventet_med_plan"] == 17.0
+    # 0,8 kWh el i timen × 0,5 °C/kWh holder rummet varmt: ventet langt over planens 17 °C
+    assert k["ventet"] > 19.5
