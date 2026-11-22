@@ -37,6 +37,7 @@ from .calibration import (
     guard,
     steady_slots,
     sun_factor,
+    validate_room,
 )
 from .command import Command, step
 from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
@@ -725,6 +726,11 @@ class VarmemodelCoordinator:
                 rh.append(RoomHour(ts=h.ts, t_room=rt.get(eid), t_out=h.t_out, sun=sun_factor(h),
                                    aired=eid in (c.get("air") or []), inputs=inputs, neighbours=nb or None))
             out[eid] = fit_room(rh)
+            # Ærlig præcision: modellen afprøvet 6 timer frem med målt tilførsel, som planen og tjekket bruger den
+            if (val := validate_room(rh, out[eid])) is not None:
+                out[eid].extra["validated_6h_k"] = val["rmse"]
+                out[eid].extra["validated_bias_6h_k"] = val["bias"]
+                out[eid].extra["validated_windows"] = val["n"]
         return out
 
     def _room_heat(self, hours_by_source: dict[str, list[Hour]]) -> dict[str, dict[str, Any]]:
@@ -803,7 +809,8 @@ class VarmemodelCoordinator:
             name=r["name"] or r["key"], t_now=t_room, t_min=t_min,
             heat_now=float(src.get("now") or 0.0), heat_delayed=float(src.get("delayed") or 0.0),
             cool_per_hk=float(fitd["value"]) / 20, free_per_h=float(ex.get("free_heat_k_per_day") or 0.0) / 24,
-            margin=min(0.6, max(0.2, float(ex.get("accuracy_6h_k") or 0.3))) + (0.2 if (fitd.get("r2") or 0) < 0.3 else 0.0),
+            margin=min(0.6, max(0.2, float(ex.get("accuracy_6h_k") or 0.3), float(ex.get("validated_6h_k") or 0.0)))
+            + (0.2 if (fitd.get("r2") or 0) < 0.3 else 0.0),
             neighbours=nbs, held=held,
         )
 

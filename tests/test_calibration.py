@@ -279,3 +279,28 @@ def test_room_model_adds_recent_neighbour() -> None:
         hours.append(RoomHour(ts=i * 3600, t_room=t, t_out=t_out, q=q, neighbours={"Trappe": nb if i >= n - 24 * 8 else None}))
     f = fit_room(hours)
     assert f.source == "fit" and "Trappe" in (f.extra["neighbours"] or {})
+
+
+def test_validate_room_gives_honest_precision() -> None:
+    """Afprøvningen kører modellen 6 timer frem med målt tilførsel: lille fejl for en god model, skævhed for en forkert."""
+    from dataclasses import replace
+
+    from custom_components.varmemodel.calibration import RoomHour, fit_room, validate_room
+
+    rnd = random.Random(5)
+    b_true, a_true = 0.005, 0.03
+    t = 20.5
+    hours = []
+    for i in range(24 * 40):
+        t_out = 4 + 4 * math.sin(i / 70)
+        q = 4.0 if (i % 24) < 8 else 0.0
+        t = t + a_true * q + b_true * (t_out - t) + rnd.gauss(0, 0.01)
+        hours.append(RoomHour(ts=i * 3600, t_room=t, t_out=t_out, q=q))
+    f = fit_room(hours)
+    v = validate_room(hours, f)
+    assert v is not None and v["n"] > 100
+    assert v["rmse"] < 0.1 and abs(v["bias"]) < 0.05
+    # En model med for lidt varme pr. kWh ventes for kold: rummet bliver »over«, og fejlen vokser
+    weak = replace(f, extra={**f.extra, "sources": {k: {**s, "now": s["now"] / 2, "delayed": s["delayed"] / 2} for k, s in f.extra["sources"].items()}})
+    w = validate_room(hours, weak)
+    assert w["bias"] > 0.05 and w["rmse"] > v["rmse"]

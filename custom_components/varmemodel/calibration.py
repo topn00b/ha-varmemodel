@@ -901,3 +901,39 @@ def daily_el(hours: list[Hour], day_of, days: list[str]) -> dict[str, Any] | Non
     touts = [h.t_out for h in hs if h.t_out is not None]
     return {"days": days, "el_kwh": round(sum(max(h.e, 0.0) for h in hs), 2),
             "t_out_mean": round(sum(touts) / len(touts), 1) if touts else None, "hours": len(hs)}
+
+
+def validate_room(hours: list[RoomHour], fit: Fit, window: int = 6, step: int = 3, min_windows: int = 20) -> dict[str, Any] | None:
+    """Rummodellen afprøvet, som planen bruger den: 6 timer frem fra den målte starttemperatur med den målte tilførsel.
+
+    Giver en ærlig præcision (afvigere tæller med, og der er ingen sol i planen) og en eventuel skævhed.
+    Tidsvinduer med udluftning eller manglende data springes over."""
+    ex = fit.extra or {}
+    if fit.value is None or not ex.get("sources"):
+        return None
+    cool = fit.value / 20
+    free = float(ex.get("free_heat_k_per_day") or 0.0) / 24
+    srcs = {k: (float(v.get("now") or 0.0), float(v.get("delayed") or 0.0)) for k, v in ex["sources"].items()}
+    nbs = {k: float(v.get("per_h_k") or 0.0) for k, v in (ex.get("neighbours") or {}).items()}
+    by = {h.ts: h for h in hours}
+    errs: list[float] = []
+    for t0 in sorted(by)[::step]:
+        win = [by.get(t0 + k * 3600) for k in range(window + 1)]
+        prev = [by.get(t0 + (k - window) * 3600) for k in range(window)]
+        if any(h is None or h.t_room is None or h.aired for h in win) or any(h is None for h in prev):
+            continue
+        t, ok = win[0].t_room, True
+        for h, hp in zip(win[:-1], prev):
+            qs = [(_inp(h, k), _inp(hp, k)) for k in srcs]
+            tn = [(h.neighbours or {}).get(k) for k in nbs]
+            if h.t_out is None or any(a is None or b is None for a, b in qs) or any(x is None for x in tn):
+                ok = False
+                break
+            t = (t + sum(an * max(a, 0.0) + ad * max(b, 0.0) for (an, ad), (a, b) in zip(srcs.values(), qs)) + cool * (h.t_out - t) + free
+                 + sum(kk * (x - t) for kk, x in zip(nbs.values(), tn)))
+        if ok:
+            errs.append(win[-1].t_room - t)
+    if len(errs) < min_windows:
+        return None
+    n = len(errs)
+    return {"rmse": round(sqrt(sum(e * e for e in errs) / n), 2), "bias": round(sum(errs) / n, 2), "n": n}

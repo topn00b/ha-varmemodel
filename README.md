@@ -232,6 +232,8 @@ Hver sensor har attributter, der viser datagrundlaget:
 | `målinger` / `blokke` | hvor mange timer, portioner eller blokke tallet bygger på | under ca. 50 = foreløbigt |
 | `forklaringsgrad` (R²) | hvor stor en del af udsvingene modellen forklarer (0–1) | over 0,6 = godt, under 0,3 = usikkert |
 | `præcision_6_timer` | rummets typiske fejl, når det forudsiges 6 timer frem (°C) | under ±0,3 °C = godt |
+| `præcision_6_timer_afprøvet` | samme, men afprøvet ærligt: modellen køres 6 timer frem fra den målte temperatur med den målte tilførsel, hver 3. time i hele perioden, uden at sortere afvigere fra. Den største af de to bruges som rummets usikkerhed i planen og tjekket | tæt på `præcision_6_timer` = modellen holder; meget større = fittet er for optimistisk |
+| `skævhed_6_timer_afprøvet` | middelfejlen i afprøvningen (målt − ventet) | nær 0 = ingen skævhed; plus = rummet bliver varmere end ventet |
 | `ude_fra` / `ude_til` | udetemperatur-området tallet er målt i | gælder ikke uden for området – fx før første frost |
 | `begrænsning` | om ±10 %-grænsen har bremset tallet i nat | »begrænset« = tallet er på vej mod en ny værdi |
 | `kilde` | `fit` = beregnet i nat, `beholdt` = sidste gode værdi | |

@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.5.8';
+  const VERSION = '0.5.9';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -71,11 +71,13 @@
   }
   const sensorsOf = (h, s) => at(h, s.kind === 'hydronic' ? s.plan : s.e('el_yesterday'))['følere'] || {};
 
+  // Rummets præcision over 6 timer: den afprøvede (modellen kørt frem med målt tilførsel), ellers fittets
+  const P6 = (a) => (a['præcision_6_timer_afprøvet'] != null ? Math.max(a['præcision_6_timer_afprøvet'], a['præcision_6_timer'] ?? 0) : a['præcision_6_timer']);
   // Pålidelighed for et tal fra Varmemodel
   function rel(s) {
     if (!s || num(s.state) === null) return 'mangler';
     const a = s.attributes || {};
-    const r2 = a.forklaringsgrad, p6 = a['præcision_6_timer'];
+    const r2 = a.forklaringsgrad, p6 = P6(a);
     if ((r2 != null && r2 < 0.3) || (p6 != null && p6 > 0.6) || a.kilde === 'prior') return 'usikker';
     const lim = String(a['begrænsning'] ?? 'ok');
     if (lim.startsWith('ny model') || (a.blokke != null && a.blokke < 100) || (a['målinger'] != null && a['målinger'] < 20)) return 'forel';
@@ -220,7 +222,7 @@
               + `<td class="n">${a.tidskonstant_timer != null ? A(h, d.r.model, a.tidskonstant_timer, 0, 't') : '–'}</td>`
               + `<td class="n">${Object.entries(per).map(([k, v]) => `${A(h, d.r.model, v, 3)} <span class="mut sm">${esc(k)}</span>`).join('<br>') || '–'}</td>`
               + `<td class="n">${d.r.heat ? `${V(h, d.r.heat, 1, 'kWh')} <span class="mut sm">${fmt(at(h, d.r.heat).andel_af_gulvvarmen_pct, 0)} %</span>` : '–'}</td>`
-              + `<td class="n">${a['præcision_6_timer'] != null ? '±' + A(h, d.r.model, a['præcision_6_timer'], 2, '°C') : '–'}</td>`
+              + `<td class="n">${P6(a) != null ? `<span title="${a['præcision_6_timer_afprøvet'] != null ? `afprøvet på ${a['afprøvede_vinduer']} gange 6 timer · skævhed ${sgn(a['skævhed_6_timer_afprøvet'], 2)} °C · fittet ±${fmt(a['præcision_6_timer'], 2)}` : 'fra fittet'}">±${A(h, d.r.model, P6(a), 2, '°C')}</span>` : '–'}</td>`
               + `<td>${d.valve === 'altid åben' ? 'altid åben' : d.valve ? `<span class="v ${d.vs === 'on' ? 'orange' : ''}" data-e="${esc(d.valve)}">${d.vs === 'on' ? 'åben' : d.vs === 'off' ? 'lukket' : '–'}</span>` : '–'}</td>`;
           }
           o += '</tr>';
@@ -295,7 +297,7 @@
         const d = room(h, vm, r); const a = d.a;
         o += `<tr><td><span class="v" data-e="${esc(r.model)}">${esc(r.name)}</span></td><td class="n">${M(h, d.tE, 1, '°C', d.cls)}</td>`
           + `<td class="n">${A(h, r.model, (a.varmekilder_grader_pr_kwh || {})[s.name], 3)}</td><td class="n">${V(h, r.model, 3)}</td>`
-          + `<td class="n">${a['præcision_6_timer'] != null ? '±' + A(h, r.model, a['præcision_6_timer'], 2, '°C') : '–'}</td></tr>`;
+          + `<td class="n">${P6(a) != null ? '±' + A(h, r.model, P6(a), 2, '°C') : '–'}</td></tr>`;
       }
       return o + '</table></div>';
     }
