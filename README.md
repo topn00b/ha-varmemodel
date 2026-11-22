@@ -112,7 +112,7 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 **Log og kontrol:**
 - Ved hver times start gemmes, hvad planen sagde for timen.
 - Næste nat sammenlignes gårsdagen: planlagt mod faktisk varme, el, kroner og varme i blokerede timer (attributten *i_går* på *Plan pris*).
-- Hvert rums forudsigelse fra 6 timer før sammenlignes med den målte temperatur. Afviger den mere end 2 × rummets præcision (mindst 0,3 °C), markeres rummet (attributten *rooms_check* på *Plan nu*), fx ved en åben dør.
+- Hvert rums forudsigelse fra 6 timer før sammenlignes med den målte temperatur. Afviger den mere end 2 × rummets præcision (mindst 0,3 °C), markeres rummet (attributten *rooms_check* på *Plan nu*). Koldere end ventet peger på en åben dør eller et vindue; varmere end ventet på ekstra varme fra sol, mennesker eller en varmekilde, der kører uden om planen.
 
 **Anbefalet styring (sensor pr. vandbåren kilde):** viser, hvad en automation bør sende nu, efter regler der skåner varmepumpen. Den styrer ikke selv noget.
 

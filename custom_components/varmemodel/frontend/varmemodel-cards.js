@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.5.14';
+  const VERSION = '0.5.15';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -585,7 +585,13 @@
         for (const [r, e] of Object.entries(a.rooms_estimated || {})) w.push(['❗', `Mangler data: ${r} har ikke målt siden ${whenM(e['sidste_måling'])} (${e.minutter} min.) – planen bruger forudsigelsen ≈${fmt(e['forudsagt'])} °C. Tjek føleren.`]);
         if ((a.rooms_skipped || []).length) w.push(['❗', `${s.name}: ${a.rooms_skipped.join(', ')} er ikke med i planen (føler eller rummodel mangler)`]);
         const ca = at(h, s.e('command')); if (ca.within_limits === false) w.push(['⚠️', `${s.name}: styringen har i dag ${ca.writes_today} skrivninger og ${ca.switches_today} tænd/sluk (grænse 20 og 8)`]);
-        for (const [r, k] of Object.entries(a.rooms_check || {})) if (k.flag) w.push(['❗', `${r}: ${fmt(k['målt'])} °C, ventet ${fmt(k.ventet)} °C – åben dør eller vindue?`]);
+        // Retningen afgør forklaringen: koldere end ventet = varme der slipper ud; varmere = varme der kommer udefra
+        for (const [r, k] of Object.entries(a.rooms_check || {})) {
+          if (!k.flag) continue;
+          const base = `${r}: ${fmt(k['målt'])} °C, ventet ${fmt(k.ventet)} °C`;
+          if (k.status === 'under') w.push(['❗', `${base} – koldere end ventet: åben dør eller vindue?`]);
+          else w.push(['⚠️', `${base} – varmere end ventet: ekstra varme fra sol, mennesker eller en varmekilde, der kører uden om planen?`]);
+        }
       }
       if (D.lowMin >= 30) w.push(['⚠️', `COP ${fmt(D.live, 2)} mod forventet ${fmt(D.exp, 2)} i ${Math.round(D.lowMin)} min.`]);
       if (D.differs && !this._c.dry_run) w.push(['⚠️', 'Varmepumpen følger ikke planen']);
