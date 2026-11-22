@@ -43,6 +43,7 @@ class PlanRoom:
     neighbours: list[tuple[float, float]] = field(default_factory=list)  # (°C pr. time pr. grad, naboens temperatur)
     held: bool = False  # temperaturen er ikke målt nu: den sidst kendte eller forudsagt (føleren er væk)
     estimated: bool = False  # føleren har været væk i over 30 min.: temperaturen er forudsagt fra sidste måling
+    t_max: float | None = None  # loft: planen varmer aldrig så meget, at rummet kommer over (luft-luft)
 
 
 @dataclass
@@ -73,6 +74,7 @@ class Plan:
 
 STEP = 0.25  # kWh pr. portion
 PRELOAD_MAX = 1.0  # forvarmning: højst så mange °C ekstra krav sidst i en lang blokering
+AIR_STEP = 0.1  # kWh el pr. portion for luft-luft
 
 
 def _cop(m: SourceModel, t_out: float, p: float, target: float) -> float:
@@ -277,3 +279,98 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
     plan.reason = (f"{on} timer, {plan.heat_kwh} kWh varme for ca. {plan.cost_kr} kr" + "".join(" – " + x for x in notes)
                    + (" – " + "; ".join(plan.warnings) if plan.warnings else ""))
     return plan
+
+
+def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0.3, e_max: float = 1.0,
+                  past_q: list[float] | None = None, label: Callable[[int], str] | None = None,
+                  preload: float = 0.0, comfort: float = 0.0) -> Plan:
+    """Plan for en luft-luft-varmepumpe i kWh el pr. time (rummodellerne lærer grader pr. kWh el).
+
+    Varmen måles ikke, så der er intet husbehov at fordele. Planen varmer kun så meget, at rummene holder
+    gulv + komfort + usikkerhed (+ forvarmning i blokerede timer), i de billigste frie timer før behovet
+    (ved samme pris så sent som muligt), og aldrig så meget, at et rum kommer over sit loft (``t_max``).
+    Rum uden gulv (``t_min`` −99, ikke med i planen) har kun loft. Der varmes aldrig i blokerede timer.
+    ``e_min``/``e_max``: laveste og højeste el pr. time, når varmepumpen kører.
+    """
+    n = len(hours)
+    plan = Plan()
+    if n == 0:
+        plan.reason = "ingen timer at planlægge"
+        return plan
+    pre: list[float] = []
+    run = 0
+    for h in hours:
+        run = run + 1 if h.blocked else 0
+        pre.append(min(PRELOAD_MAX, max(preload, 0.0) * run / 6))
+    q = [0.0] * n
+    free = [i for i, h in enumerate(hours) if not h.blocked]
+    planned = [r for r in rooms if r.t_min > -50]
+    capped = [r for r in rooms if r.t_max is not None]
+
+    def need(r: PlanRoom, i: int) -> float:
+        return r.t_min + comfort + r.margin + pre[i]
+
+    def new_over_cap(sim: dict[str, list[float]], base: dict[str, list[float]]) -> bool:
+        """Kommer et rum over loftet (eller længere over) end uden den nye portion?"""
+        return any(t > r.t_max + 1e-6 and t > b + 1e-6 for r in capped for t, b in zip(sim[r.name], base[r.name]))
+
+    skip: set[tuple[str, int]] = set()
+    full: set[int] = set()
+    sim = simulate_rooms(rooms, hours, q, past_q)
+    for _ in range(800):
+        worst: tuple[int, PlanRoom] | None = None
+        for r in planned:
+            for i, t in enumerate(sim[r.name]):
+                if t < need(r, i) and (r.name, i) not in skip:
+                    if worst is None or i < worst[0]:
+                        worst = (i, r)
+                    break
+        if worst is None:
+            break
+        i_bad, r = worst
+        # Billigste frie time før behovet; ved samme pris den seneste (stabil sortering af en omvendt liste)
+        cands = sorted((j for j in reversed(free) if j <= i_bad and j not in full and q[j] < e_max - 1e-9), key=lambda j: hours[j].price)
+        added = False
+        for j in cands:
+            a = e_min if q[j] == 0 else min(AIR_STEP, e_max - q[j])
+            q[j] += a
+            sim2 = simulate_rooms(rooms, hours, q, past_q)
+            if capped and new_over_cap(sim2, sim):
+                q[j] -= a
+                full.add(j)
+                continue
+            sim, added = sim2, True
+            break
+        if not added:
+            skip.add((r.name, i_bad))
+
+    plan.rooms = sim
+    lab = label or (lambda ts: f"om {(ts - hours[0].ts) // 3600} t")
+    for r in planned:
+        s = sim[r.name]
+        k = min(range(n), key=lambda j: s[j] - r.t_min)
+        if s[k] < r.t_min:
+            plan.warnings.append(f"{r.name}: {s[k]:.1f} °C {lab(hours[k].ts)} er under gulvet ({r.t_min:.1f})")
+    notes: list[str] = []
+    for r in capped:
+        if r.t_now > r.t_max:
+            notes.append(f"{r.name} er over loftet ({r.t_now:.1f} mod {r.t_max:.1f} °C) – varmer ikke, før det er faldet")
+    sp = (min(r.t_max for r in capped) - 0.5) if capped else None
+    for i, h in enumerate(hours):
+        e = round(q[i], 2)
+        setpoint = None
+        if e > 0:
+            setpoint = sp if sp is not None else round(2 * (max((need(r, i) for r in planned), default=21.0) + 1.0)) / 2
+        plan.hours.append({"ts": h.ts, "heat_kw": e, "el_kw": e, "flow": None, "shift": None, "setpoint": setpoint,
+                           "price": round(h.price, 3), "t_out": round(h.t_out, 1), "blocked": h.blocked, "cop": None,
+                           "cost": round(e * h.price, 2)})
+        plan.el_kwh += e
+        plan.cost_kr += e * h.price
+    plan.el_kwh = round(plan.el_kwh, 1)
+    plan.heat_kwh = plan.el_kwh  # luft-luft: varmen måles ikke – tallene er el
+    plan.cost_kr = round(plan.cost_kr, 1)
+    on = sum(1 for x in plan.hours if x["heat_kw"] > 0)
+    plan.reason = (f"{on} timer, {plan.el_kwh} kWh el for ca. {plan.cost_kr} kr" + "".join(" – " + x for x in notes)
+                   + (" – " + "; ".join(plan.warnings) if plan.warnings else ""))
+    return plan
+

@@ -44,8 +44,9 @@ class Command:
         return asdict(self)
 
 
-def step(c: Command, now: float, day: str, want_on: bool, want_shift: int | None, blocked: bool) -> Command:
-    """Næste anbefalede kommando ud fra planens ønske nu."""
+def step(c: Command, now: float, day: str, want_on: bool, want_shift: int | None, blocked: bool,
+         min_on: float = MIN_ON, min_off: float = MIN_OFF, min_gap: float = MIN_GAP) -> Command:
+    """Næste anbefalede kommando ud fra planens ønske nu. Luft-luft bruger kortere tider (30/15 min.)."""
     n = Command.load(c.dump())
     if n.day != day:
         n.day, n.writes, n.flips, n.blocked_on = day, 0, 0, 0
@@ -54,12 +55,12 @@ def step(c: Command, now: float, day: str, want_on: bool, want_shift: int | None
         want_on = False
     target = want_on
     if n.on != want_on and not blocked:
-        if n.on and now - n.since_onoff < MIN_ON:
-            target, reason = True, "holder mindst 60 min. tændt"
-        elif not n.on and now - n.since_onoff < MIN_OFF:
-            target, reason = False, "holder mindst 30 min. slukket"
-        elif now - n.last_change < MIN_GAP:
-            target, reason = n.on, "højst én ændring pr. 15 min."
+        if n.on and now - n.since_onoff < min_on:
+            target, reason = True, f"holder mindst {min_on / 60:.0f} min. tændt"
+        elif not n.on and now - n.since_onoff < min_off:
+            target, reason = False, f"holder mindst {min_off / 60:.0f} min. slukket"
+        elif now - n.last_change < min_gap:
+            target, reason = n.on, f"højst én ændring pr. {min_gap / 60:.0f} min."
     if blocked and n.on:
         reason = "blokeret: slukker straks"
     if target != n.on:
@@ -70,12 +71,12 @@ def step(c: Command, now: float, day: str, want_on: bool, want_shift: int | None
         n.shift = want_shift if target else None
         n.since_shift = now
     elif n.on and want_shift is not None and want_shift != n.shift:
-        if n.shift is None or (abs(want_shift - n.shift) >= DEADBAND and now - n.since_shift >= SHIFT_HOLD and now - n.last_change >= MIN_GAP):
+        if n.shift is None or (abs(want_shift - n.shift) >= DEADBAND and now - n.since_shift >= SHIFT_HOLD and now - n.last_change >= min_gap):
             n.shift, n.since_shift, n.last_change = want_shift, now, now
             n.writes += 1
             reason = "ny kurve"
         else:
-            reason = "holder kurven mindst 1 time" if now - n.since_shift < SHIFT_HOLD else "højst én ændring pr. 15 min."
+            reason = "holder kurven mindst 1 time" if now - n.since_shift < SHIFT_HOLD else f"højst én ændring pr. {min_gap / 60:.0f} min."
     if n.on and blocked:
         n.blocked_on += 1
     n.reason = reason

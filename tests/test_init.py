@@ -551,3 +551,38 @@ async def test_cold_caution_setting(ha: HomeAssistant) -> None:
     await c.async_replan()
     p = c.plans[hyd]
     assert p["cautious"] is False and abs(d10 / p["demand_kwh"] - 1.1) < 0.01
+
+
+async def test_air_source_gets_plan_and_command(ha: HomeAssistant) -> None:
+    """En luft-luft-kilde får sin egen plan (el pr. time) og anbefalet styring; loftet fra rummets opsætning bruges."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.rum_2", "19.0", {"state_class": "measurement"})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub(HYD, "source"), _sub(AIR, "source")])
+    e.add_to_hass(ha)
+    air = next(sid for sid, x in e.subentries.items() if x.data.get("source_type") == "air_air")
+    from homeassistant.config_entries import ConfigSubentry
+    ha.config_entries.async_add_subentry(e, ConfigSubentry(data={"name": "Loft", "temperature": "sensor.rum_2", "heat_source": air,
+                                                                 "minimum": 19.5, "maximum": 22.5}, subentry_type="room", title="Loft", unique_id=None))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c.rooms["sensor.rum_2"] = {"value": 0.4, "r2": 0.6, "extra": {"sources": {"Luft-luft": {"now": 0.7, "delayed": 0.0}}, "accuracy_6h_k": 0.3}}
+    c._recent_sync = lambda s, a, b: ({}, {})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    p = c.plans[air]
+    assert p["kind"] == "air_air" and p["rooms_planned"] == ["Loft"] and p["caps"] == {"Loft": 22.5}
+    assert p["el_kwh"] > 0 and p["hours"][0]["heat_kw"] > 0  # 19,0 °C mod gulv 19,5 + komfort + usikkerhed: der varmes straks
+    ents = {s.entity_id: s for s in ha.states.async_all("sensor")}
+    cmd = next(s for k, s in ents.items() if k.endswith("recommended_control") and "luft_luft" in k)
+    assert cmd.state == "heat" and cmd.attributes["setpoint"] == 22.0
+    plan_now = next(s for k, s in ents.items() if k.endswith("plan_now") and "luft_luft" in k)
+    assert plan_now.state == "heat" and plan_now.attributes["kind"] == "air_air"

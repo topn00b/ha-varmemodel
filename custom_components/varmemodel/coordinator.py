@@ -42,7 +42,7 @@ from .calibration import (
 )
 from .command import Command, step
 from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
-from .planner import PlanHour, PlanRoom, SourceModel, estimate_room, make_plan, simulate_rooms
+from .planner import PlanHour, PlanRoom, SourceModel, estimate_room, make_air_plan, make_plan, simulate_rooms
 from .const import (
     BACKFILL_DAYS,
     CALIB_VERSION,
@@ -67,6 +67,7 @@ from .const import (
     CONF_ROOM_ALWAYS_OPEN,
     CONF_ROOM_IN_PLAN,
     CONF_ROOM_MIN,
+    CONF_ROOM_MAX,
     CONF_ROOM_MIN_ENTITY,
     CONF_ROOM_NAME,
     CONF_ROOM_NEIGHBOURS,
@@ -228,13 +229,13 @@ class VarmemodelCoordinator:
             return [
                 {"key": s.data[CONF_ROOM_TEMP], "name": s.data.get(CONF_ROOM_NAME, s.title), "valve": s.data.get(CONF_ROOM_VALVE),
                  "always_open": bool(s.data.get(CONF_ROOM_ALWAYS_OPEN)), "weight": float(s.data.get(CONF_ROOM_WEIGHT) or 1.0),
-                 "min_entity": s.data.get(CONF_ROOM_MIN_ENTITY), "min": s.data.get(CONF_ROOM_MIN),
+                 "min_entity": s.data.get(CONF_ROOM_MIN_ENTITY), "min": s.data.get(CONF_ROOM_MIN), "max": s.data.get(CONF_ROOM_MAX),
                  "in_plan": s.data.get(CONF_ROOM_IN_PLAN, True), "neighbours": list(s.data.get(CONF_ROOM_NEIGHBOURS) or []),
                  "source": s.data.get(CONF_ROOM_SOURCE), "extra_sources": list(s.data.get(CONF_ROOM_EXTRA_SOURCES) or []),
                  "subentry_id": sid}
                 for sid, s in subs
             ]
-        return [{"key": e, "name": None, "valve": None, "always_open": False, "weight": 1.0, "min_entity": None, "min": None,
+        return [{"key": e, "name": None, "valve": None, "always_open": False, "weight": 1.0, "min_entity": None, "min": None, "max": None,
                  "in_plan": True, "neighbours": [], "source": None, "extra_sources": [], "subentry_id": None} for e in (self.conf.get(CONF_INDOOR) or [])]
 
     def room_source(self, room: dict[str, Any]) -> SourceState | None:
@@ -847,6 +848,7 @@ class VarmemodelCoordinator:
             heat_now=float(src.get("now") or 0.0), heat_delayed=float(src.get("delayed") or 0.0),
             cool_per_hk=float(fitd["value"]) / 20, free_per_h=float(ex.get("free_heat_k_per_day") or 0.0) / 24,
             margin=margin, accuracy=acc, neighbours=nbs, held=held, estimated=est is not None,
+            t_max=_num(r.get("max")) if r.get("max") is not None else None,
         )
 
     def _nb_value(self, eid: str | None) -> float | None:
@@ -1060,6 +1062,54 @@ class VarmemodelCoordinator:
             return float(lk[0]), True
         return None, False
 
+    async def _air_plan(self, s: SourceState, hours: list[PlanHour], now: float, h0: int) -> dict[str, Any]:
+        """Plan og anbefalet styring for en luft-luft-kilde: el pr. time, gulv og loft pr. rum, forvarmning før blokeringer."""
+        show: list[PlanRoom] = []
+        skipped: list[str] = []
+        for r in self.rooms_cfg:
+            if self.room_source(r) is not s:
+                continue
+            t_min = self._state_num(r["min_entity"]) if r["min_entity"] else (_num(r["min"]) if r["min"] is not None else None)
+            pr = self._plan_room(r, s, t_min if (r["in_plan"] and t_min is not None) else -99.0)
+            if pr is None:
+                skipped.append(r["name"] or r["key"])
+                continue
+            show.append(pr)
+        # Laveste og højeste el pr. time, når kilden kører (kvartil og 95 %-fraktil af de sidste timer)
+        vals = sorted(v for h in s.last_hours if (v := self._source_input(s, h)) is not None and v > 0.08)
+        if len(vals) >= 10:
+            e_min = max(0.1, vals[len(vals) // 4])
+            e_max = max(e_min + 0.2, vals[min(len(vals) - 1, int(len(vals) * 0.95))])
+        else:
+            e_min, e_max = 0.3, 1.0
+        try:
+            rq, _ = await get_instance(self.hass).async_add_executor_job(self._recent_sync, s, h0 - 12 * 3600, h0)
+        except Exception:  # noqa: BLE001
+            rq = {}
+        past = [rq.get(h0 - k * 3600, 0.0) for k in range(6, 0, -1)]
+        p = await self.hass.async_add_executor_job(
+            partial(make_air_plan, hours, show, e_min, e_max, past_q=past, label=_clock,
+                    preload=self.setting(CONF_PRELOAD), comfort=self.setting(CONF_COMFORT_OFFSET)))
+        plan = {"kind": "air_air", "hours": p.hours, "rooms": p.rooms, "rooms_planned": [r.name for r in show if r.t_min > -50],
+                "reason": p.reason, "warnings": p.warnings, "el_kwh": p.el_kwh, "heat_kwh": p.heat_kwh, "cost_kr": p.cost_kr,
+                "demand_kwh": None, "target": None, "rooms_skipped": skipped,
+                "rooms_held": sorted({r.name for r in show if r.held and not r.estimated}),
+                "rooms_estimated": {r.name: {"forudsagt": round(r.t_now, 2), "sidste_måling": _ts_local_iso(float(e["since"])),
+                                             "minutter": round((now - float(e["since"])) / 60), "usikkerhed": round(r.margin, 2)}
+                                    for r in show if r.estimated
+                                    for e in [next((x for x in self.estimates.values() if x["name"] == r.name), None)] if e},
+                "rooms_band": {r.name: round(r.margin, 2) for r in show}, "caps": {r.name: r.t_max for r in show if r.t_max is not None},
+                "e_min": round(e_min, 2), "e_max": round(e_max, 2), "preload": self.setting(CONF_PRELOAD),
+                "comfort_offset": self.setting(CONF_COMFORT_OFFSET), "red_allowance": 0.0}
+        # Anbefalet styring: luft-luft reagerer hurtigt – mindst 30 min. tændt, 15 min. slukket, højst én ændring pr. 15 min.
+        cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
+        cmd = step(Command.load(self.commands.get(s.sid)), now, dt_util.now().date().isoformat(),
+                   bool(cur and cur["heat_kw"] > 0), None, bool(cur and cur["blocked"]), min_on=1800, min_off=900, min_gap=900)
+        d = cmd.dump()
+        d["setpoint"] = cur.get("setpoint") if cmd.on and cur else None
+        self.commands[s.sid] = d
+        return {"plan": plan, "rooms": show, "rq": rq}
+
     async def async_replan(self) -> None:
         """Ny plan for hver vandbåren varmekilde ud fra priser, røde timer, vejrudsigt og rummene."""
         missing: list[str] = []
@@ -1121,6 +1171,11 @@ class VarmemodelCoordinator:
         boost = self.setting(CONF_BOOST_DELTA) if boost_on else 0.0
         offset = self.setting(CONF_COMFORT_OFFSET)
         plans: dict[str, dict[str, Any]] = {}
+        air_plans: dict[str, dict[str, Any]] = {}
+        for s2 in self.sources.values():
+            if s2.kind != SOURCE_HYDRONIC:
+                air_plans[s2.sid] = await self._air_plan(s2, hours, now, h0)
+                plans[s2.sid] = air_plans[s2.sid]["plan"]
         for sid, s in self.sources.items():
             if s.kind != SOURCE_HYDRONIC:
                 continue
@@ -1194,15 +1249,12 @@ class VarmemodelCoordinator:
             for s2 in self.sources.values():
                 if s2.kind == SOURCE_HYDRONIC:
                     continue
-                air = [x for r in self.rooms_cfg if self.room_source(r) is s2 and (x := self._plan_room(r, s2, -99.0)) is not None]
+                # Luft-luft-kildens rum: forudsigelsen med dens egen plan (lavet ovenfor)
+                ap = air_plans.get(s2.sid) or {}
+                air = list(ap.get("rooms") or [])
                 if air:
-                    recent = [v for hr in s2.last_hours[-24:] if (v := self._source_input(s2, hr)) is not None]
-                    avg = sum(recent) / len(recent) if recent else 0.0
-                    fc_all.update(simulate_rooms(air, hours, [avg] * len(hours), [avg] * 6))
-                    try:
-                        rq2, _ = await get_instance(self.hass).async_add_executor_job(self._recent_sync, s2, h0 - 12 * 3600, h0)
-                    except Exception:  # noqa: BLE001
-                        rq2 = {}
+                    fc_all.update({x.name: ap["plan"]["rooms"][x.name] for x in air if x.name in ap["plan"]["rooms"]})
+                    rq2 = ap.get("rq") or {}
                     for x in air:
                         measured[x.name] = (rq2, "målt varme" if s2.eid(CONF_HEAT) else "målt el")
                     show += air

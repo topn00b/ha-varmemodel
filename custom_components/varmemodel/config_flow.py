@@ -36,6 +36,7 @@ from .const import (
     CONF_ROOM_ALWAYS_OPEN,
     CONF_ROOM_IN_PLAN,
     CONF_ROOM_MIN,
+    CONF_ROOM_MAX,
     CONF_ROOM_MIN_ENTITY,
     CONF_ROOM_NAME,
     CONF_ROOM_NEIGHBOURS,
@@ -135,6 +136,9 @@ ROOM_SCHEMA = vol.Schema({
     ),
     vol.Optional(CONF_ROOM_MIN): selector.NumberSelector(
         selector.NumberSelectorConfig(min=5, max=30, step=0.5, mode=selector.NumberSelectorMode.BOX)
+    ),
+    vol.Optional(CONF_ROOM_MAX): selector.NumberSelector(
+        selector.NumberSelectorConfig(min=10, max=30, step=0.5, mode=selector.NumberSelectorMode.BOX)
     ),
     vol.Optional(CONF_ROOM_VALVE): selector.EntitySelector(selector.EntitySelectorConfig(domain=["binary_sensor", "climate", "switch", "valve"])),
     vol.Optional(CONF_ROOM_ALWAYS_OPEN, default=False): selector.BooleanSelector(),

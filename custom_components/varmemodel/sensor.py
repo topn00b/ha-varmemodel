@@ -34,7 +34,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
             ents += [PlanNowSensor(c, s), CommandSensor(c, s), PlanValueSensor(c, s, "plan_flow", "flow", "°C", 1),
                      PlanValueSensor(c, s, "plan_shift", "shift", None, 0), PlanCostSensor(c, s)]
         else:
-            ents += [DailyElSensor(c, s, "yesterday"), DailyElSensor(c, s, "week")]
+            # Luft-luft: el pr. døgn og en plan med anbefalet styring (el pr. time, gulv og loft pr. rum)
+            ents += [DailyElSensor(c, s, "yesterday"), DailyElSensor(c, s, "week"),
+                     PlanNowSensor(c, s), CommandSensor(c, s), PlanCostSensor(c, s)]
         async_add_entities(ents, config_subentry_id=sid)
     for r in c.rooms_cfg:
         rents: list[SensorEntity] = [RoomSensor(c, r), RoomForecastSensor(c, r)]
@@ -331,7 +333,9 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "next_on": _ts_local(nxt_on), "next_off": _ts_local(nxt_off),
             "updated": _ts_local(upd), "valid_until": _ts_local(upd + 2700) if upd else None,
             "inputs_ok": m.get("inputs_ok"), "missing": m.get("missing") or None, "horizon_h": m.get("horizon_h"),
-            "plan": [{"t": _ts_local(x["ts"]), **{k: x[k] for k in ("heat_kw", "flow", "shift", "price", "t_out", "blocked", "cost")}} for x in hrs],
+            "plan": [{"t": _ts_local(x["ts"]), **{k: x.get(k) for k in ("heat_kw", "flow", "shift", "price", "t_out", "blocked", "cost")},
+                      **({"setpoint": x["setpoint"]} if x.get("setpoint") is not None else {})} for x in hrs],
+            "kind": p.get("kind") or "hydronic", "caps": p.get("caps") or None, "e_min": p.get("e_min"), "e_max": p.get("e_max"),
             "rooms_forecast": p.get("rooms"),
             "rooms_check": self.coordinator.rooms_check or None,
             "rooms_planned": p.get("rooms_planned"),
@@ -453,7 +457,7 @@ class CommandSensor(SourceEntity, SensorEntity):
         c = self._c
         since = c.get("since_onoff")
         return {
-            "shift": c.get("shift"), "reason": c.get("reason"),
+            "shift": c.get("shift"), "setpoint": c.get("setpoint"), "reason": c.get("reason"),
             "since": _ts_local(since) if since and since > 0 else None,
             "writes_today": c.get("writes", 0), "switches_today": c.get("flips", 0), "heat_in_blocked_today": c.get("blocked_on", 0),
             "within_limits": c.get("writes", 0) <= 20 and c.get("flips", 0) <= 8 and c.get("blocked_on", 0) == 0,

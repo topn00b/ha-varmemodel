@@ -58,6 +58,7 @@ CONF_ROOM_NAME = "name"
 CONF_ROOM_TEMP = "temperature"
 CONF_ROOM_MIN_ENTITY = "minimum_entity"
 CONF_ROOM_MIN = "minimum"
+CONF_ROOM_MAX = "maximum"  # loft: luft-luft-planen varmer aldrig rummet over dette
 CONF_ROOM_VALVE = "valve"
 CONF_ROOM_ALWAYS_OPEN = "always_open"
 CONF_ROOM_WEIGHT = "loop_weight"

@@ -195,3 +195,41 @@ def test_preload_charges_floors_before_long_block() -> None:
     assert end0 >= 20.2 - 0.05 and end3 >= 20.2 + 0.4 - 0.05 and end3 > end0 + 0.15
     assert sum(x["heat_kw"] for x in p3.hours[:9]) > sum(x["heat_kw"] for x in p0.hours[:9])
     assert "forvarmer til blokeringen kl. 09–17 (+0.40 °C sidst i den)" in p3.reason and "forvarmer" not in p0.reason
+
+
+def _air_room(name="Rum A", t_now=19.6, t_min=19.5, t_max=None, now=0.7, delayed=-0.2, cool=0.02, free=0.15):
+    return PlanRoom(name=name, t_now=t_now, t_min=t_min, heat_now=now, heat_delayed=delayed, cool_per_hk=cool, free_per_h=free,
+                    margin=0.4, t_max=t_max)
+
+
+def test_air_plan_keeps_floor_in_cheap_hours_never_in_red() -> None:
+    """Luft-luft: rummet holdes over gulv + usikkerhed, i de billigste timer og aldrig i blokerede timer."""
+    from custom_components.varmemodel.planner import make_air_plan, simulate_rooms
+
+    hs = hours(24, price=lambda i: 1.0 if i in (2, 3, 4) else 3.0, t_out=lambda i: 2.0, blocked=lambda i: 14 <= i <= 20)
+    p = make_air_plan(hs, [_air_room()], e_min=0.3, e_max=1.0)
+    q = [x["heat_kw"] for x in p.hours]
+    sim = simulate_rooms([_air_room()], hs, q)["Rum A"]
+    assert all(q[i] == 0 for i in range(14, 21))
+    assert min(sim) >= 19.5 + 0.4 - 0.05 and not p.warnings
+    assert sum(q[2:5]) > 0 and "kWh el" in p.reason
+    assert all(x["setpoint"] is not None for x in p.hours if x["heat_kw"] > 0)
+
+
+def test_air_plan_respects_cap_of_warm_room() -> None:
+    """Loftet: planen varmer ikke så meget, at et rum kommer over (eller længere over) sit loft."""
+    from custom_components.varmemodel.planner import make_air_plan, simulate_rooms
+
+    hs = hours(12, price=lambda i: 2.0, t_out=lambda i: 2.0)
+    cold = _air_room("Rum A", t_now=19.4)
+    warm = _air_room("Rum B", t_now=22.4, t_min=-99.0, t_max=22.5, now=0.9, cool=0.01, free=0.2)
+    p = make_air_plan(hs, [cold, warm], e_min=0.3, e_max=1.0)
+    q = [x["heat_kw"] for x in p.hours]
+    base = simulate_rooms([cold, warm], hs, [0.0] * 12)["Rum B"]
+    sim = simulate_rooms([cold, warm], hs, q)["Rum B"]
+    assert all(t <= 22.5 + 1e-6 or t <= b + 1e-6 for t, b in zip(sim, base))
+    # Over loftet allerede nu: ingen varme, og begrundelsen siger det
+    hot = _air_room("Rum B", t_now=23.8, t_min=-99.0, t_max=22.5, now=0.9, cool=0.01, free=0.0)
+    p2 = make_air_plan(hs, [_air_room("Rum A", t_now=19.4), hot], e_min=0.3, e_max=1.0)
+    assert "over loftet (23.8 mod 22.5 °C)" in p2.reason
+    assert sum(x["heat_kw"] for x in p2.hours[:3]) == 0

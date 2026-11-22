@@ -293,7 +293,8 @@
             "in_plan": "Tæller med i planen",
             "neighbours": "Nabozoner",
             "heat_source": "Varmekilde",
-            "extra_sources": "Andre varmekilder"
+            "extra_sources": "Andre varmekilder",
+            "maximum": "Maks.-temperatur (loft)"
           },
           "data_description": {
             "minimum_entity": "Fx en input_number med rummets laveste komforttemperatur.",
@@ -302,7 +303,8 @@
             "in_plan": "Fra = rummet vises og læres, men planen tager ikke hensyn til det (fx en kælder).",
             "neighbours": "Temperaturfølere i tilstødende zoner, fx kælderen under stueetagen eller trappeopgangen. Modellen lærer, hvor meget varme der går imellem.",
             "heat_source": "Den varmekilde, som rummets termostat eller telestat styrer, og som varmer rummet direkte. Tom = rummet lærer af alle kilder.",
-            "extra_sources": "Kilder der også varmer rummet direkte. Rummet lærer kun af sin egen og disse kilder – varme der kommer fra andre rum, læres via nabozoner. Kilder der kører på samme tider kan ikke skilles ad af data alene."
+            "extra_sources": "Kilder der også varmer rummet direkte. Rummet lærer kun af sin egen og disse kilder – varme der kommer fra andre rum, læres via nabozoner. Kilder der kører på samme tider kan ikke skilles ad af data alene.",
+            "maximum": "Luft-luft-planen varmer aldrig rummet over dette."
           }
         },
         "reconfigure": {
@@ -318,7 +320,8 @@
             "in_plan": "Tæller med i planen",
             "neighbours": "Nabozoner",
             "heat_source": "Varmekilde",
-            "extra_sources": "Andre varmekilder"
+            "extra_sources": "Andre varmekilder",
+            "maximum": "Maks.-temperatur (loft)"
           },
           "data_description": {
             "minimum_entity": "Fx en input_number med rummets laveste komforttemperatur.",
@@ -327,7 +330,8 @@
             "in_plan": "Fra = rummet vises og læres, men planen tager ikke hensyn til det (fx en kælder).",
             "neighbours": "Temperaturfølere i tilstødende zoner, fx kælderen under stueetagen eller trappeopgangen. Modellen lærer, hvor meget varme der går imellem.",
             "heat_source": "Den varmekilde, som rummets termostat eller telestat styrer, og som varmer rummet direkte. Tom = rummet lærer af alle kilder.",
-            "extra_sources": "Kilder der også varmer rummet direkte. Rummet lærer kun af sin egen og disse kilder – varme der kommer fra andre rum, læres via nabozoner. Kilder der kører på samme tider kan ikke skilles ad af data alene."
+            "extra_sources": "Kilder der også varmer rummet direkte. Rummet lærer kun af sin egen og disse kilder – varme der kommer fra andre rum, læres via nabozoner. Kilder der kører på samme tider kan ikke skilles ad af data alene.",
+            "maximum": "Luft-luft-planen varmer aldrig rummet over dette."
           }
         }
       },

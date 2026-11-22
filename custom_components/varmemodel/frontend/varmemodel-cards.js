@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.5.15';
+  const VERSION = '0.6.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -61,7 +61,9 @@
         const rooms = devs.filter((r) => r.via_device_id === d.id)
           .map((r) => ({ id: r.id, name: name(r), model: tk(r.id, 'room_device') || tk(r.id, 'room'), heat: tk(r.id, 'room_heat_device') || tk(r.id, 'room_heat') }))
           .filter((r) => r.model);
-        return { id: d.id, name: name(d), kind: plan ? 'hydronic' : 'air_air', plan, rooms, e: (k) => tk(d.id, k) };
+        // Luft-luft har også en plan (fra 0.6): typen afgøres af enhedens model, ellers af fremløbsplanen
+        const hydro = d.model ? d.model !== 'Luft-luft' : !!tk(d.id, 'plan_flow');
+        return { id: d.id, name: name(d), kind: hydro ? 'hydronic' : 'air_air', plan, rooms, e: (k) => tk(d.id, k) };
       });
       sources.forEach((s) => s.rooms.forEach((r) => { r.src = s; }));
       const hyd = sources.find((s) => s.kind === 'hydronic');
