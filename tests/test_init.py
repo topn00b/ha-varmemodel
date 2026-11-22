@@ -320,3 +320,44 @@ async def test_replan_holds_last_known_room_temperature(ha: HomeAssistant) -> No
     c.last_known["sensor.rum_1"][1] -= 3 * 3600
     await c.async_replan()
     assert c.plans[hyd]["rooms_skipped"] == ["Stue"] and not c.plans[hyd]["rooms_held"]
+
+
+async def test_replan_uses_measured_heat(ha: HomeAssistant) -> None:
+    """De seneste 6 timers målte varme går med i forudsigelsen (gulvets forsinkelse), og tjekket regnes med den målte varme."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0 + (k % 6) * 0.3} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.5", {"timer": items})
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.rum_1", "20.5", {"state_class": "measurement"})
+    ha.states.async_set("input_number.min_1", "20")
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub(HYD, "source")])
+    e.add_to_hass(ha)
+    hyd = next(iter(e.subentries))
+    from homeassistant.config_entries import ConfigSubentry
+    ha.config_entries.async_add_subentry(e, ConfigSubentry(data={"name": "Stue", "temperature": "sensor.rum_1", "minimum_entity": "input_number.min_1",
+                                                                 "heat_source": hyd}, subentry_type="room", title="Stue", unique_id=None))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c.rooms["sensor.rum_1"] = {"value": 0.1, "extra": {"sources": {"Luft-vand": {"now": 0.03, "delayed": 0.02}}, "accuracy_6h_k": 0.2}}
+    c._recent_sync = lambda s, a, b: ({}, {})
+    await c.async_replan()
+    without = c.plans[hyd]["rooms"]["Stue"][0]
+    q = {h0 - k * 3600: 3.0 for k in range(1, 13)}
+    c._recent_sync = lambda s, a, b: (q, {h: 2.0 for h in q})
+    c.fc_log.clear()
+    await c.async_replan()
+    # 3 kWh for 6 timer siden × 0,02 °C/kWh forsinket: rummet ventes varmere (planen kan så give lidt mindre varme nu)
+    assert c.plans[hyd]["rooms"]["Stue"][0] > without
+    assert c.fc_log[str(h0)]["_t0"] == {"Stue": 20.5}
+    # Forudsigelsen fra for 6 timer siden tjekkes med den varme, der faktisk kom (ikke planens)
+    c.fc_log = {str(h0 - 6 * 3600): {"Stue": [20.0] * 8, "_t0": {"Stue": 20.0}}}
+    await c.async_replan()
+    k = c.rooms_check["Stue"]
+    assert k["grundlag"] == "målt varme" and k["ventet_med_plan"] == 20.0 and k["ventet"] > 20.2
+    assert k["status"] in ("ramt", "over", "under") and k["målt"] == 20.5

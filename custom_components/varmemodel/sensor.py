@@ -420,7 +420,8 @@ class RoomForecastSensor(RoomEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         k = self.coordinator.rooms_check.get(self.room_name) or {}
-        return {"målt": k.get("målt"), "afvigelse": k.get("afvigelse"), "status": k.get("status"), "grænse": k.get("grænse"), "afviger": k.get("flag")}
+        return {"målt": k.get("målt"), "afvigelse": k.get("afvigelse"), "status": k.get("status"), "grænse": k.get("grænse"), "afviger": k.get("flag"),
+                "ventet_med_plan": k.get("ventet_med_plan"), "grundlag": k.get("grundlag")}
 
 
 class CommandSensor(SourceEntity, SensorEntity):

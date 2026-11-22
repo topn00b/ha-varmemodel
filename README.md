@@ -97,7 +97,7 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 
 1. **Behov** pr. time = varmetab × (mål − forventet ude) − gratis varme.
 2. Varmen lægges i portioner i de timer, hvor den koster mindst el (pris ÷ COP). COP falder med fremløbet, så jævn, lav drift vinder, når priserne er nogenlunde ens. Hver time med varme får mindst den laveste effekt, varmepumpen kan holde.
-3. **Rummene forudsiges** time for time med rummodellerne (varme nu og forsinket, afkøling, gratis varme, nabozoner). Kommer et rum under min. + sin usikkerhed, lægges der varme i den billigste time før.
+3. **Rummene forudsiges** time for time med rummodellerne (varme nu og forsinket, afkøling, gratis varme, nabozoner). Kommer et rum under min. + sin usikkerhed, lægges der varme i den billigste time før. Den forsinkede del af de første 6 timer kommer fra den målte varme i de seneste 6 timer, fordi gulvet afgiver den med forsinkelse.
 4. For lange pauser brydes med den billigste time.
 5. **Fremløb** = mål + effekt ÷ gulvets afgivelse, og **kurve-forskydning** = fremløb − varmekurven.
 
@@ -121,6 +121,11 @@ Reglerne:
 Attributterne tæller pr. døgn skrivninger, tænd/sluk-skift og varme i blokerede timer. *within_limits* er sand, når der er højst 20 skrivninger, højst 8 skift og ingen varme i blokerede timer.
 
 **Nødplan:** mangler elprisen helt, planlægges med flad pris, så rummene stadig holdes over komfortgulvet. Det står i begrundelsen, og *inputs_ok* er falsk.
+
+**Tjek af forudsigelsen:** hver time tjekkes rummene mod det, rummodellen forudsagde for 6 timer siden.
+- Det *ventede* regnes fra rummets temperatur dengang med den varme, der faktisk kom (*grundlag: målt varme*). Så tjekkes modellen også, når planen ikke blev fulgt, fx mens en automation styrer efter noget andet.
+- Planens egen forudsigelse står som *ventet_med_plan*.
+- Status er *ramt*, *over* eller *under*. Afviger et rum mere end grænsen, vises det som afvigelse.
 
 **Følere der falder ud:** svarer en rum- eller udeføler ikke, bruges den sidst kendte værdi i højst 2 timer. Det sker fx, når en skytjeneste er nede.
 - Rummet er stadig med i planen og står under *rooms_held* på *Plan nu*.

@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.5.5';
+  const VERSION = '0.5.6';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -212,7 +212,7 @@
           const a = d.a; const per = a.varmekilder_grader_pr_kwh || {};
           o += `<tr><td><span class="v" data-e="${esc(d.r.model)}">${esc(d.r.name)}</span>${d.chk && d.chk.flag ? `<span class="flag" data-e="${esc(d.r.model)}" title="afviger mere end dobbelt så meget som normalt">!</span>` : ''}</td>`
             + `<td class="n">${M(h, d.tE, 1, '°C', d.cls)}</td>`
-            + `<td class="n">${d.chk ? fmt(d.chk.ventet) : '–'}</td><td class="${d.cls}">${statusTxt(d)}</td>`
+            + `<td class="n">${d.chk ? `<span title="${esc(d.chk.grundlag === 'målt varme' ? `regnet med den målte varme · planen ventede ${fmt(d.chk.ventet_med_plan)} °C` : 'regnet med planens varme')}">${fmt(d.chk.ventet)}</span>` : '–'}</td><td class="${d.cls}">${statusTxt(d)}</td>`
             + `<td class="n">${fmt(d.f3)}</td><td class="n">${fmt(d.f6)}</td>`;
           if (!compact) {
             o += `<td class="n">${d.low === null ? '–' : `${fmt(d.low)} <span class="mut sm">${when(d.lowT)}</span>`}</td>`

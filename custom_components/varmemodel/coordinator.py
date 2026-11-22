@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import partial
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 import logging
 from math import cos, radians, sin
@@ -888,6 +888,28 @@ class VarmemodelCoordinator:
         st = self.hass.states.get(eid)
         return _num(st.state) if st else None
 
+    def _recent_sync(self, s: SourceState, start: int, end: int) -> tuple[dict[int, float], dict[int, float]]:
+        """Målt varme til huset (kWh uden varmt vand) og udetemperatur time for time i [start, end) fra 5-minutters statistik."""
+        heat, outdoor = s.eid(CONF_HEAT), self._id(CONF_OUTDOOR)
+        want = {x for x in (heat, outdoor) if x}
+        if not heat or not want:
+            return {}, {}
+        stats = statistics_during_period(self.hass, dt_util.utc_from_timestamp(start), dt_util.utc_from_timestamp(end), want,
+                                         "5minute", {"energy": "kWh", "temperature": "°C"}, {"change", "mean"})
+        q: dict[int, float] = {}
+        tsum: dict[int, list[float]] = {}
+        for x in stats.get(heat, []):
+            if (v := _num(x.get("change"))) is not None:
+                h = int(_ts(x["start"]) // 3600 * 3600)
+                q[h] = q.get(h, 0.0) + v
+        for x in stats.get(outdoor, []) if outdoor else []:
+            if (v := _num(x.get("mean"))) is not None:
+                tsum.setdefault(int(_ts(x["start"]) // 3600 * 3600), []).append(v)
+        for h in list(q):
+            dhw = (s.collected.get(str(h)) or {}).get("dhw") or 0.0
+            q[h] = max(q[h], 0.0) * (1 - min(dhw, 60.0) / 60)
+        return q, {h: sum(v) / len(v) for h, v in tsum.items()}
+
     def _held_num(self, eid: str | None) -> tuple[float | None, bool]:
         """Følerens værdi. Er føleren væk, bruges den sidst kendte værdi i højst HOLD_S (og »holdt« er True)."""
         if not eid:
@@ -1001,8 +1023,14 @@ class VarmemodelCoordinator:
                 for pr in show:
                     pr.margin += 0.2
             target = (sum(mins) / len(mins) + offset) if mins else 20.5
+            # Gulvet afgiver varmen fra de seneste 6 timer med forsinkelse: den målte varme går med i forudsigelsen
+            try:
+                recent_q, recent_out = await get_instance(self.hass).async_add_executor_job(self._recent_sync, s, h0 - 12 * 3600, h0)
+            except Exception:  # noqa: BLE001 – uden statistik regnes som før uden de seneste timers varme
+                recent_q, recent_out = {}, {}
+            past_q = [recent_q.get(h0 - k * 3600, 0.0) for k in range(6, 0, -1)]
             p = await self.hass.async_add_executor_job(
-                partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), label=_clock,
+                partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), past_q=past_q, label=_clock,
                         boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE)))
             # Log: det planlagte for timen (første plan i timen) og rummenes forudsigelse – til »i går« og »!«
             log = self.plan_log.setdefault(sid, {})
@@ -1014,7 +1042,8 @@ class VarmemodelCoordinator:
                 del log[k]
             # Forudsigelse for alle rum: varmekildens rum med planens varme, luft-luft-kilders rum med
             # samme tilførsel som de seneste 24 timer (de har ingen plan endnu)
-            fc_all = simulate_rooms(show, hours, [x["heat_kw"] for x in p.hours]) if show else {}
+            fc_all = simulate_rooms(show, hours, [x["heat_kw"] for x in p.hours], past_q) if show else {}
+            hyd_rooms = {r.name for r in show}
             for s2 in self.sources.values():
                 if s2.kind == SOURCE_HYDRONIC:
                     continue
@@ -1028,17 +1057,28 @@ class VarmemodelCoordinator:
             held = sorted({r.name for r in show if r.held})
             if fc_all and str(h0) not in self.fc_log:
                 self.fc_log[str(h0)] = {name: v[:8] for name, v in fc_all.items() if name not in held}
+                self.fc_log[str(h0)]["_t0"] = {r.name: round(r.t_now, 2) for r in show if not r.held}
             for k in [k for k in self.fc_log if int(k) < h0 - 8 * 3600]:
                 del self.fc_log[k]
             checks: dict[str, dict[str, Any]] = {}
             old_fc = self.fc_log.get(str(h0 - 6 * 3600)) or {}
+            t0s = old_fc.get("_t0") or {}
+            h6 = [PlanHour(ts=h0 - (6 - k) * 3600, price=0.0, t_out=recent_out.get(h0 - (6 - k) * 3600, t_now if t_now is not None else 0.0))
+                  for k in range(6)]
+            q6 = [recent_q.get(h.ts, 0.0) for h in h6]
+            past6 = [recent_q.get(h.ts - 6 * 3600, 0.0) for h in h6]
             for r in show:
                 f = old_fc.get(r.name) or []
                 if len(f) > 5 and not r.held:
-                    dev = round(r.t_now - f[5], 2)
+                    exp, basis = f[5], "planens varme"
+                    if r.name in hyd_rooms and r.name in t0s and recent_q:
+                        # Samme rummodel, men med den varme der faktisk kom: tjekker modellen, også når planen ikke blev fulgt
+                        exp = simulate_rooms([replace(r, t_now=float(t0s[r.name]))], h6, q6, past6)[r.name][5]
+                        basis = "målt varme"
+                    dev = round(r.t_now - exp, 2)
                     hit, lim = max(0.15, r.margin), round(max(0.3, 2 * r.margin), 2)
-                    checks[r.name] = {"ventet": f[5], "målt": round(r.t_now, 2), "afvigelse": dev, "grænse": lim,
-                                      "status": "ramt" if abs(dev) <= hit else ("over" if dev > 0 else "under"), "flag": abs(dev) > lim}
+                    checks[r.name] = {"ventet": exp, "ventet_med_plan": f[5], "grundlag": basis, "målt": round(r.t_now, 2), "afvigelse": dev,
+                                      "grænse": lim, "status": "ramt" if abs(dev) <= hit else ("over" if dev > 0 else "under"), "flag": abs(dev) > lim}
             self.rooms_check = checks
             if cold:
                 note = f"koldere end det kalibrerede område ({coldest:.0f} °C mod {cold_lim:.0f} °C) – planen er forsigtig"
