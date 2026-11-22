@@ -201,6 +201,9 @@
       },
       "preload": {
         "name": "Forvarm pr. 6 timers blokering"
+      },
+      "flow_over_curve": {
+        "name": "Maks. fremløb over varmekurven"
       }
     },
     "binary_sensor": {

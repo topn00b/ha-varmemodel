@@ -97,6 +97,7 @@ from .const import (
     CONF_RED_ALLOWANCE,
     CONF_COLD_CAUTION,
     CONF_PRELOAD,
+    CONF_FLOW_OVER_CURVE,
     CONF_MEASURES_CALENDAR,
     SETTINGS,
     DEFAULT_WINDOW_DAYS,
@@ -1238,7 +1239,7 @@ class VarmemodelCoordinator:
             p = await self.hass.async_add_executor_job(
                 partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), past_q=past_q, label=_clock,
                         boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE),
-                        preload=self.setting(CONF_PRELOAD)))
+                        preload=self.setting(CONF_PRELOAD), flow_over_curve=self.setting(CONF_FLOW_OVER_CURVE)))
             # Log: det planlagte for timen (første plan i timen) og rummenes forudsigelse – til »i går« og »!«
             log = self.plan_log.setdefault(sid, {})
             if p.hours and p.hours[0]["ts"] == h0 and str(h0) not in log:

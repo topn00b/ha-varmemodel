@@ -98,6 +98,7 @@ CONF_BOOST_HOURS = "boost_hours"
 CONF_RED_ALLOWANCE = "red_allowance"
 CONF_COLD_CAUTION = "cold_caution"
 CONF_PRELOAD = "preload"
+CONF_FLOW_OVER_CURVE = "flow_over_curve"
 CONF_MEASURES_CALENDAR = "measures_calendar"
 # Planens indstillinger (tal-entiteter): nøgle, min, maks, trin, enhed, standard
 SETTINGS = (
@@ -110,4 +111,6 @@ SETTINGS = (
     ("cold_caution", 0, 30, 1, "%", 10),
     # Bevidst forvarmning før blokeringer: rummenes krav stiger så mange °C pr. 6 timer inde i blokeringen; 0 = slået fra
     ("preload", 0, 1, 0.1, "°C", 0.3),
+    # Lavt og jævnt: højst så mange °C fremløb over varmepumpens egen kurve (effekten pr. time begrænses tilsvarende)
+    ("flow_over_curve", -5, 5, 0.5, "°C", 0.0),
 )

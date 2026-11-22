@@ -134,7 +134,7 @@ def estimate_room(r: PlanRoom, t0: float, ts0: float, end: float, q5: dict[int, 
 def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
-              red_allowance: float = 0.0, preload: float = 0.0) -> Plan:
+              red_allowance: float = 0.0, preload: float = 0.0, flow_over_curve: float | None = None) -> Plan:
     """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra.
 
     ``boost`` (»jeg fryser«) hæver målet og rummenes min. i de første ``boost_hours`` timer.
@@ -165,10 +165,18 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
     q = [0.0] * n
     free = [i for i, h in enumerate(hours) if not h.blocked]
 
+    # Lavt og jævnt: fremløbet må højst ligge ``flow_over_curve`` °C over varmepumpens egen kurve ved timens
+    # udetemperatur. Det begrænser effekten pr. time, så varmen spredes over flere timer (højere COP, færre afrimninger).
+    pcap = [model.p_max] * n
+    if flow_over_curve is not None and model.emission_kw_k > 0:
+        for i, h in enumerate(hours):
+            fmax = model.curve_c0 + model.curve_slope * h.t_out + flow_over_curve
+            pcap[i] = min(model.p_max, max(model.p_min, (fmax - target) * model.emission_kw_k))
+
     def add_cost(i: int, amount: float) -> float:
         """Ekstra el-pris (kr) for at lægge ``amount`` kWh mere i time i."""
         p0, p1 = q[i], q[i] + amount
-        if p1 > model.p_max:
+        if p1 > pcap[i] + 1e-9:
             return float("inf")
         h = hours[i]
         return h.price * (_el(model, h.t_out, p1, target) - _el(model, h.t_out, p0, target))

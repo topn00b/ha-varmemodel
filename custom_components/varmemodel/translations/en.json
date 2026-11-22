@@ -201,6 +201,9 @@
       },
       "preload": {
         "name": "Preload per 6 h of blocking"
+      },
+      "flow_over_curve": {
+        "name": "Max flow above the heating curve"
       }
     },
     "binary_sensor": {

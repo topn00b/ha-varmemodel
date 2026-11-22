@@ -244,3 +244,14 @@ def test_flow_target_is_direct_and_bounded() -> None:
     assert flow_for(m, 0.5, 19.9) == 25.0 and flow_for(m, 9.0, 21.0) == 45.0
     p = make_plan(hours(12, t_out=lambda i: 2.0), m, [], 20.0)
     assert all(x["flow"] is None or 25.0 <= x["flow"] <= 45.0 for x in p.hours)
+
+
+def test_low_and_even_caps_flow_at_curve() -> None:
+    """Lavt og jævnt: fremløbet holdes på varmepumpens egen kurve, så varmen spredes over flere timer."""
+    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, emission_kw_k=0.283, curve_c0=34.5, curve_slope=-0.6)
+    hs = hours(24, price=lambda i: 1.0 if i < 6 else 3.0, t_out=lambda i: 1.0)
+    free = make_plan(hs, m, [], 20.0)
+    even = make_plan(hs, m, [], 20.0, flow_over_curve=0.0)
+    on = lambda p: sum(1 for x in p.hours if x["heat_kw"] > 0)
+    assert max(x["flow"] or 0 for x in even.hours) <= 34.5 - 0.6 + 0.25
+    assert on(even) > on(free) and abs(even.heat_kwh - free.heat_kwh) < 2.0
