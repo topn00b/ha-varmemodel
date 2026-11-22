@@ -182,6 +182,7 @@ class VarmemodelCoordinator:
         self.commands: dict[str, dict[str, Any]] = {}  # anbefalet styring pr. vandbåren kilde
         self.plan_stats: dict[str, Any] = {}  # andel kvarterer med frisk plan i dag
         self.last_known: dict[str, list[float]] = {}  # føler -> [værdi, tidspunkt]: bro over korte udfald
+        self.device_ids: dict[str | None, str] = {}  # underpunkt (None = huset) -> enheds-id i HA
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[CALLBACK_TYPE] = []
         self._build_sources()

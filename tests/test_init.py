@@ -228,8 +228,13 @@ async def test_device_tree(ha: HomeAssistant) -> None:
     hyd_id = next(iter(e.subentries))
     ha.config_entries.async_add_subentry(e, __import__("homeassistant.config_entries", fromlist=["ConfigSubentry"]).ConfigSubentry(
         data={"name": "Stue", "temperature": "sensor.rum_1", "heat_source": hyd_id}, subentry_type="room", title="Stue", unique_id=None))
-    assert await ha.config_entries.async_setup(e.entry_id)
-    await ha.async_block_till_done(wait_background_tasks=True)
+    from unittest.mock import patch
+
+    with patch("homeassistant.helpers.device_registry.report_usage") as ru:
+        assert await ha.config_entries.async_setup(e.entry_id)
+        await ha.async_block_till_done(wait_background_tasks=True)
+    # Træet bygges med enheds-id'er: ingen advarsel om det udfasede via_device
+    assert not [c for c in ru.call_args_list if "via_device" in str(c)]
     reg = dr.async_get(ha)
     devs = {next(iter(d.identifiers))[1]: d for d in dr.async_entries_for_config_entry(reg, e.entry_id)}
     room_sid = next(s for s, x in e.subentries.items() if x.subentry_type == "room")

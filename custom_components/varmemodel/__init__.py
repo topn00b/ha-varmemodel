@@ -8,11 +8,13 @@ from pathlib import Path
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     CONF_LEGACY_IDS,
+    CONF_NAME,
+    DEFAULT_NAME,
     CONF_MIGRATED_SOURCE,
     CONF_SOURCE_NAME,
     CONF_SOURCE_TYPE,
@@ -112,10 +114,37 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+def _ensure_devices(hass: HomeAssistant, entry: VarmemodelConfigEntry, coordinator: VarmemodelCoordinator) -> None:
+    """Enhedstræet huset → varmekilde → rummene den varmer, bygget med enheds-id'er (via_device_id).
+
+    Forældrene oprettes før børnene, så entiteterne kan pege på dem uden det udfasede via_device."""
+    reg = dr.async_get(hass)
+    svc = dr.DeviceEntryType.SERVICE
+    house = reg.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, entry.entry_id)},
+                                    name=entry.title or entry.data.get(CONF_NAME) or DEFAULT_NAME, manufacturer="Varmemodel",
+                                    model="Hus", entry_type=svc)
+    ids: dict[str | None, str] = {None: house.id}
+    for s in coordinator.sources.values():
+        d = reg.async_get_or_create(config_entry_id=entry.entry_id, config_subentry_id=s.sid, identifiers={(DOMAIN, f"{entry.entry_id}_{s.sid}")},
+                                    name=s.name, manufacturer="Varmemodel", model="Luft-vand" if s.kind == SOURCE_HYDRONIC else "Luft-luft",
+                                    entry_type=svc, via_device_id=house.id)
+        ids[s.sid] = d.id
+    for r in coordinator.rooms_cfg:
+        if not (sub := r.get("subentry_id")):
+            continue
+        src = coordinator.room_source(r)
+        d = reg.async_get_or_create(config_entry_id=entry.entry_id, config_subentry_id=sub, identifiers={(DOMAIN, f"{entry.entry_id}_{sub}")},
+                                    name=r.get("name"), manufacturer="Varmemodel", model="Rum", entry_type=svc,
+                                    via_device_id=ids.get(src.sid, house.id) if src is not None else house.id)
+        ids[sub] = d.id
+    coordinator.device_ids = ids
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry) -> bool:
     coordinator = VarmemodelCoordinator(hass, entry)
     await coordinator.async_start()
     entry.runtime_data = coordinator
+    _ensure_devices(hass, entry, coordinator)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     return True

@@ -22,12 +22,14 @@ class VarmemodelEntity(Entity):
         self._attr_translation_key = key
         if sub_id:
             # Hver varmekilde og hvert rum (underpunkt) har sin egen enhed under huset
-            self._attr_device_info = DeviceInfo(
+            info = DeviceInfo(
                 identifiers={(DOMAIN, f"{entry.entry_id}_{sub_id}")}, name=sub_name, manufacturer="Varmemodel",
                 model=model, entry_type=DeviceEntryType.SERVICE,
-                # Træet: huset → varmekilde → rummene den varmer
-                via_device=(DOMAIN, f"{entry.entry_id}_{parent_sub_id}") if parent_sub_id else (DOMAIN, entry.entry_id),
             )
+            # Træet: huset → varmekilde → rummene den varmer (enhederne er oprettet i async_setup_entry)
+            if parent := coordinator.device_ids.get(parent_sub_id) or coordinator.device_ids.get(None):
+                info["via_device_id"] = parent
+            self._attr_device_info = info
         else:
             self._attr_device_info = DeviceInfo(
                 identifiers={(DOMAIN, entry.entry_id)}, name=entry.title or entry.data.get(CONF_NAME) or DEFAULT_NAME,
