@@ -126,6 +126,7 @@ Attributterne tæller pr. døgn skrivninger, tænd/sluk-skift og varme i blokere
 - Det *ventede* regnes fra rummets temperatur dengang med den varme, der faktisk kom (*grundlag: målt varme*). For rum på en luft-luft-kilde uden varmemåler bruges den målte el (*målt el*). Så tjekkes modellen også, når planen ikke blev fulgt, fx mens en automation styrer efter noget andet.
 - Planens egen forudsigelse står som *ventet_med_plan*.
 - Status er *ramt*, *over* eller *under*. Afviger et rum mere end grænsen, vises det som afvigelse.
+- *Ramt* er inden for rummets margen. *Grænsen* er 2 × rummets ærlige præcision, dvs. den største af fittets og den afprøvede. Margenens loft på 0,6 °C gælder kun planen, så et svagt rum (fx ±1,2 °C) ikke giver falske afvigelser.
 
 **Følere der falder ud:** svarer en rum- eller udeføler ikke, bruges den sidst kendte værdi i højst 2 timer. Det sker fx, når en skytjeneste er nede.
 - Rummet er stadig med i planen og står under *rooms_held* på *Plan nu*.

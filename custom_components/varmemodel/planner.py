@@ -39,6 +39,7 @@ class PlanRoom:
     cool_per_hk: float  # °C pr. time pr. grad (ude − rum)
     free_per_h: float = 0.0  # gratis varme °C pr. time
     margin: float = 0.3  # usikkerhed (°C) – rummet skal holdes over min + margin
+    accuracy: float = 0.0  # rummodellens ærlige præcision (°C) uden loft – tjekkets afvigelsesgrænse
     neighbours: list[tuple[float, float]] = field(default_factory=list)  # (°C pr. time pr. grad, naboens temperatur)
     held: bool = False  # temperaturen er den sidst kendte (føleren er væk lige nu)
 

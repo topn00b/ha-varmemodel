@@ -805,12 +805,12 @@ class VarmemodelCoordinator:
             tn, _ = self._held_num(nb_eid)
             if tn is not None:
                 nbs.append((float(nb.get("per_h_k") or 0.0), tn))
+        acc = max(float(ex.get("accuracy_6h_k") or 0.3), float(ex.get("validated_6h_k") or 0.0))
         return PlanRoom(
             name=r["name"] or r["key"], t_now=t_room, t_min=t_min,
             heat_now=float(src.get("now") or 0.0), heat_delayed=float(src.get("delayed") or 0.0),
             cool_per_hk=float(fitd["value"]) / 20, free_per_h=float(ex.get("free_heat_k_per_day") or 0.0) / 24,
-            margin=min(0.6, max(0.2, float(ex.get("accuracy_6h_k") or 0.3), float(ex.get("validated_6h_k") or 0.0)))
-            + (0.2 if (fitd.get("r2") or 0) < 0.3 else 0.0),
+            margin=min(0.6, max(0.2, acc)) + (0.2 if (fitd.get("r2") or 0) < 0.3 else 0.0), accuracy=acc,
             neighbours=nbs, held=held,
         )
 
@@ -1091,7 +1091,8 @@ class VarmemodelCoordinator:
                                              [rq[h.ts - 6 * 3600] for h in h6])[r.name][5]
                         basis = label
                     dev = round(r.t_now - exp, 2)
-                    hit, lim = max(0.15, r.margin), round(max(0.3, 2 * r.margin), 2)
+                    # Afvigelse først ud over 2 × rummets ærlige præcision: margenens loft på 0,6 gælder planen, ikke tjekket
+                    hit, lim = max(0.15, r.margin), round(max(0.3, 2 * r.margin, 2 * r.accuracy), 2)
                     checks[r.name] = {"ventet": exp, "ventet_med_plan": f[5], "grundlag": basis, "målt": round(r.t_now, 2), "afvigelse": dev,
                                       "grænse": lim, "status": "ramt" if abs(dev) <= hit else ("over" if dev > 0 else "under"), "flag": abs(dev) > lim}
             self.rooms_check = checks
