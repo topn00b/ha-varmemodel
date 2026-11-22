@@ -95,6 +95,7 @@ from .const import (
     CONF_BOOST_HOURS,
     CONF_RED_ALLOWANCE,
     CONF_COLD_CAUTION,
+    CONF_PRELOAD,
     CONF_MEASURES_CALENDAR,
     SETTINGS,
     DEFAULT_WINDOW_DAYS,
@@ -1176,7 +1177,8 @@ class VarmemodelCoordinator:
             past_q = [recent_q.get(h0 - k * 3600, 0.0) for k in range(6, 0, -1)]
             p = await self.hass.async_add_executor_job(
                 partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), past_q=past_q, label=_clock,
-                        boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE)))
+                        boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE),
+                        preload=self.setting(CONF_PRELOAD)))
             # Log: det planlagte for timen (første plan i timen) og rummenes forudsigelse – til »i går« og »!«
             log = self.plan_log.setdefault(sid, {})
             if p.hours and p.hours[0]["ts"] == h0 and str(h0) not in log:
@@ -1250,7 +1252,7 @@ class VarmemodelCoordinator:
                                               for r in show if r.estimated
                                               for e in [next((x for x in self.estimates.values() if x["name"] == r.name), None)] if e},
                           "boost": boost_on, "boost_until": boost_note,
-                          "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
+                          "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE), "preload": self.setting(CONF_PRELOAD),
                           "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
             # Anbefalet styring: planens ønske nu omsat efter reglerne, der skåner varmepumpen
             cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None

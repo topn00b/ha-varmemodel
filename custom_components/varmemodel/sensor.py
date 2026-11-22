@@ -338,7 +338,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "rooms_band": p.get("rooms_band"), "cautious": p.get("cautious"), "safety": p.get("safety"),
             "fresh_pct_today": m.get("fresh_pct_today"),
             "følere": _sensors(self.src),
-            "boost_until": p.get("boost_until"), "boost_delta": p.get("boost_delta"), "red_allowance": p.get("red_allowance"),
+            "boost_until": p.get("boost_until"), "boost_delta": p.get("boost_delta"), "red_allowance": p.get("red_allowance"), "preload": p.get("preload"),
             "max_pause": p.get("max_pause"), "comfort_offset": p.get("comfort_offset"),
             "history": [{"t": _ts_local(int(k)), "plan": v["p"], "price": v["pr"], "blocked": v["b"]}
                         for k, v in sorted((self.coordinator.plan_log.get(self.src.sid) or {}).items(), key=lambda kv: int(kv[0]))[-48:]],

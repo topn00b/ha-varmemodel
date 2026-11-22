@@ -72,6 +72,7 @@ class Plan:
 
 
 STEP = 0.25  # kWh pr. portion
+PRELOAD_MAX = 1.0  # forvarmning: højst så mange °C ekstra krav sidst i en lang blokering
 
 
 def _cop(m: SourceModel, t_out: float, p: float, target: float) -> float:
@@ -125,11 +126,13 @@ def estimate_room(r: PlanRoom, t0: float, ts0: float, end: float, q5: dict[int, 
 def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
-              red_allowance: float = 0.0) -> Plan:
+              red_allowance: float = 0.0, preload: float = 0.0) -> Plan:
     """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra.
 
     ``boost`` (»jeg fryser«) hæver målet og rummenes min. i de første ``boost_hours`` timer.
     ``red_allowance``: så meget må et rum falde under sit min. i blokerede timer.
+    ``preload``: bevidst forvarmning – i blokerede timer hæves rummenes krav med så mange °C pr. 6 timer inde
+    i blokeringen (højst ``PRELOAD_MAX``). Jo længere gulvene skal være slukket, jo mere lades de op før.
     """
     n = len(hours)
     plan = Plan()
@@ -140,6 +143,13 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
     def limit(r: PlanRoom, i: int) -> float:
         """Laveste tilladte temperatur for rummet ved udgangen af time i."""
         return r.t_min + (boost if i < boost_hours else 0.0) - (red_allowance if hours[i].blocked else 0.0)
+
+    # Forvarmning: kravet stiger med antal timer inde i en blokering (time 1 i en blokering: preload/6 osv.)
+    pre: list[float] = []
+    run = 0
+    for h in hours:
+        run = run + 1 if h.blocked else 0
+        pre.append(min(PRELOAD_MAX, max(preload, 0.0) * run / 6))
 
     demand = [max(0.0, (model.heat_loss_w_k * (target + (boost if i < boost_hours else 0.0) - h.t_out) - model.gains_w) / 1000)
               for i, h in enumerate(hours)]
@@ -179,26 +189,29 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
 
     # 3) rummene: kommer et rum under min + usikkerhed, lægges varme i den billigste frie time før.
     #    Kan en time ikke rettes (fx rød lige nu, eller timerne før er fulde), springes netop den time
-    #    over, og tjekket fortsætter – så der stadig varmes op før næste blokering. Hvert rum kan højst
-    #    kræve 10 kWh ekstra, så ét svagt rum ikke trækker hele planen.
+    #    over, og tjekket fortsætter – så der stadig varmes op før næste blokering. Husets behov i de
+    #    blokerede timer må flyttes frem; derudover kan hvert rum højst kræve 10 kWh ekstra, så ét svagt
+    #    rum ikke trækker hele planen. Ved samme pris lægges varmen så sent som muligt før behovet
+    #    (mindre går tabt, og gulvets forsinkede varme når ind i blokeringen).
     skip: set[tuple[str, int]] = set()
     extra: dict[str, float] = {}
+    cap = 10.0 + sum(d for d, h in zip(demand, hours) if h.blocked)
     for _ in range(1500):
         sim = simulate_rooms(rooms, hours, q, past_q)
         worst: tuple[int, PlanRoom] | None = None
         for r in rooms:
             for i, t in enumerate(sim[r.name]):
-                if t < limit(r, i) + r.margin and (r.name, i) not in skip:
+                if t < limit(r, i) + r.margin + pre[i] and (r.name, i) not in skip:
                     if worst is None or i < worst[0]:
                         worst = (i, r)
                     break
         if worst is None:
             break
         i_bad, r = worst
-        if extra.get(r.name, 0.0) >= 10.0:
+        if extra.get(r.name, 0.0) >= cap:
             skip.update((r.name, k) for k in range(i_bad, n))
             continue
-        added = add_cheapest([j for j in free if j <= i_bad], STEP)
+        added = add_cheapest([j for j in reversed(free) if j <= i_bad], STEP)
         if added:
             extra[r.name] = extra.get(r.name, 0.0) + added
         else:
@@ -246,5 +259,21 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
         plan.cost_kr += el * h.price
     plan.heat_kwh, plan.el_kwh, plan.cost_kr = round(plan.heat_kwh, 1), round(plan.el_kwh, 1), round(plan.cost_kr, 1)
     on = sum(1 for x in plan.hours if x["heat_kw"] > 0)
-    plan.reason = f"{on} timer, {plan.heat_kwh} kWh varme for ca. {plan.cost_kr} kr" + (" – " + "; ".join(plan.warnings) if plan.warnings else "")
+    # Næste blokering på mindst 3 timer: hvor meget der forvarmes til
+    notes: list[str] = []
+    i = 0
+    while preload > 0 and i < n:
+        if not hours[i].blocked:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and hours[j + 1].blocked:
+            j += 1
+        if j - i + 1 >= 3:
+            end = lab(hours[j].ts + 3600)
+            notes.append(f"forvarmer til blokeringen {lab(hours[i].ts)}–{end.split('kl. ')[-1]} (+{pre[j]:.2f} °C sidst i den)")
+            break
+        i = j + 1
+    plan.reason = (f"{on} timer, {plan.heat_kwh} kWh varme for ca. {plan.cost_kr} kr" + "".join(" – " + x for x in notes)
+                   + (" – " + "; ".join(plan.warnings) if plan.warnings else ""))
     return plan

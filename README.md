@@ -101,9 +101,11 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 4. For lange pauser brydes med den billigste time.
 5. **Fremløb** = mål + effekt ÷ gulvets afgivelse, og **kurve-forskydning** = fremløb − varmekurven.
 
-**Indstillinger (tal-entiteter på huset):** *Maks. pause uden gulvvarme*, *Komfort over min.*, *»Jeg fryser« hæver målet*, *»Jeg fryser« gælder højst* (timer), *Må falde under min. i blokerede timer* og *Forsigtighed ved kulde* (%). De påvirker kun planen.
+**Indstillinger (tal-entiteter på huset):** *Maks. pause uden gulvvarme*, *Komfort over min.*, *»Jeg fryser« hæver målet*, *»Jeg fryser« gælder højst* (timer), *Må falde under min. i blokerede timer*, *Forsigtighed ved kulde* (%) og *Forvarm pr. 6 timers blokering* (°C). De påvirker kun planen.
 
 **Forsigtighed ved kulde:** er vejrudsigten mere end 1 °C koldere end det laveste, varmetabet er målt ved, regnes der med så mange % større varmetab, og rummenes margen hæves 0,2 °C. Standard er 10 %, og 0 slår det fra.
+
+**Forvarmning før blokeringer:** gulvvarme, der skal være slukket i mange timer (fx dyr el), skal lades op før. I blokerede timer hæves rummenes krav med *Forvarm pr. 6 timers blokering* for hver 6 timer inde i blokeringen, dog højst 1 °C. Med standarden 0,3 °C skal rummene stå 0,2 °C højere sidst i en blokering på 4 timer og 0,35 °C højere sidst i en på 7 timer. Planen lægger derfor mere varme før lange blokeringer, mens *Komfort over min.* kan holdes lav resten af tiden. Begrundelsen viser, hvor meget der forvarmes til den næste blokering på mindst 3 timer. 0 slår det fra.
 
 **»Jeg fryser«** gælder fra den slås til, i højst det valgte antal timer og kun til næste blokerede periode begynder. Der varmes aldrig i blokerede timer.
 

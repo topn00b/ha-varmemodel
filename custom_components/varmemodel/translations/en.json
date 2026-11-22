@@ -198,6 +198,9 @@
       },
       "cold_caution": {
         "name": "Caution when colder than calibrated"
+      },
+      "preload": {
+        "name": "Preload per 6 h of blocking"
       }
     },
     "binary_sensor": {

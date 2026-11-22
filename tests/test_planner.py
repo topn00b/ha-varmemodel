@@ -176,3 +176,22 @@ def test_estimate_room_matches_hourly_model() -> None:
     q5b = {k: v for k, v in q5.items() if k < t0 + 3600}
     est2 = estimate_room(r, 20.0, t0, t0 + 5400, q5b, out5, 5.0)
     assert hourly[0] - 0.05 < est2 < hourly[1]
+
+
+def test_preload_charges_floors_before_long_block() -> None:
+    """Bevidst forvarmning: før en lang blokering lades gulvene op, så rummet står højere sidst i blokeringen."""
+    hs = hours(24, price=lambda i: 1.0 if i >= 18 else 2.0, t_out=lambda i: 3.0, blocked=lambda i: 9 <= i <= 16)  # 8 timers blokering
+
+    def room():
+        return PlanRoom(name="Stue", t_now=20.4, t_min=20.0, heat_now=0.08, heat_delayed=0.05, cool_per_hk=0.006, margin=0.2)
+
+    from custom_components.varmemodel.planner import simulate_rooms
+
+    p0 = make_plan(hs, M, [room()], 20.0)
+    p3 = make_plan(hs, M, [room()], 20.0, preload=0.3, label=lambda ts: f"kl. {ts // 3600:02d}")
+    end0 = simulate_rooms([room()], hs, [x["heat_kw"] for x in p0.hours])["Stue"][16]
+    end3 = simulate_rooms([room()], hs, [x["heat_kw"] for x in p3.hours])["Stue"][16]
+    # Uden forvarmning holdes min + usikkerhed (20,2); med 0,3 °C pr. 6 t skal rummet stå 0,4 °C højere sidst i de 8 timer
+    assert end0 >= 20.2 - 0.05 and end3 >= 20.2 + 0.4 - 0.05 and end3 > end0 + 0.15
+    assert sum(x["heat_kw"] for x in p3.hours[:9]) > sum(x["heat_kw"] for x in p0.hours[:9])
+    assert "forvarmer til blokeringen kl. 09–17 (+0.40 °C sidst i den)" in p3.reason and "forvarmer" not in p0.reason

@@ -198,6 +198,9 @@
       },
       "cold_caution": {
         "name": "Forsigtighed ved kulde"
+      },
+      "preload": {
+        "name": "Forvarm pr. 6 timers blokering"
       }
     },
     "binary_sensor": {
