@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.5.3';
+  const VERSION = '0.5.4';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -377,6 +377,10 @@
         o += row('Opdateret', up === null ? '–' : `${up} min. siden · input ${pa.inputs_ok ? 'ok' : 'mangler ' + esc((pa.missing || []).join(', '))}`);
         o += row('Periode', `${pa.horizon_h ?? '–'} timer · ca. ${fmt(pa.cost_kr, 0)} kr`);
         o += row('Jeg fryser', pa.boost ? `+${fmt(pa.boost_delta)} °C til ${when(pa.boost_until)}` : 'fra');
+        const ce = s.e('command'); const ca = at(h, ce);
+        if (ce) o += row('Anbefalet styring', `<span class="v" data-e="${esc(ce)}">${(st(h, ce) || {}).state === 'heat' ? 'varme' : 'slukket'}${ca.shift != null ? ' · kurve ' + sgn(ca.shift, 0) : ''}</span> <span class="mut sm">${esc(ca.reason || '')}</span>`);
+        if (ce) o += row('I dag', `${ca.writes_today ?? 0} skrivninger · ${ca.switches_today ?? 0} tænd/sluk ${ca.within_limits === false ? '<span class="amber">over grænsen</span>' : '<span class="green">inden for grænsen</span>'}`);
+        o += row('Frisk plan i dag', `${fmt(pa.fresh_pct_today, 0)} % af kvartererne`);
         o += '</div>';
       }
       o += '<div class="h2">Planens indstillinger</div><div class="grid">';
@@ -500,6 +504,8 @@
       else if (pa.next_on) plan += ` · start ${when(pa.next_on)}`;
       if (pa.boost) plan += ' · jeg fryser' + (pa.boost_until && pa.boost_until !== 'udløbet' ? ` til ${when(pa.boost_until)}` : '');
       const flags = (c.flags || []).filter((x) => (st(h, x.entity) || {}).state === String(x.state ?? 'on')).map((x) => x.text || x.entity);
+      const ce = main && main.e('command'); const cs = st(h, ce);
+      if (cs && cs.state !== 'unknown' && (cs.state === 'heat') !== (pst === 'heat')) plan += ` · styring: ${cs.state === 'heat' ? 'varme' : 'slukket'} (${cs.attributes.reason || ''})`;
       const bg = zc || 'var(--primary-color)';
       const zone = `<div class="b zb" style="background:${bg};border-color:${bg}"><div class="z">${z ? `${ico} ${esc(z.toUpperCase())} · ` : ''}${fmt(price, 2)} kr/kWh</div>`
         + `<div class="sub">Plan: ${esc(plan)}${c.dry_run ? ' (styrer ikke endnu)' : ''}${flags.length ? ' · ' + esc(flags.join(' · ')) : ''}</div></div>`;
@@ -551,7 +557,9 @@
       const pa = pa0;
       return rows + `<details id="vmzd"><summary>planens begrundelse ▾</summary><div class="sm" style="margin-top:4px">${esc(pa.reason || '')}<br>`
         + `Behov ${fmt(pa.demand_kwh, 0)} kWh · varme ${fmt(pa.heat_kwh, 0)} kWh · el ${fmt(pa.el_kwh, 0)} kWh · ca. ${fmt(pa.cost_kr, 0)} kr over ${pa.horizon_h ?? '–'} timer<br>`
-        + `Komfort +${fmt(pa.comfort_offset)} °C · må falde ${fmt(pa.red_allowance)} °C i blokerede timer · maks. pause ${pa.max_pause ?? '–'} timer</div></details>`;
+        + `Komfort +${fmt(pa.comfort_offset)} °C · må falde ${fmt(pa.red_allowance)} °C i blokerede timer · maks. pause ${pa.max_pause ?? '–'} timer<br>`
+        + (() => { const ca = at(h, hyd[0].e('command')); return ca.reason !== undefined ? `Anbefalet styring: ${esc(ca.reason)} · i dag ${ca.writes_today ?? 0} skrivninger (højst 20) og ${ca.switches_today ?? 0} tænd/sluk (højst 8)<br>` : ''; })()
+        + `Frisk plan i dag: ${fmt(pa.fresh_pct_today, 0)} % af kvartererne</div></details>`;
     }
     alerts(h, vm, D) {
       const w = []; const now = Date.now();
@@ -563,6 +571,8 @@
         const a = at(h, s.plan); const up = a.updated ? Date.parse(a.updated) : 0;
         if (!up || now - up > 30 * 60e3) w.push(['❗', `${s.name}: planen er over 30 min. gammel`]);
         if (a.inputs_ok === false) w.push(['❗', `${s.name}: planen mangler ${(a.missing || []).join(', ')}`]);
+        if (a.safety) w.push(['❗', `${s.name}: nødplan uden priser`]);
+        const ca = at(h, s.e('command')); if (ca.within_limits === false) w.push(['⚠️', `${s.name}: styringen har i dag ${ca.writes_today} skrivninger og ${ca.switches_today} tænd/sluk (grænse 20 og 8)`]);
         for (const [r, k] of Object.entries(a.rooms_check || {})) if (k.flag) w.push(['❗', `${r}: ${fmt(k['målt'])} °C, ventet ${fmt(k.ventet)} °C – åben dør eller vindue?`]);
       }
       if (D.lowMin >= 30) w.push(['⚠️', `COP ${fmt(D.live, 2)} mod forventet ${fmt(D.exp, 2)} i ${Math.round(D.lowMin)} min.`]);

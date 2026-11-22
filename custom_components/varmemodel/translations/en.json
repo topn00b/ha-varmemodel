@@ -157,6 +157,13 @@
       },
       "room_forecast": {
         "name": "{room} forecast for now"
+      },
+      "command": {
+        "name": "Recommended control",
+        "state": {
+          "heat": "Heat",
+          "off": "Off"
+        }
       }
     },
     "button": {

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
-from homeassistant.const import Platform
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
@@ -46,7 +46,40 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         add_extra_js_url(hass, f"{CARDS_URL}?v={version}")
     except Exception:  # noqa: BLE001 – kortene må aldrig stoppe integrationen
         _LOGGER.exception("Kunne ikke registrere Varmemodels kort")
+        return True
+
+    async def _resource(_event: object = None) -> None:
+        try:
+            await _ensure_resource(hass, f"{CARDS_URL}?v={version}")
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Kunne ikke tilføje Varmemodels kort som dashboard-ressource; tilføj %s manuelt", CARDS_URL)
+
+    if hass.is_running:
+        hass.async_create_task(_resource())
+    else:
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _resource)
     return True
+
+
+async def _ensure_resource(hass: HomeAssistant, url: str) -> None:
+    """Kortene som dashboard-ressource (gemt tilstand), så de også indlæses i mobilappen før dashboardet tegnes.
+
+    Findes ressourcen i en anden version, opdateres den; dubletter fjernes."""
+    from homeassistant.components.lovelace.const import LOVELACE_DATA
+
+    data = hass.data.get(LOVELACE_DATA)
+    resources = getattr(data, "resources", None)
+    if resources is None or not hasattr(resources, "async_create_item"):
+        return  # dashboards i YAML-tilstand: ressourcen skal tilføjes manuelt
+    await resources.async_get_info()
+    mine = [r for r in resources.async_items() if str(r.get("url", "")).split("?")[0] == CARDS_URL]
+    if not mine:
+        await resources.async_create_item({"res_type": "module", "url": url})
+        return
+    if mine[0].get("url") != url:
+        await resources.async_update_item(mine[0]["id"], {"res_type": "module", "url": url})
+    for extra in mine[1:]:
+        await resources.async_delete_item(extra["id"])
 
 
 def _manifest_version() -> str:

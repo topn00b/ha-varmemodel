@@ -108,3 +108,53 @@ def test_boost_only_for_given_hours() -> None:
     a = make_plan(hours(n=24), M, [], 20.5, boost=1.0, boost_hours=5)
     b = make_plan(hours(n=24), M, [], 20.5)
     assert abs((a.demand_kwh - b.demand_kwh) - 5 * M.heat_loss_w_k / 1000) < 0.02
+
+
+def test_build_hours_fills_one_missing_hour_and_safety_plan() -> None:
+    from custom_components.varmemodel.inputs import build_hours
+
+    prices = {0: 1.0, 3600: 2.0, 3 * 3600: 4.0, 4 * 3600: 5.0}  # time 2 mangler (fx når uret stilles tilbage)
+    hs, safety = build_hours(0, prices, {}, {}, 3.0, 48)
+    assert not safety and [h.price for h in hs] == [1.0, 2.0, 3.0, 4.0, 5.0]
+    hs, safety = build_hours(0, {}, {}, {7200: True}, 3.0, 48)
+    assert safety and len(hs) == 24 and hs[2].blocked and all(h.price == 1.0 for h in hs)
+
+
+def test_new_prices_extend_the_plan() -> None:
+    """Når morgendagens priser kommer (typisk kl. 13), bliver planen længere."""
+    from custom_components.varmemodel.inputs import build_hours
+
+    today = {k * 3600: 2.0 for k in range(11)}
+    both = {k * 3600: 2.0 for k in range(35)}
+    assert len(build_hours(0, today, {}, {}, 3.0, 48)[0]) == 11
+    assert len(build_hours(0, both, {}, {}, 3.0, 48)[0]) == 35
+
+
+def test_dst_prices_are_keyed_in_utc() -> None:
+    """Sommertid: lokale tider med og uden forskydning giver sammenhængende UTC-timer."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from custom_components.varmemodel.inputs import build_hours, hourly_prices
+
+    tz = ZoneInfo("Europe/Copenhagen")
+
+    def parse_local(s: str):
+        d = datetime.fromisoformat(s)
+        return d if d.tzinfo else d.replace(tzinfo=tz)
+
+    # 25. oktober 2026: kl. 02-03 findes to gange; med forskydning skelnes de
+    items = [{"start": f"2026-10-25T0{h}:00:00{o}", "value": 1.0 + i} for i, (h, o) in enumerate([(0, "+02:00"), (1, "+02:00"), (2, "+02:00"), (2, "+01:00"), (3, "+01:00")])]
+    p = hourly_prices({"prices": items}, None, parse_local)
+    ks = sorted(p)
+    assert len(ks) == 5 and all(b - a == 3600 for a, b in zip(ks, ks[1:]))
+    # uden forskydning ('YYYY-MM-DDTHH') falder de to kl. 02 sammen – planen udfylder hullet
+    items = [{"t": f"2026-10-25T{h:02d}", "el": 1.0} for h in (0, 1, 2, 2, 3, 4)]
+    p = hourly_prices({"timer": items}, None, parse_local)
+    hs, _ = build_hours(min(p), p, {}, {}, 3.0, 48)
+    assert len(hs) == 6 and all(b.ts - a.ts == 3600 for a, b in zip(hs, hs[1:]))
+    # 28. marts 2027: kl. 02 findes ikke; ingen huller i UTC
+    items = [{"t": f"2027-03-28T{h:02d}", "el": 1.0} for h in (0, 1, 3, 4)]
+    p = hourly_prices({"timer": items}, None, parse_local)
+    hs, _ = build_hours(min(p), p, {}, {}, 3.0, 48)
+    assert all(b.ts - a.ts == 3600 for a, b in zip(hs, hs[1:])) and len(hs) == 4

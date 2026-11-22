@@ -31,7 +31,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
         if s.kind == SOURCE_HYDRONIC:
             ents += [FitSensor(c, s, k) for k in FIT_KEYS]
             ents += [DailyCopSensor(c, s, "yesterday"), DailyCopSensor(c, s, "week")]
-            ents += [PlanNowSensor(c, s), PlanValueSensor(c, s, "plan_flow", "flow", "°C", 1),
+            ents += [PlanNowSensor(c, s), CommandSensor(c, s), PlanValueSensor(c, s, "plan_flow", "flow", "°C", 1),
                      PlanValueSensor(c, s, "plan_shift", "shift", None, 0), PlanCostSensor(c, s)]
         else:
             ents += [DailyElSensor(c, s, "yesterday"), DailyElSensor(c, s, "week")]
@@ -294,7 +294,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["heat", "off", "blocked", "unknown"]
-    _unrecorded_attributes = frozenset({"plan", "rooms_forecast", "history", "rooms_check"})
+    _unrecorded_attributes = frozenset({"plan", "rooms_forecast", "history", "rooms_check", "rooms_band"})
 
     def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
         super().__init__(coordinator, s, "plan_now")
@@ -331,6 +331,8 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "rooms_forecast": p.get("rooms"),
             "rooms_check": self.coordinator.rooms_check or None,
             "rooms_planned": p.get("rooms_planned"),
+            "rooms_band": p.get("rooms_band"), "cautious": p.get("cautious"), "safety": p.get("safety"),
+            "fresh_pct_today": m.get("fresh_pct_today"),
             "følere": _sensors(self.src),
             "boost_until": p.get("boost_until"), "boost_delta": p.get("boost_delta"), "red_allowance": p.get("red_allowance"),
             "max_pause": p.get("max_pause"), "comfort_offset": p.get("comfort_offset"),
@@ -419,3 +421,35 @@ class RoomForecastSensor(RoomEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         k = self.coordinator.rooms_check.get(self.room_name) or {}
         return {"målt": k.get("målt"), "afvigelse": k.get("afvigelse"), "status": k.get("status"), "grænse": k.get("grænse"), "afviger": k.get("flag")}
+
+
+class CommandSensor(SourceEntity, SensorEntity):
+    """Anbefalet styring: hvad en automation bør sende nu, efter reglerne der skåner varmepumpen.
+
+    Tællerne pr. døgn viser, hvor mange skrivninger og tænd/sluk-skift planen giver."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["heat", "off"]
+
+    def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
+        super().__init__(coordinator, s, "command")
+
+    @property
+    def _c(self) -> dict[str, Any]:
+        return self.coordinator.commands.get(self.src.sid) or {}
+
+    @property
+    def native_value(self) -> str | None:
+        c = self._c
+        return None if not c else ("heat" if c.get("on") else "off")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        c = self._c
+        since = c.get("since_onoff")
+        return {
+            "shift": c.get("shift"), "reason": c.get("reason"),
+            "since": _ts_local(since) if since and since > 0 else None,
+            "writes_today": c.get("writes", 0), "switches_today": c.get("flips", 0), "heat_in_blocked_today": c.get("blocked_on", 0),
+            "within_limits": c.get("writes", 0) <= 20 and c.get("flips", 0) <= 8 and c.get("blocked_on", 0) == 0,
+        }

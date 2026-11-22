@@ -275,3 +275,6 @@ async def test_replan_with_prices_blocks_and_rooms(ha: HomeAssistant) -> None:
     num = next(s for s in ha.states.async_all("number") if "max_pause" in s.entity_id)
     await ha.services.async_call("number", "set_value", {"entity_id": num.entity_id, "value": 4}, blocking=True)
     assert c.setting("max_pause") == 4
+    assert c.commands[hyd]["day"] and c.plan_meta["fresh_pct_today"] > 0
+    cmd = next(s for s in ha.states.async_all("sensor") if "recommended_control" in s.entity_id)
+    assert cmd.state in ("heat", "off") and cmd.attributes["within_limits"] is True

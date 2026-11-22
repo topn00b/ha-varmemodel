@@ -38,7 +38,8 @@ from .calibration import (
     steady_slots,
     sun_factor,
 )
-from .inputs import blocked_hours, hourly_forecast, hourly_prices
+from .command import Command, step
+from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
 from .planner import PlanHour, PlanRoom, SourceModel, make_plan, simulate_rooms
 from .const import (
     BACKFILL_DAYS,
@@ -177,6 +178,8 @@ class VarmemodelCoordinator:
         self.rooms_check: dict[str, dict[str, Any]] = {}
         self.yesterday: dict[str, dict[str, Any]] = {}
         self.measures: list[dict[str, Any]] = []
+        self.commands: dict[str, dict[str, Any]] = {}  # anbefalet styring pr. vandbåren kilde
+        self.plan_stats: dict[str, Any] = {}  # andel kvarterer med frisk plan i dag
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[CALLBACK_TYPE] = []
         self._build_sources()
@@ -254,6 +257,8 @@ class VarmemodelCoordinator:
         self.fc_log = data.get("fc_log", {})
         self.yesterday = data.get("yesterday", {})
         self.measures = data.get("measures", [])
+        self.commands = data.get("commands", {})
+        self.plan_stats = data.get("plan_stats", {})
         for sid, s in self.sources.items():
             s.load((data.get("sources") or {}).get(sid, {}))
         if data and data.get("calib_version") != CALIB_VERSION:
@@ -297,7 +302,8 @@ class VarmemodelCoordinator:
         return {"collected": self.collected, "sources": {sid: s.as_store() for sid, s in self.sources.items()},
                 "runs": self.runs[-30:], "mode": self.mode, "calib_version": CALIB_VERSION,
                 "rooms": self.rooms, "room_heat": self.room_heat, "settings": self.settings, "plan_log": self.plan_log,
-                "fc_log": self.fc_log, "yesterday": self.yesterday, "measures": self.measures}
+                "fc_log": self.fc_log, "yesterday": self.yesterday, "measures": self.measures,
+                "commands": self.commands, "plan_stats": self.plan_stats}
 
     async def _save(self) -> None:
         await self.store.async_save(self._data())
@@ -910,13 +916,7 @@ class VarmemodelCoordinator:
             except Exception:  # noqa: BLE001
                 missing.append("vejrudsigt")
         t_now = self._state_num(self._id(CONF_OUTDOOR))
-        hours: list[PlanHour] = []
-        for k in range(PLAN_HORIZON_H):
-            ts = h0 + k * 3600
-            if ts not in prices:
-                break
-            t_out = fc.get(ts, t_now if t_now is not None else 5.0)
-            hours.append(PlanHour(ts=ts, price=prices[ts], t_out=t_out, blocked=bool(blocks.get(ts, False))))
+        hours, safety = build_hours(h0, prices, fc, blocks, t_now, PLAN_HORIZON_H)
         # »Jeg fryser«: gælder fra den blev slået til, i højst boost_hours timer og kun til næste blokerede periode starter
         boost_on, boost_h, boost_note = False, 0, None
         if (be := self._id(CONF_BOOST_ENTITY)) and (bs := self.hass.states.get(be)) and bs.state == "on":
@@ -1025,16 +1025,33 @@ class VarmemodelCoordinator:
                 note = f"koldere end det kalibrerede område ({coldest:.0f} °C mod {cold_lim:.0f} °C) – planen er forsigtig"
                 p.warnings.append(note)
                 p.reason += " – " + note
-            plans[sid] = {"hours": p.hours, "rooms": fc_all, "rooms_planned": [r.name for r in rooms], "cautious": cold, "demand_kwh": p.demand_kwh, "heat_kwh": p.heat_kwh,
+            if safety:
+                p.warnings.append("nødplan uden priser: flad pris, rummene holdes over komfortgulvet")
+                p.reason = "Nødplan uden priser: " + p.reason
+            plans[sid] = {"hours": p.hours, "rooms": fc_all, "rooms_planned": [r.name for r in rooms], "cautious": cold, "safety": safety,
+                          "rooms_band": {r.name: round(r.margin, 2) for r in show}, "demand_kwh": p.demand_kwh, "heat_kwh": p.heat_kwh,
                           "el_kwh": p.el_kwh, "cost_kr": p.cost_kr, "reason": p.reason, "warnings": p.warnings,
                           "target": round(target, 1), "rooms_skipped": skipped, "boost": boost_on, "boost_until": boost_note,
                           "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
                           "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
+            # Anbefalet styring: planens ønske nu omsat efter reglerne, der skåner varmepumpen
+            cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
+            cmd = step(Command.load(self.commands.get(sid)), now, dt_util.now().date().isoformat(),
+                       bool(cur and cur["heat_kw"] > 0), cur["shift"] if cur else None, bool(cur and cur["blocked"]))
+            self.commands[sid] = cmd.dump()
         self.plans = plans
         if len(hours) < 6:
             missing.append("for få timer med pris")
+        # P2: andel af dagens kvarterer med en frisk plan med alle input
+        day = dt_util.now().date().isoformat()
+        ps = self.plan_stats if self.plan_stats.get("day") == day else {"day": day, "fresh": 0, "start": now}
+        if not missing:
+            ps["fresh"] = ps.get("fresh", 0) + 1
+        start = max(float(ps.get("start", now)), dt_util.start_of_local_day().timestamp())
+        ps["pct"] = round(min(100.0, 100.0 * ps["fresh"] / (int((now - start) // 900) + 1)), 1)
+        self.plan_stats = ps
         self.plan_meta = {"updated": now, "inputs_ok": not missing, "missing": missing, "horizon_h": len(hours),
-                          "blocked_known": bool(blocks)}
+                          "blocked_known": bool(blocks), "fresh_pct_today": ps["pct"], "safety": safety}
         self.store.async_delay_save(self._data, 600)
         self._notify()
 

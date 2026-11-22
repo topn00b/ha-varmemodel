@@ -110,6 +110,27 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 - Næste nat sammenlignes gårsdagen: planlagt mod faktisk varme, el, kroner og varme i blokerede timer (attributten *i_går* på *Plan pris*).
 - Hvert rums forudsigelse fra 6 timer før sammenlignes med den målte temperatur. Afviger den mere end 2 × rummets præcision (mindst 0,3 °C), markeres rummet (attributten *rooms_check* på *Plan nu*), fx ved en åben dør.
 
+**Anbefalet styring (sensor pr. vandbåren kilde):** viser, hvad en automation bør sende nu, efter regler der skåner varmepumpen. Den styrer ikke selv noget.
+
+Reglerne:
+- aldrig varme i blokerede timer; slukker straks
+- mindst 60 min. tændt og 30 min. slukket
+- højst én ændring pr. 15 min.
+- kurve-forskydningen holdes mindst 1 time og ændres med mindst 1 K
+
+Attributterne tæller pr. døgn skrivninger, tænd/sluk-skift og varme i blokerede timer. *within_limits* er sand, når der er højst 20 skrivninger, højst 8 skift og ingen varme i blokerede timer.
+
+**Nødplan:** mangler elprisen helt, planlægges med flad pris, så rummene stadig holdes over komfortgulvet. Det står i begrundelsen, og *inputs_ok* er falsk.
+
+**Huller og sommertid:**
+- Planen regner i UTC-timer.
+- Mangler prisen for én enkelt time, bruges snittet af nabotimerne. Det sker fx, når uret stilles tilbage, og to lokale timer hedder det samme.
+- Nye priser, typisk kl. 13, kommer med ved næste planlægning, senest efter 15 min.
+
+**Frisk plan:** *fresh_pct_today* på *Plan nu* er den andel af dagens kvarterer, der havde en frisk plan med alle input.
+
+**Usikkerhed:** *rooms_band* på *Plan nu* er ± usikkerheden for hvert rums forudsigelse.
+
 **Energitiltag:** Vælg en kalender under *Konfigurer*. Hver begivenhed er et tiltag. Ved kalibreringen regnes varmetabet for sig før og efter datoen (dagen selv udelades). Det kræver ca. 16 døgn på hver side. Resultatet ses på sensoren *Energitiltag*.
 
 **Sensorer pr. varmekilde:** *Plan nu* (varme / slukket / blokeret, med effekt, fremløb, forskydning, pris, grund, næste start/stop, hele planen og rummenes forudsigelse i attributterne), *Plan fremløb*, *Plan kurve-forskydning* og *Plan pris* (forventet elpris for perioden).
@@ -127,6 +148,8 @@ Integrationen leverer fem kort, som selv finder Varmemodels entiteter (Hus → v
 | `custom:varmemodel-kilde-card` | varmekildernes tal: effektivitet, COP for 14 døgn, bygning og anlæg |
 | `custom:varmemodel-tiltag-card` | energitiltag: hvilke rum taber varmen hurtigst, vaner, vind og før/efter |
 | `custom:varmemodel-hus-card` | status, planen og planens indstillinger |
+
+Kortene tilføjes automatisk som dashboard-ressource, så de også indlæses i mobilappen. Har du dashboards i YAML-tilstand, skal du selv tilføje `/varmemodel/varmemodel-cards.js` som ressource af typen *module*.
 
 **Pålidelighed:** sikre tal står som de er, foreløbige har »≈« foran, usikre er nedtonede, manglende er »–«. Tryk på et tal for detaljer. Følere, der falder kortvarigt ud, vises med seneste kendte værdi i op til 30 min.
 

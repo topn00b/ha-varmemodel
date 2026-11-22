@@ -6,6 +6,8 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from .planner import PlanHour
+
 TIME_KEYS = ("start", "t", "time", "hour", "datetime", "start_time")
 VALUE_KEYS = ("el", "value", "price", "total", "price_kwh", "kr")
 LIST_ATTRS = ("timer", "prices", "forecast", "data", "raw_today", "raw_tomorrow", "today", "tomorrow")
@@ -100,3 +102,31 @@ def hourly_forecast(items: list[dict[str, Any]], parse_local: Callable[[str], da
         if ts is not None and t is not None:
             out[ts // 3600 * 3600] = t
     return out
+
+
+def build_hours(h0: int, prices: dict[int, float], forecast: dict[int, float], blocks: dict[int, bool], t_now: float | None,
+                horizon: int, safety_hours: int = 24) -> tuple[list[PlanHour], bool]:
+    """Planens timer fra nu (UTC-timer).
+
+    Mangler prisen for én enkelt time (fx når uret stilles tilbage, og to lokale timer
+    hedder det samme), bruges snittet af nabotimerne. Mangler alle priser, laves en nødplan
+    med flad pris, så rummene stadig holdes varme (anden værdi = True)."""
+    t_def = t_now if t_now is not None else 5.0
+    hours: list[PlanHour] = []
+    for k in range(horizon):
+        ts = h0 + k * 3600
+        p = prices.get(ts)
+        if p is None:
+            prev = hours[-1].price if hours else prices.get(ts - 3600)
+            nxt = prices.get(ts + 3600)
+            if prev is not None and nxt is not None:
+                p = (prev + nxt) / 2
+            elif not hours and nxt is not None:
+                p = nxt
+            else:
+                break
+        hours.append(PlanHour(ts=ts, price=p, t_out=forecast.get(ts, t_def), blocked=bool(blocks.get(ts, False))))
+    if hours:
+        return hours, False
+    return [PlanHour(ts=h0 + k * 3600, price=1.0, t_out=forecast.get(h0 + k * 3600, t_def), blocked=bool(blocks.get(h0 + k * 3600, False)))
+            for k in range(safety_hours)], True

@@ -157,6 +157,13 @@
       },
       "room_forecast": {
         "name": "{room} forudsagt for nu"
+      },
+      "command": {
+        "name": "Anbefalet styring",
+        "state": {
+          "heat": "Varme",
+          "off": "Slukket"
+        }
       }
     },
     "button": {
