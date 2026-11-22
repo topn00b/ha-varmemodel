@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from functools import partial
-
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from functools import partial
 import logging
 from math import cos, radians, sin
 import time
@@ -99,6 +98,11 @@ from .const import (
     CONF_PRELOAD,
     CONF_FLOW_OVER_CURVE,
     CONF_MEASURES_CALENDAR,
+    CONF_PLANT_ROOM,
+    CONF_PLANT_LOSS,
+    CONF_GROUND_TEMP,
+    DEFAULT_PLANT_LOSS,
+    DEFAULT_GROUND_TEMP,
     SETTINGS,
     DEFAULT_WINDOW_DAYS,
     DOMAIN,
@@ -346,6 +350,18 @@ class VarmemodelCoordinator:
         await self.async_collect()
         self.store.async_delay_save(self._data, 300)
 
+    def _plant_loss_w(self) -> float:
+        """Varmecentralens tab nu (W) ud fra snittet de seneste 7 døgn."""
+        h, g = self.plant()
+        t = getattr(self, "plant_week", None)
+        return h * (t - g) if h > 0 and t is not None else 0.0
+
+    def plant(self) -> tuple[float, float]:
+        """Varmecentralens faste tab (W/K) og jordtemperatur; 0 W/K uden føler."""
+        if not self._id(CONF_PLANT_ROOM):
+            return 0.0, DEFAULT_GROUND_TEMP
+        return float(self.conf.get(CONF_PLANT_LOSS, DEFAULT_PLANT_LOSS)), float(self.conf.get(CONF_GROUND_TEMP, DEFAULT_GROUND_TEMP))
+
     def setting(self, key: str) -> float:
         """Planens indstilling: tal-entiteten, ellers opsætningen, ellers standarden."""
         default = next(d for k, *_, d in SETTINGS if k == key)
@@ -512,7 +528,7 @@ class VarmemodelCoordinator:
                 hours = hours_by_source.get(sid, [])
                 s.last_hours = hours
                 if s.kind == SOURCE_HYDRONIC:
-                    fits = await self.hass.async_add_executor_job(calibrate, hours)
+                    fits = await self.hass.async_add_executor_job(calibrate, hours, *self.plant())
                     steady, loss = await get_instance(self.hass).async_add_executor_job(self._steady_sync, s)
                     fits["cop_steady"], fits["cop_loss"] = steady, loss
                 else:
@@ -625,7 +641,8 @@ class VarmemodelCoordinator:
         end = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
         start = end - timedelta(days=days)
         outdoor = self._id(CONF_OUTDOOR)
-        want = set(self._room_temps()) | set(self._neighbour_temps()) | ({outdoor} if outdoor else set())
+        plant = self._id(CONF_PLANT_ROOM)
+        want = set(self._room_temps()) | set(self._neighbour_temps()) | ({outdoor} if outdoor else set()) | ({plant} if plant else set())
         for s in self.sources.values():
             want |= {s.eid(k) for k in (CONF_HEAT, CONF_ELECTRICITY, CONF_ELECTRICITY_BACKUP, CONF_FLOW, CONF_RETURN)} - {None}
         stats = statistics_during_period(self.hass, start, end, want, "hour", {"energy": "kWh", "temperature": "°C"}, {"change", "mean"})
@@ -670,7 +687,12 @@ class VarmemodelCoordinator:
                     t_flow=val(s.eid(CONF_FLOW), "mean"), t_ret=val(s.eid(CONF_RETURN), "mean"),
                     comp=sc.get("comp"), dhw=sc.get("dhw"), defrost=sc.get("df_n"), setpoint=sc.get("sp"), offset=sc.get("off"),
                     wind=c.get("ws"), wind_u=c.get("wu"), wind_v=c.get("wv"), cloud=c.get("cc"), uv=c.get("uv"), humidity=c.get("rh"),
+                    t_plant=val(plant, "mean"),
                 ))
+        # Varmecentralens snit de seneste 7 døgn (planen regner med det, fordi rummet ændrer sig langsomt)
+        week = [_num((rows[ts].get(plant) or {}).get("mean")) for ts in sorted(rows)[-168:]] if plant else []
+        week = [v for v in week if v is not None]
+        self.plant_week = round(sum(week) / len(week), 2) if week else None
         # Målefejl (spring i måleren) sorteres fra
         return {sid: [h for h in hs if not ((h.q or 0) > 15 or (h.e or 0) > 8 or (h.q or 0) < -0.5)] for sid, hs in out.items()}
 
@@ -994,7 +1016,9 @@ class VarmemodelCoordinator:
             ts = d.timestamp()
             before = [h for h in hours if h.ts < ts]
             after = [h for h in hours if h.ts >= ts + 86400]
-            fb, fa = await self.hass.async_add_executor_job(fit_heat_loss, before), await self.hass.async_add_executor_job(fit_heat_loss, after)
+            pw, pg = self.plant()
+            fb = await self.hass.async_add_executor_job(partial(fit_heat_loss, before, plant_w_k=pw, ground=pg))
+            fa = await self.hass.async_add_executor_job(partial(fit_heat_loss, after, plant_w_k=pw, ground=pg))
             chg = round((fa.value - fb.value) / fb.value * 100, 1) if fa.value and fb.value else None
             out.append({"navn": ev.get("summary"), "dato": d.date().isoformat(), "før_w_k": fb.value and round(fb.value, 1),
                         "efter_w_k": fa.value and round(fa.value, 1), "ændring_pct": chg,
@@ -1192,7 +1216,8 @@ class VarmemodelCoordinator:
             st_extra = (a.get("cop_steady") or {}).get("extra") or {}
             model = SourceModel(
                 heat_loss_w_k=v("heat_loss", 90.0),
-                gains_w=float(((a.get("heat_loss") or {}).get("extra") or {}).get("gains_w") or 0.0),
+                # Varmecentralens tab til jorden lægges til husets behov som negativ gratis varme
+                gains_w=float(((a.get("heat_loss") or {}).get("extra") or {}).get("gains_w") or 0.0) - self._plant_loss_w(),
                 p_max=v("max_power", 6.0), p_min=min(v("min_power", 2.0), v("max_power", 6.0) * 0.8),
                 # Til planlægning må høj effekt eller højt fremløb aldrig gøre COP bedre (fysik). Et positivt
                 # effektled i kalibreringen skyldes koldt gulv efter pauser (lav retur), ikke effekten selv.

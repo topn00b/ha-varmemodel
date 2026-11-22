@@ -15,14 +15,20 @@
           "block_entity": "Blocked hours (schedule)",
           "block_codes": "Codes meaning blocked (comma separated)",
           "boost_entity": "\"I'm cold\" (entity)",
-          "measures_calendar": "Calendar with energy measures"
+          "measures_calendar": "Calendar with energy measures",
+          "plant_room": "Plant room temperature",
+          "plant_room_loss": "Plant room heat loss (W/K)",
+          "ground_temp": "Ground temperature"
         },
         "data_description": {
           "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated.",
           "indoor_temps": "Otherwise the indoor temperature is the average of the rooms included in the plan.",
           "block_entity": "E.g. a zone schedule. Format: \"HOURINDEX|codes\" (hours since 1970 UTC, one code per hour) or a list with time and value.",
           "price_entity": "The price should include tariffs. The list needs time (start/t/time) and price (el/value/price) per hour or quarter.",
-          "measures_calendar": "Each event is a measure (e.g. sealing). Heat loss is computed before and after its date."
+          "measures_calendar": "Each event is a measure (e.g. sealing). Heat loss is computed before and after its date.",
+          "plant_room": "An unheated room (basement/utility room) warmed only by losses from the heating installation. Its loss to the ground is waste heat counted by the heat meter, so it is subtracted before the house heat loss is fitted, and the plan adds it to the demand.",
+          "plant_room_loss": "Fixed heat loss of that room to the ground and outside (U·A of walls, floor and door). Kept fixed because it cannot be separated from the house heat loss with little data; a free fit is shown as diagnostics.",
+          "ground_temp": "Typical ground temperature at basement depth (about 8–10 °C in Northern Europe)."
         }
       }
     },
@@ -45,14 +51,20 @@
           "block_entity": "Blocked hours (schedule)",
           "block_codes": "Codes meaning blocked (comma separated)",
           "boost_entity": "\"I'm cold\" (entity)",
-          "measures_calendar": "Calendar with energy measures"
+          "measures_calendar": "Calendar with energy measures",
+          "plant_room": "Plant room temperature",
+          "plant_room_loss": "Plant room heat loss (W/K)",
+          "ground_temp": "Ground temperature"
         },
         "data_description": {
           "weather": "E.g. Met.no. Wind, direction, cloud cover and UV are stored hourly so the effect of wind and sun can be calibrated.",
           "indoor_temps": "Otherwise the indoor temperature is the average of the rooms included in the plan.",
           "block_entity": "E.g. a zone schedule. Format: \"HOURINDEX|codes\" (hours since 1970 UTC, one code per hour) or a list with time and value.",
           "price_entity": "The price should include tariffs. The list needs time (start/t/time) and price (el/value/price) per hour or quarter.",
-          "measures_calendar": "Each event is a measure (e.g. sealing). Heat loss is computed before and after its date."
+          "measures_calendar": "Each event is a measure (e.g. sealing). Heat loss is computed before and after its date.",
+          "plant_room": "An unheated room (basement/utility room) warmed only by losses from the heating installation. Its loss to the ground is waste heat counted by the heat meter, so it is subtracted before the house heat loss is fitted, and the plan adds it to the demand.",
+          "plant_room_loss": "Fixed heat loss of that room to the ground and outside (U·A of walls, floor and door). Kept fixed because it cannot be separated from the house heat loss with little data; a free fit is shown as diagnostics.",
+          "ground_temp": "Typical ground temperature at basement depth (about 8–10 °C in Northern Europe)."
         }
       }
     },

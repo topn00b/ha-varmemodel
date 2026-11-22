@@ -15,14 +15,20 @@
           "block_entity": "Blokerede timer (tidsplan)",
           "block_codes": "Koder der betyder blokeret (kommasepareret)",
           "boost_entity": "»Jeg fryser« (entitet)",
-          "measures_calendar": "Kalender med energitiltag"
+          "measures_calendar": "Kalender med energitiltag",
+          "plant_room": "Varmecentralens rumtemperatur",
+          "plant_room_loss": "Varmecentralens varmetab (W/K)",
+          "ground_temp": "Jordtemperatur"
         },
         "data_description": {
           "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud.",
           "indoor_temps": "Husets indetemperatur er ellers snittet af de rum, der tæller med i planen.",
           "block_entity": "Fx en zone-tidsplan. Format: »TIMEINDEKS|koder« (timer siden 1970 UTC, én kode pr. time) eller en liste med tid og værdi.",
           "price_entity": "Prisen bør være inkl. afgifter. Listen skal have tid (start/t/time) og pris (el/value/price) pr. time eller kvarter.",
-          "measures_calendar": "Hver begivenhed er et tiltag (fx tætning). Varmetabet regnes før og efter datoen."
+          "measures_calendar": "Hver begivenhed er et tiltag (fx tætning). Varmetabet regnes før og efter datoen.",
+          "plant_room": "Et uopvarmet rum (kælder/teknikrum), der kun varmes af tab fra varmeinstallationen. Rummets tab til jorden er spildvarme, som varmemåleren tæller med. Det trækkes fra, før husets varmetab fittes, og planen lægger det til behovet.",
+          "plant_room_loss": "Rummets faste varmetab til jord og ude (U·A for vægge, gulv og dør). Holdes fast, fordi det ikke kan skilles fra husets varmetab med få data; et frit fit vises som diagnose.",
+          "ground_temp": "Typisk jordtemperatur i kælderdybde (ca. 8–10 °C i Danmark)."
         }
       }
     },
@@ -45,14 +51,20 @@
           "block_entity": "Blokerede timer (tidsplan)",
           "block_codes": "Koder der betyder blokeret (kommasepareret)",
           "boost_entity": "»Jeg fryser« (entitet)",
-          "measures_calendar": "Kalender med energitiltag"
+          "measures_calendar": "Kalender med energitiltag",
+          "plant_room": "Varmecentralens rumtemperatur",
+          "plant_room_loss": "Varmecentralens varmetab (W/K)",
+          "ground_temp": "Jordtemperatur"
         },
         "data_description": {
           "weather": "Fx Met.no. Vind, vindretning, skydække og UV gemmes time for time, så vindens og solens betydning kan regnes ud.",
           "indoor_temps": "Husets indetemperatur er ellers snittet af de rum, der tæller med i planen.",
           "block_entity": "Fx en zone-tidsplan. Format: »TIMEINDEKS|koder« (timer siden 1970 UTC, én kode pr. time) eller en liste med tid og værdi.",
           "price_entity": "Prisen bør være inkl. afgifter. Listen skal have tid (start/t/time) og pris (el/value/price) pr. time eller kvarter.",
-          "measures_calendar": "Hver begivenhed er et tiltag (fx tætning). Varmetabet regnes før og efter datoen."
+          "measures_calendar": "Hver begivenhed er et tiltag (fx tætning). Varmetabet regnes før og efter datoen.",
+          "plant_room": "Et uopvarmet rum (kælder/teknikrum), der kun varmes af tab fra varmeinstallationen. Rummets tab til jorden er spildvarme, som varmemåleren tæller med. Det trækkes fra, før husets varmetab fittes, og planen lægger det til behovet.",
+          "plant_room_loss": "Rummets faste varmetab til jord og ude (U·A for vægge, gulv og dør). Holdes fast, fordi det ikke kan skilles fra husets varmetab med få data; et frit fit vises som diagnose.",
+          "ground_temp": "Typisk jordtemperatur i kælderdybde (ca. 8–10 °C i Danmark)."
         }
       }
     },

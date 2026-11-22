@@ -59,6 +59,11 @@ from .const import (
     CONF_BLOCK_CODES,
     CONF_BOOST_ENTITY,
     CONF_MEASURES_CALENDAR,
+    CONF_PLANT_ROOM,
+    CONF_PLANT_LOSS,
+    CONF_GROUND_TEMP,
+    DEFAULT_PLANT_LOSS,
+    DEFAULT_GROUND_TEMP,
     DEFAULT_WINDOW_DAYS,
     DOMAIN,
     SOURCE_AIR_AIR,
@@ -99,6 +104,11 @@ def _house_schema(with_name: bool) -> vol.Schema:
         vol.Optional(CONF_BLOCK_CODES, default="r"): TEXT,
         vol.Optional(CONF_BOOST_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain=["input_boolean", "binary_sensor", "switch"])),
         vol.Optional(CONF_MEASURES_CALENDAR): selector.EntitySelector(selector.EntitySelectorConfig(domain="calendar")),
+        vol.Optional(CONF_PLANT_ROOM): TEMP,
+        vol.Optional(CONF_PLANT_LOSS, default=DEFAULT_PLANT_LOSS): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0, max=100, step=1, unit_of_measurement="W/K", mode=selector.NumberSelectorMode.BOX)),
+        vol.Optional(CONF_GROUND_TEMP, default=DEFAULT_GROUND_TEMP): selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0, max=20, step=0.5, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX)),
     })
     return vol.Schema(fields)
 

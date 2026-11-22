@@ -304,3 +304,20 @@ def test_validate_room_gives_honest_precision() -> None:
     weak = replace(f, extra={**f.extra, "sources": {k: {**s, "now": s["now"] / 2, "delayed": s["delayed"] / 2} for k, s in f.extra["sources"].items()}})
     w = validate_room(hours, weak)
     assert w["bias"] > 0.05 and w["rmse"] > v["rmse"]
+
+
+def test_plant_room_loss_is_subtracted_before_house_fit() -> None:
+    """Varmecentralens faste tab trækkes fra varmen, så husets eget varmetab bliver mindre."""
+    hs = []
+    for i in range(48 * 12):
+        t_out = 2 + (i // 48) % 6 * 1.5
+        t_plant = 22.0 + ((i // 48) % 3) * 0.5
+        q = (70 * (21 - t_out) + 30 * (t_plant - 9) - 200) / 1000
+        hs.append(Hour(ts=i * 3600, q=q, t_out=t_out, t_in=21.0, t_plant=t_plant))
+    plain = fit_heat_loss(hs)
+    split = fit_heat_loss(hs, plant_w_k=30, ground=9)
+    assert abs(split.value - 70) < 1.5
+    assert plain.extra["gains_w"] < split.extra["gains_w"]  # uden leddet ender tabet i den gratis varme
+    ex = split.extra
+    assert ex["plant_room_w_k"] == 30 and ex["plant_room_loss_kwh_day"] > 9
+    assert ex["plant_room_free_fit"]["usable"] is False

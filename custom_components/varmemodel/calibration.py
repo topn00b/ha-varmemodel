@@ -29,6 +29,9 @@ from statistics import median
 from typing import Any
 
 
+DEFAULT_GROUND = 9.0  # jordtemperatur i ca. 1–2 m dybde, °C
+
+
 @dataclass
 class Hour:
     ts: int  # unix-sekunder, timens start (UTC)
@@ -49,6 +52,7 @@ class Hour:
     cloud: float | None = None  # skydække %, middel
     uv: float | None = None  # UV-indeks, middel (> 0 = dagslys)
     humidity: float | None = None  # relativ luftfugtighed ude, % (styrer afrimning)
+    t_plant: float | None = None  # varmecentralens rumtemperatur (uopvarmet kælder/teknikrum), °C
 
 
 @dataclass
@@ -201,13 +205,22 @@ def _space_heating(h: Hour, need_full: bool = True) -> bool:
 
 
 # ---------------------------------------------------------------- varmetab
-def fit_heat_loss(hours: list[Hour], block_hours: int = 48, min_blocks: int = 8, min_spread: float = 4.0) -> Fit:
+def fit_heat_loss(hours: list[Hour], block_hours: int = 48, min_blocks: int = 8, min_spread: float = 4.0,
+                  plant_w_k: float = 0.0, ground: float = DEFAULT_GROUND) -> Fit:
     """Husets varmetab H (W/K) og gratis varme G (W) fra blokke af 48 timer.
 
     Gennemsnitlig varmeeffekt = H·(inde − ude) − G. Blokke på 48 timer,
     fordi gulvet gemmer varme fra dag til dag. Timer med varmt vand trækkes
     fra, når opsamleren ved hvornår der blev lavet varmt vand.
+
+    Varmecentral (uopvarmet rum med installationen): dens tab til jorden,
+    ``plant_w_k``·(rum − jord), er spildvarme fra installationen. Varmemåleren
+    tæller det med, så det trækkes fra, før husets eget varmetab fittes.
+    Tabet er fast (fra rummets opbygning). Med få data kan det ikke skilles
+    fra husets tab, fordi begge følger udetemperaturen.
     """
+    plant_known = [h.t_plant for h in hours if h.t_plant is not None]
+    t_plant_typical = median(plant_known) if plant_known else None
     # Mangler indetemperaturen (fx før rumfølerne fik statistik), bruges husets
     # typiske indetemperatur – huset holdes tæt på den samme temperatur.
     known = [h.t_in for h in hours if h.t_in is not None]
@@ -226,6 +239,8 @@ def fit_heat_loss(hours: list[Hour], block_hours: int = 48, min_blocks: int = 8,
     x: list[float] = []
     y: list[float] = []
     touts: list[float] = []
+    plant_kw: list[float] = []
+    plant_t: list[float] = []
     dhw_corrected = 0
     for hs in blocks.values():
         if len(hs) < block_hours * 0.9:
@@ -234,9 +249,15 @@ def fit_heat_loss(hours: list[Hour], block_hours: int = 48, min_blocks: int = 8,
         dhw_corrected += len(hs) - len(clean)
         if len(clean) < len(hs) * 0.7:
             continue
+        tp = [h.t_plant if h.t_plant is not None else t_plant_typical for h in hs]
+        tp_mean = sum(tp) / len(tp) if plant_w_k > 0 and None not in tp else None
+        loss_kw = plant_w_k / 1000 * (tp_mean - ground) if tp_mean is not None else 0.0
         x.append(sum(h.t_in - h.t_out for h in hs) / len(hs))
-        y.append(sum(max(h.q or 0.0, 0.0) for h in clean) / len(clean))
+        y.append(sum(max(h.q or 0.0, 0.0) for h in clean) / len(clean) - loss_kw)
         touts.append(sum(h.t_out for h in hs) / len(hs))
+        plant_kw.append(loss_kw)
+        if tp_mean is not None:
+            plant_t.append(tp_mean)
     lo, hi = _range(touts)
     if len(x) < min_blocks or (max(x) - min(x) if x else 0) < min_spread:
         return Fit(None, len(x), t_out_min=lo, t_out_max=hi, note="for få blokke eller for lille spredning i udetemperatur")
@@ -248,8 +269,42 @@ def fit_heat_loss(hours: list[Hour], block_hours: int = 48, min_blocks: int = 8,
     return Fit(
         round(b * 1000, 1), len(x), r2, rmse and round(rmse, 3), lo, hi, "fit",
         {"gains_w": round(-a * 1000, 0), "block_hours": block_hours, "dhw_hours_removed": dhw_corrected,
-         "hours_with_assumed_indoor": assumed, "indoor_assumed": round(t_in_typical, 1) if t_in_typical else None},
+         "hours_with_assumed_indoor": assumed, "indoor_assumed": round(t_in_typical, 1) if t_in_typical else None,
+         **({"plant_room_w_k": plant_w_k, "ground_temp": ground,
+             "plant_room_temp": round(sum(plant_t) / len(plant_t), 1),
+             "plant_room_loss_kwh_day": round(24 * sum(plant_kw) / len(plant_kw), 2),
+             "plant_room_free_fit": _plant_free_fit(x, [yy + pk for yy, pk in zip(y, plant_kw)], plant_t, ground)}
+            if plant_t else {})},
     )
+
+
+def _plant_free_fit(x: list[float], y: list[float], tp: list[float], ground: float) -> dict[str, Any]:
+    """Kun til diagnose: husets og varmecentralens tab fittet frit (mindste kvadraters metode).
+
+    Bruges først, når der er nok data: mange blokke, frost og varmecentralen svinger
+    uafhængigt af udetemperaturen (lav korrelation med husets temperaturforskel).
+    """
+    n = len(x)
+    z = [t - ground for t in tp]
+    if n < 4 or len(z) != n:
+        return {"n": n, "usable": False, "note": "for få blokke"}
+    mx, mz, my = sum(x) / n, sum(z) / n, sum(y) / n
+    sxx = sum((a - mx) ** 2 for a in x)
+    szz = sum((c - mz) ** 2 for c in z)
+    sxz = sum((a - mx) * (c - mz) for a, c in zip(x, z))
+    sxy = sum((a - mx) * (b - my) for a, b in zip(x, y))
+    szy = sum((c - mz) * (b - my) for c, b in zip(z, y))
+    corr = sxz / (sxx * szz) ** 0.5 if sxx > 0 and szz > 0 else None
+    det = sxx * szz - sxz ** 2
+    spread = max(tp) - min(tp)
+    if det <= 1e-9:
+        return {"n": n, "usable": False, "correlation": corr and round(corr, 2), "note": "varmecentralen svinger ikke nok"}
+    bh = (szz * sxy - sxz * szy) / det
+    bz = (sxx * szy - sxz * sxy) / det
+    usable = n >= 40 and spread >= 3 and corr is not None and abs(corr) < 0.7 and 0 <= bz * 1000 <= 40
+    return {"n": n, "house_w_k": round(bh * 1000, 1), "plant_room_w_k": round(bz * 1000, 1),
+            "correlation": corr and round(corr, 2), "plant_spread_k": round(spread, 1), "usable": usable,
+            "note": "kan bruges" if usable else "kun diagnose: kræver ≥ 40 blokke, ≥ 3 K spredning og |korrelation| < 0,7"}
 
 
 # ---------------------------------------------------------------- COP
@@ -441,13 +496,13 @@ def fit_cooling(hours: list[Hour], min_run: int = 3, min_runs: int = 3) -> Fit:
 
 
 # ---------------------------------------------------------------- samlet
-def calibrate(hours: list[Hour]) -> dict[str, Fit]:
+def calibrate(hours: list[Hour], plant_w_k: float = 0.0, ground: float = DEFAULT_GROUND) -> dict[str, Fit]:
     pmax, pmin = fit_power(hours)
     wind = fit_weather(hours)
     wind.extra["sectors"] = fit_wind_sectors(hours)
     return {
         "wind_effect": wind,
-        "heat_loss": fit_heat_loss(hours),
+        "heat_loss": fit_heat_loss(hours, plant_w_k=plant_w_k, ground=ground),
         "cop": fit_cop(hours),
         "emission": fit_emission(hours),
         "max_power": pmax,

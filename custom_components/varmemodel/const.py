@@ -100,6 +100,11 @@ CONF_COLD_CAUTION = "cold_caution"
 CONF_PRELOAD = "preload"
 CONF_FLOW_OVER_CURVE = "flow_over_curve"
 CONF_MEASURES_CALENDAR = "measures_calendar"
+CONF_PLANT_ROOM = "plant_room"
+CONF_PLANT_LOSS = "plant_room_loss"
+CONF_GROUND_TEMP = "ground_temp"
+DEFAULT_PLANT_LOSS = 30.0
+DEFAULT_GROUND_TEMP = 9.0
 # Planens indstillinger (tal-entiteter): nøgle, min, maks, trin, enhed, standard
 SETTINGS = (
     ("max_pause", 0, 24, 1, "h", 0),
