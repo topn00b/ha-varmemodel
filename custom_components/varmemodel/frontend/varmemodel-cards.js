@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.6.1';
+  const VERSION = '0.6.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -227,10 +227,23 @@
     body(h, vm) {
       const c = this._c; const k = this._k || 0; const hrs = c.hours || [0, 3, 6, 12];
       let o = `<div class="sm" style="margin:2px 0 8px">${hrs.map((x) => `<span class="pill${x === k ? ' on' : ''}" data-k="${x}">${x === 0 ? 'nu' : `om ${x} t`}</span>`).join(' ')}</div>`;
+      const tval = (r) => { const d = room(h, vm, r); return { d, t: k === 0 ? d.t : (d.fc && d.fc.length >= k ? d.fc[k - 1] : null) }; };
+      if (!(c.floors || []).length) {
+        // Ingen plantegning: rummene som felter pr. varmekilde – virker i ethvert hus uden opsætning
+        for (const src of vm.sources.filter((x) => !c.source || x.name === c.source)) {
+          o += `<div class="h2">${esc(src.name)}</div><div class="tg">` + src.rooms.map((r) => {
+            const { d, t } = tval(r); const a = d.a;
+            const lim = [num(a.gulv) !== null ? `gulv ${fmt(a.gulv)}` : '', num(a.loft) !== null ? `loft ${fmt(a.loft)}` : ''].filter(Boolean).join(' · ');
+            return `<div class="tile" style="background:${TCOL(t, num(a.gulv), num(a.loft))}" data-e="${esc(d.tE || r.model)}"><div>${esc(r.name)}</div>`
+              + `<div class="tv">${t === null ? '–' : `${k === 0 && d.est ? '≈' : ''}${fmt(t)} °C`}</div><div class="tsm">${lim}</div></div>`;
+          }).join('') + '</div>';
+        }
+      }
       o += '<div class="pl">';
       for (const f of c.floors || []) {
         const W = f.width || 700, H = f.height || 500;
-        let g = '';
+        const op = f.image ? (f.room_opacity ?? 0.6) : 1;
+        let g = f.image ? `<image href="${esc(f.image)}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="none" opacity="${f.image_opacity ?? 1}"/>` : '';
         for (const rr of f.rooms || []) {
           const p = pts(rr); if (!p.length) continue;
           const poly = p.map((q) => q.join(',')).join(' ');
@@ -239,7 +252,8 @@
           const d = room(h, vm, r); const a = d.a;
           const t = k === 0 ? d.t : (d.fc && d.fc.length >= k ? d.fc[k - 1] : null);
           const col = TCOL(t, num(a.gulv), num(a.loft));
-          g += `<polygon points="${poly}" fill="${col}" stroke="#444" stroke-width="4" data-e="${esc(d.tE || r.model)}"/>`;
+          g += `<polygon points="${poly}" fill="${col}" fill-opacity="${op}" stroke="#444" stroke-width="4" data-e="${esc(d.tE || r.model)}"/>`;
+          if (rr.sensor) g += `<circle cx="${rr.sensor[0]}" cy="${rr.sensor[1]}" r="10" fill="#d9534f" stroke="#fff" stroke-width="3"><title>føler</title></circle>`;
           if (rr.room) continue;  // del af et andet rum: kun farven
           const [cx, cy] = rr.label_at || mid(p);
           const est = k === 0 && d.est;
@@ -276,6 +290,8 @@
     get css() {
       return `.pl{display:flex;flex-wrap:wrap;gap:14px}.pf{flex:1 1 320px;min-width:280px}.psvg{width:100%;height:auto;display:block}
         .pn{font-size:34px;fill:#222}.pt{font-size:40px;font-weight:700;fill:#111}.ps{font-size:22px;fill:#444}.pu{font-size:18px;fill:#fff}
+        .tg{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-bottom:8px}
+        .tile{border-radius:10px;padding:8px 10px;cursor:pointer;color:#111}.tv{font-size:20px;font-weight:700}.tsm{font-size:11px;color:#333}
         .pill{display:inline-block;padding:2px 10px;border-radius:12px;border:1px solid var(--divider-color,#ccc);cursor:pointer;margin-right:4px}
         .pill.on{background:var(--primary-color,#03a9f4);color:#fff;border-color:transparent}
         .sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin:0 4px 0 10px;vertical-align:-1px}

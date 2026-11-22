@@ -228,7 +228,7 @@ sources:
 
 Live COP vises kun i stabil drift (kompressoren har kørt i 10 min., ingen afrimning eller varmt vand) og sammenlignes med den forventede fra *COP i stabil drift*. Er den mere end 0,5 under i 30 min., markeres det.
 
-**Plantegningskortet** tegner rummene efter din plantegning og farver dem efter temperaturen i forhold til rummets gulv og loft: blå under gulvet, lyseblå tæt på, grøn godt, gul tæt på loftet og rød over. Knapperne viser forudsigelsen om 3, 6 og 12 timer, og et tryk på et rum åbner føleren. Koordinaterne er i cm og kan tages fra en salgstegning. Med `source` vises varmekildens plan time for time og den anbefalede styring under tegningen. Det gør kortet til et anlægskort for netop den varmepumpe.
+**Plantegningskortet** virker uden opsætning: så vises rummene som farvede felter pr. varmekilde. Med en plantegning tegner det rummene efter din tegning og farver dem efter temperaturen i forhold til rummets gulv og loft: blå under gulvet, lyseblå tæt på, grøn godt, gul tæt på loftet og rød over. Knapperne viser forudsigelsen om 3, 6 og 12 timer, og et tryk på et rum åbner føleren. Koordinaterne er i cm og kan tages fra en salgstegning. Med `source` vises varmekildens plan time for time og den anbefalede styring under tegningen. Det gør kortet til et anlægskort for netop den varmepumpe.
 
 ```yaml
 type: custom:varmemodel-plan-card
@@ -256,6 +256,8 @@ floors:
         y: 378
         to: [[330, 378], [330, 470]]    # luftens vej (pil); flere veje med paths
 ```
+
+Har du en tegning som billede (fx fra en salgsopstilling), så læg den i `/config/www` og angiv `image: /local/stueplan.png` på etagen. Brug billedets mål (cm) som `width` og `height`, og tegn rummene som simple firkanter ovenpå (`room_opacity` styrer gennemsigtigheden). En føler kan placeres med `sensor: [x, y]` på rummet.
 
 **Rumkortet** grupperer efter varmekilde eller efter dine egne grupper:
 
