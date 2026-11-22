@@ -208,7 +208,7 @@ async def test_room_new_shape_skips_guard(ha: HomeAssistant, entry: MockConfigEn
     assert set(pe["sources"]) != set(new.extra["sources"])
     # kør acceptlogikken via en kalibrering med de falske tal
     orig = c._rooms_fit
-    c._rooms_fit = lambda _h: room_fits
+    c._rooms_fit = lambda _h, _k=None: room_fits
     try:
         await c.async_calibrate()
     finally:
@@ -217,6 +217,41 @@ async def test_room_new_shape_skips_guard(ha: HomeAssistant, entry: MockConfigEn
     assert "ny model" in c.rooms["sensor.rum_1"]["guard"]
     assert set(c.rooms["sensor.rum_1"]["extra"]["sources"]) == {"A", "B"}
     del co
+
+
+async def test_guarded_room_validates_stored_model(ha: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Bremser vagten et rums tal, beholdes den forrige model – og det er den, der afprøves (ikke den nye)."""
+    from custom_components.varmemodel.calibration import RoomHour
+
+    c = entry.runtime_data
+    prev_extra = {"sources": {"A": {"now": 0.03, "delayed": 0.0}}, "validated_6h_k": 9.9}
+    c.rooms["sensor.rum_1"] = {"value": 0.10, "extra": prev_extra, "t_out_min": 0.0, "t_out_max": 5.0}
+    new = Fit(0.30, 50, 0.7, 0.2, 0.0, 5.0, "fit", {"sources": {"A": {"now": 0.05, "delayed": 0.0}}, "validated_6h_k": 0.1})
+    # Rummet følger præcis den model, der gemmes: den forrige opbygning med vagtens kølingstal 0,11
+    t, rh = 20.0, []
+    for i in range(200):
+        q = 3.0 if i % 12 < 6 else 0.0
+        rh.append(RoomHour(ts=1_700_000_000 + i * 3600, t_room=round(t, 4), t_out=2.0, inputs={"A": q}))
+        t = t + 0.03 * q + 0.11 / 20 * (2.0 - t)
+
+    def fake(_h, keep=None):
+        if keep is not None:
+            keep["sensor.rum_1"] = rh
+        return {"sensor.rum_1": new}
+
+    orig = c._rooms_fit
+    c._rooms_fit = fake
+    try:
+        await c.async_calibrate()
+    finally:
+        c._rooms_fit = orig
+    r = c.rooms["sensor.rum_1"]
+    assert r["guard"].startswith("begrænset") and r["value"] == 0.11
+    ex = r["extra"]
+    assert ex["sources"]["A"]["now"] == 0.03  # den forrige model er beholdt
+    # Afprøvet på den gemte model: hverken den forrige 9,9 eller den nye models 0,1
+    assert ex["validated_windows"] >= 20 and ex["validated_6h_k"] < 0.05
+    assert prev_extra["validated_6h_k"] == 9.9  # den forrige ordbog er ikke ændret
 
 
 async def test_device_tree(ha: HomeAssistant) -> None:

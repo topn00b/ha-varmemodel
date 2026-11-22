@@ -505,7 +505,8 @@ class VarmemodelCoordinator:
                 else:
                     fits = {}
                 results[sid] = fits
-            room_fits = await self.hass.async_add_executor_job(self._rooms_fit, hours_by_source)
+            room_hours: dict[str, list[RoomHour]] = {}
+            room_fits = await self.hass.async_add_executor_job(self._rooms_fit, hours_by_source, room_hours)
         except Exception as err:  # noqa: BLE001 – vis fejlen i status i stedet for at stoppe
             _LOGGER.exception("Kalibrering fejlede")
             self.status, self.status_note = "error", str(err)
@@ -551,10 +552,18 @@ class VarmemodelCoordinator:
             else:
                 value, note = guard(f.value, prev.get("value") if prev else None, (f.t_out_min, f.t_out_max),
                                     (prev.get("t_out_min"), prev.get("t_out_max")) if prev else (None, None))
+            keep_prev = note.startswith("begrænset") or f.value is None
+            extra = dict(pe) if keep_prev else f.extra
+            if keep_prev and value is not None and eid in room_hours:
+                # Vagten beholder den forrige model: afprøv den, der faktisk bruges, så præcisionen passer til den
+                for k in ("validated_6h_k", "validated_bias_6h_k", "validated_windows"):
+                    extra.pop(k, None)
+                val = await self.hass.async_add_executor_job(validate_room, room_hours[eid], Fit(value, extra=extra))
+                if val is not None:
+                    extra.update(validated_6h_k=val["rmse"], validated_bias_6h_k=val["bias"], validated_windows=val["n"])
             self.rooms[eid] = {"value": value, "guard": note, "n": f.n, "r2": None if f.r2 is None else round(f.r2, 2),
                                "t_out_min": f.t_out_min, "t_out_max": f.t_out_max, "note": f.note,
-                               "fitted_at": now if f.value is not None else (prev or {}).get("fitted_at"),
-                               "extra": (prev or {}).get("extra", {}) if note.startswith("begrænset") or f.value is None else f.extra}
+                               "fitted_at": now if f.value is not None else (prev or {}).get("fitted_at"), "extra": extra}
         self.room_heat = self._room_heat(hours_by_source)
         self.yesterday = self._yesterday(day_of, yday[0])
         try:
@@ -701,8 +710,10 @@ class VarmemodelCoordinator:
         st = self.hass.states.get(eid)
         return st.name if st else eid
 
-    def _rooms_fit(self, hours_by_source: dict[str, list[Hour]]) -> dict[str, Fit]:
-        """Én model pr. rum med alle varmekilder som input. Timer med udluftning i rummet udelades."""
+    def _rooms_fit(self, hours_by_source: dict[str, list[Hour]], keep: dict[str, list[RoomHour]] | None = None) -> dict[str, Fit]:
+        """Én model pr. rum med alle varmekilder som input. Timer med udluftning i rummet udelades.
+
+        ``keep`` får rummenes timer med, så en model, vagten beholder, kan afprøves bagefter."""
         if not self.sources:
             return {}
         idx = {sid: {h.ts: h for h in hs} for sid, hs in hours_by_source.items()}
@@ -726,6 +737,8 @@ class VarmemodelCoordinator:
                 rh.append(RoomHour(ts=h.ts, t_room=rt.get(eid), t_out=h.t_out, sun=sun_factor(h),
                                    aired=eid in (c.get("air") or []), inputs=inputs, neighbours=nb or None))
             out[eid] = fit_room(rh)
+            if keep is not None:
+                keep[eid] = rh
             # Ærlig præcision: modellen afprøvet 6 timer frem med målt tilførsel, som planen og tjekket bruger den
             if (val := validate_room(rh, out[eid])) is not None:
                 out[eid].extra["validated_6h_k"] = val["rmse"]
