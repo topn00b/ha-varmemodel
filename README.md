@@ -235,6 +235,8 @@ sources:
     el_power: sensor.air_to_air_power
 ```
 
+Med `source: <varmekildens navn>` viser kortet kun den varmekilde: dens rum, plan, tidslinje og afvigelser. Så kan anlægget deles op i én visning pr. varmepumpe eller etage. En luft-luft-kilde tegnes med varmepumpen til venstre og rummene ved siden af.
+
 Live COP vises kun i stabil drift (kompressoren har kørt i 10 min., ingen afrimning eller varmt vand) og sammenlignes med den forventede fra *COP i stabil drift*. Er den mere end 0,5 under i 30 min., markeres det.
 
 **Plantegningskortet** virker uden opsætning: så vises rummene som farvede felter pr. varmekilde. Med en plantegning tegner det rummene efter din tegning og farver dem efter temperaturen i forhold til rummets gulv og loft: blå under gulvet, lyseblå tæt på, grøn godt, gul tæt på loftet og rød over. Knapperne viser forudsigelsen om 3, 6 og 12 timer, og et tryk på et rum åbner føleren. Koordinaterne er i cm og kan tages fra en salgstegning. Med `source` vises varmekildens plan time for time og den anbefalede styring under tegningen. Det gør kortet til et anlægskort for netop den varmepumpe.

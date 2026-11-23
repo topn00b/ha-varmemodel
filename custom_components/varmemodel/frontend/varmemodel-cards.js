@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.8.3';
+  const VERSION = '0.8.4';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -557,6 +557,12 @@
     disconnectedCallback() { this._ro.disconnect(); }
     sc(name) { return (this._c.sources || {})[name] || {}; }
     body(h, vm) {
+      // source: én varmekilde pr. visning (fx én pr. etage) – kun den kilde, dens rum, plan og afvigelser
+      if (this._c.source) {
+        const sources = vm.sources.filter((s) => s.name === this._c.source);
+        if (!sources.length) return `<div class="mut">Varmekilden »${esc(this._c.source)}« findes ikke</div>`;
+        vm = { ...vm, sources, rooms: sources.flatMap((s) => s.rooms), plan: sources[0].kind === 'hydronic' ? sources[0].plan : null };
+      }
       const main = vm.sources.find((s) => s.kind === 'hydronic') || null;
       const air = vm.sources.filter((s) => s.kind !== 'hydronic');
       const D = this.data(h, vm, main);
@@ -594,7 +600,8 @@
       const zc = !z ? null : zl.startsWith('r') ? RE : zl.startsWith('gu') || zl.startsWith('y') ? YE : zl.startsWith('g') ? GR : '#6b7278';
       const ico = zc === RE ? '🔴' : zc === YE ? '🟡' : zc === GR ? '🟢' : '';
       const price = c.price ? sv(h, c.price) : num(pa.price);
-      let plan = main ? `${PS[pst] || pst}` : 'ingen vandbåren varmekilde';
+      const air0 = !main ? vm.sources[0] : null;
+      let plan = main ? `${PS[pst] || pst}` : air0 ? this.airPlan(h, air0).replace(/^plan: /, '') : 'ingen varmekilde';
       if (pst === 'heat') plan += ` ${fmt(pa.heat_kw)} kW` + (pa.flow != null ? ` · fremløb ${fmt(pa.flow, 1)} °C` : '') + (pa.next_off ? ` · stop ${when(pa.next_off)}` : '');
       else if (pa.next_on) plan += ` · start ${when(pa.next_on)}`;
       if (pa.boost) plan += ' · jeg fryser' + (pa.boost_until && pa.boost_until !== 'udløbet' ? ` til ${when(pa.boost_until)}` : '');
@@ -614,8 +621,8 @@
     }
     timeline(h, vm) {
       const hyd = vm.sources.filter((s) => s.kind === 'hydronic'); const air = vm.sources.filter((s) => s.kind !== 'hydronic');
-      if (!hyd.length) return '<span class="mut">Ingen plan (ingen vandbåren varmekilde)</span>';
-      const pa0 = at(h, hyd[0].plan);
+      if (!hyd.length && !air.length) return '<span class="mut">Ingen plan (ingen varmekilde)</span>';
+      const pa0 = at(h, (hyd[0] || air[0]).plan);
       const P = {};
       for (const p of pa0.history || []) P[Date.parse(p.t)] = { price: p.price, blocked: p.blocked };
       for (const p of pa0.plan || []) P[Date.parse(p.t)] = p;
@@ -835,6 +842,29 @@
         for (const d of ds) { const ht = d.passive ? 44 : rowH; g += this.roomRow(h, vm, d, 1150, y, 340, ht, false); rows.push({ d, y: y + ht / 2 }); y += ht + 8; }
         y += 26; return rows;
       };
+      if (!main && air.length) {
+        // Kun luft-luft (fx én etage): varmepumpen til venstre, rummene ved siden af
+        const rx = 330;
+        const blockAt = (s) => {
+          const ds = s.rooms.map((r) => room(h, vm, r)); const chk = ds.filter((d) => d.chk); const hit = chk.filter((d) => d.status === 'ramt').length;
+          g += TX(rx, y, `${s.name}${chk.length ? ` · forudsigelse ramt ${hit}/${chk.length}` : ''}`, 'hdr'); y += 14;
+          const rows = [];
+          for (const d of ds) { const ht = d.passive ? 44 : 58; g += this.roomRow(h, vm, d, rx, y, 400, ht, false); rows.push(y + ht / 2); y += ht + 8; }
+          y += 26; return rows;
+        };
+        for (const s of air) {
+          const by = Math.max(y, 140); y = by + 10; const sc = this.sc(s.name);
+          g += BOX(20, by, 260, 200, s.name, sc.model || 'luft-luft');
+          const cl = sc.climate ? st(h, sc.climate) : null;
+          const ctx = !cl ? '–' : cl.state === 'off' ? 'Fra' : `${cl.state === 'heat' ? 'Varme' : cl.state}${cl.attributes.temperature != null ? ' · mål ' + fmt(num(cl.attributes.temperature)) : ''}`;
+          g += PILL(150, by + 80, 236, 34, ctx, sc.climate) + PILL(150, by + 126, 236, 34, `el ${fmt(sc.el_power ? kW(h, sc.el_power) * 1000 : null, 0)} W`, sc.el_power) + TX(150, by + 170, this.airPlan(h, s), 'm c');
+          const ys = blockAt(s);
+          if (ys.length) { g += PATH(`M280 ${by + 40} H305 V${Math.max(...ys)}`, 'air'); for (const yy of ys) g += PATH(`M305 ${yy} H${rx - 2}`, 'air', true); }
+          y = Math.max(y, by + 220);
+        }
+        g += this.legend(20, y + 10, 3, air.length) + TX(20, y + 80, 'Tryk på en værdi for detaljer og historik', 'm');
+        return { w: 760, h: y + 100, g };
+      }
       if (main) for (const rw of block(main, 58)) if (rw.d.valve && rw.d.valve !== 'altid åben') g += PATH(`M1100 ${rw.y} H1148`, rw.d.vs === 'on' ? 'hot' : 'idle');
       for (const s of air) {
         y = Math.max(y, 600);
