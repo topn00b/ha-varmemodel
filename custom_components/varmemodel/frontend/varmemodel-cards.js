@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.8.5';
+  const VERSION = '0.8.6';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -222,6 +222,15 @@
   const pts = (x) => (x.points || (x.rect ? [[x.rect[0], x.rect[1]], [x.rect[0] + x.rect[2], x.rect[1]], [x.rect[0] + x.rect[2], x.rect[1] + x.rect[3]], [x.rect[0], x.rect[1] + x.rect[3]]] : []));
   const mid = (p) => [p.reduce((a, q) => a + q[0], 0) / (p.length || 1), p.reduce((a, q) => a + q[1], 0) / (p.length || 1)];
 
+  // Opvarmning før rød: tekst ud fra planens preload_window
+  function preText(h, s, short) {
+    const w = at(h, s.plan).preload_window; if (!w || !w.fra) return '';
+    const u = s.kind === 'hydronic' ? 'kWh varme' : 'kWh el'; const k = (t) => hh(new Date(t).getHours());
+    const now = Date.now(); const on = Date.parse(w.fra) <= now && now < Date.parse(w.til);
+    const t = `opvarmning før rød kl. ${k(w.fra)}–${k(w.til)}${on ? ' (nu)' : ''}` + (w.blokering_fra ? ` · rød ${k(w.blokering_fra)}–${k(w.blokering_til)}` : '');
+    return short ? t : `${t} (${fmt(w.kwh)} ${u})`;
+  }
+
   // Én etage som heatmap (cm-koordinater). o.unit: varmepumpens tilstand nu ('heat' | 'idle' | 'defrost' | 'off'),
   // så luftpilene strømmer, når den varmer. o.detail: gulv (klik = gulv-hjælperen) og forudsigelse i hvert rum.
   function floorSvg(h, vm, f, k, o = {}) {
@@ -308,7 +317,7 @@
         const pa = at(h, s.plan); const ca = at(h, s.e('command')); const cst = (st(h, s.e('command')) || {}).state;
         const pl = (pa.plan || []).slice(0, 24); const mx = Math.max(0.1, ...pl.map((x) => x.heat_kw || 0));
         o += `<div class="h2">${esc(s.name)}: plan</div><div class="tl">${pl.map((x) => `<div class="tc${x.blocked ? ' rd' : ''}" title="${esc(`${when(x.t)}: ${fmt(x.heat_kw, 2)} ${s.kind === 'hydronic' ? 'kW varme' : 'kWh el'} · ${fmt(x.price, 2)} kr${x.blocked ? ' · blokeret' : ''}${x.preload ? ` · opvarmning før rød` : ''}`)}"><div class="tb" style="height:${Math.round(100 * (x.heat_kw || 0) / mx)}%${x.preload ? `;background:repeating-linear-gradient(135deg,${PU} 0 4px,${OR} 4px 8px)` : ''}"></div><div class="tt">${hh(new Date(x.t).getHours())}</div></div>`).join('')}</div>`;
-        o += `<div class="sm" style="margin-top:4px"><span class="v" data-e="${esc(s.e('command'))}">Anbefalet: ${cst === 'heat' ? 'varme' : cst === 'off' ? 'slukket' : '–'}${ca.setpoint != null ? ` · setpunkt ${fmt(ca.setpoint)} °C` : ''}</span> · ${esc(ca.reason || '')}<br>${this.preText(h, s) ? `<b>${esc(this.preText(h, s))}</b><br>` : ''}${esc(pa.reason || '')}</div>`;
+        o += `<div class="sm" style="margin-top:4px"><span class="v" data-e="${esc(s.e('command'))}">Anbefalet: ${cst === 'heat' ? 'varme' : cst === 'off' ? 'slukket' : '–'}${ca.setpoint != null ? ` · setpunkt ${fmt(ca.setpoint)} °C` : ''}</span> · ${esc(ca.reason || '')}<br>${preText(h, s) ? `<b>${esc(preText(h, s))}</b><br>` : ''}${esc(pa.reason || '')}</div>`;
       }
       return o;
     }
@@ -691,14 +700,14 @@
           })}</div></div>`;
         }
       }
-      const pre = HM.map((x) => [x.s, this.preText(h, x.s)]).filter(([, t]) => t);
+      const pre = HM.map((x) => [x.s, preText(h, x.s)]).filter(([, t]) => t);
       if (pre.length) rows += `<div class="zl"><span></span><span class="sm"><span class="sw" style="background:repeating-linear-gradient(135deg,${PU} 0 4px,${OR} 4px 8px)"></span>${pre.map(([x, t]) => `${esc(x.name)}: ${esc(t)}`).join(' · ')}</span></div>`;
       rows += `<div class="zl"><span></span><div class="zt">${[0, 6, 12, 18, 24].map((x) => `<span style="left:${(x / 24) * 100}%">${hh(x)}</span>`).join('')}</div></div>`;
       const pa = pa0;
       return rows + `<details id="vmzd"><summary>planens begrundelse ▾</summary><div class="sm" style="margin-top:4px">${esc(pa.reason || '')}<br>`
-        + `Behov ${fmt(pa.demand_kwh, 0)} kWh varme · plan ${fmt(pa.heat_kwh, 0)} kWh varme · ${fmt(pa.el_kwh, 0)} kWh el · ca. ${fmt(pa.cost_kr, 0)} kr over ${pa.horizon_h ?? '–'} timer<br>`
+        + (hyd[0] ? `Behov ${fmt(pa.demand_kwh, 0)} kWh varme · plan ${fmt(pa.heat_kwh, 0)} kWh varme · ${fmt(pa.el_kwh, 0)} kWh el` : `Plan ${fmt(pa.el_kwh, 0)} kWh el`) + ` · ca. ${fmt(pa.cost_kr, 0)} kr over ${pa.horizon_h ?? '–'} timer<br>`
         + `Komfort +${fmt(pa.comfort_offset)} °C · forvarm +${fmt(pa.preload)} °C pr. 6 t blokering · må falde ${fmt(pa.red_allowance)} °C i blokerede timer · maks. pause ${pa.max_pause ?? '–'} timer<br>`
-        + (() => { const ca = at(h, hyd[0].e('command')); return ca.reason !== undefined ? `Anbefalet styring: ${esc(ca.reason)} · i dag ${ca.writes_today ?? 0} skrivninger (højst 20) og ${ca.switches_today ?? 0} tænd/sluk (højst 8)<br>` : ''; })()
+        + (() => { if (!hyd[0]) return ''; const ca = at(h, hyd[0].e('command')); return ca.reason !== undefined ? `Anbefalet styring: ${esc(ca.reason)} · i dag ${ca.writes_today ?? 0} skrivninger (højst 20) og ${ca.switches_today ?? 0} tænd/sluk (højst 8)<br>` : ''; })()
         + `Frisk plan i dag: ${fmt(pa.fresh_pct_today, 0)} % af kvartererne</div></details>`;
     }
     alerts(h, vm, D) {
@@ -942,7 +951,7 @@
         + `<div class="sm" style="margin:2px 0 6px">${esc(this.airPlan(h, s))}</div>`;
       const stats = (c.stats || []).map((x) => {
         const v = x.attribute ? at(h, x.entity)[x.attribute] : (st(h, x.entity) || {}).state;
-        const nv = num(v); const txt = v === undefined || v === null ? '–' : nv !== null && x.digits !== undefined ? fmt(nv, x.digits) : String(v);
+        const nv = num(v); const txt = v === undefined || v === null ? '–' : v === 'on' ? 'ja' : v === 'off' ? 'nej' : nv !== null && x.digits !== undefined ? fmt(nv, x.digits) : String(v);
         return `<div>${esc(x.name || x.entity)}</div><div><span class="v" data-e="${esc(x.entity)}">${esc(txt)}${x.unit ? ' ' + esc(x.unit) : ''}</span></div>`;
       }).join('');
       if (stats) L += `<div class="grid">${stats}</div>`;
@@ -994,20 +1003,13 @@
         + `<div class="sm mut" style="margin-top:6px">${PLEG} · rød prik = føler · ✎ ret gulvet</div>`;
       return `<div class="pv"><div class="pvl">${L}</div><div class="pvr">${R}</div></div>`;
     }
-    preText(h, s, short) {
-      const w = at(h, s.plan).preload_window; if (!w || !w.fra) return '';
-      const u = s.kind === 'hydronic' ? 'kWh varme' : 'kWh el'; const k = (t) => hh(new Date(t).getHours());
-      const now = Date.now(); const on = Date.parse(w.fra) <= now && now < Date.parse(w.til);
-      const t = `opvarmning før rød kl. ${k(w.fra)}–${k(w.til)}${on ? ' (nu)' : ''}` + (w.blokering_fra ? ` · rød ${k(w.blokering_fra)}–${k(w.blokering_til)}` : '');
-      return short ? t : `${t} (${fmt(w.kwh)} ${u})`;
-    }
     airPlan(h, s) {
       const ps = st(h, s.plan); if (!ps) return 'plan: –';
       const pa = ps.attributes || {}; const k = ps.state;
       let t = `plan: ${PS[k] || k}`;
       if (k === 'heat') t += ` ${fmt(pa.el_kw ?? pa.heat_kw)} kW el` + (pa.next_off ? ` · stop ${when(pa.next_off)}` : '');
       else if (pa.next_on) t += ` · start ${when(pa.next_on)}`;
-      const pt = this.preText(h, s, true);
+      const pt = preText(h, s, true);
       return pt ? `${t} · ${pt}` : t;
     }
     tallSvg(h, vm, main, air, D) {
