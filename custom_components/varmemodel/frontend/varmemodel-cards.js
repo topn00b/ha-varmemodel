@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.14.3';
+  const VERSION = '0.14.4';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -872,7 +872,7 @@
       if (d.valve) g += `<rect x="${x}" y="${y}" width="8" height="${ht}" rx="3" fill="${d.vs === 'on' ? OR : d.vs === 'off' ? '#6b7278' : 'transparent'}"/>`;
       const flag = d.chk && d.chk.flag;
       const nameEx = ` data-e="${esc(d.r.model)}"`;
-      const sub1 = d.passive ? (() => { const pl = pulls(h, vm, d.r, d.t); return pl ? `${pl.eff >= 0 ? 'varmer' : 'køler'} ${pl.name} ${fmt(Math.abs(pl.eff), 2)} °C/t` : 'opvarmes passivt'; })()
+      const sub1 = d.passive ? (() => { const pl = pulls(h, vm, d.r, d.t); return pl && Math.abs(pl.eff) >= 0.005 ? `${pl.eff >= 0 ? 'varmer' : 'køler'} ${pl.name} ${fmt(Math.abs(pl.eff), 2)} °C/t` : 'opvarmes passivt'; })()
         : d.valve ? (d.valve === 'altid åben' ? 'altid åben' : d.vs === 'on' ? 'telestat åben' : d.vs === 'off' ? 'telestat lukket' : '') : '';
       const sub2 = d.chk ? `ventet ${fmt(d.chk.ventet)} · ${statusTxt(d)}` : 'ingen forudsigelse endnu';
       const fc = d.f3 !== null ? [`om 3 t ${fmt(d.f3)}`, `om 6 t ${fmt(d.f6)}`] : [];
@@ -979,7 +979,8 @@
         const ds = s.rooms.map((r) => room(h, vm, r)); const chk = ds.filter((d) => d.chk); const hit = chk.filter((d) => d.status === 'ramt').length;
         g += TX(1150, y, `${s.name}${chk.length ? ` · forudsigelse ramt ${hit}/${chk.length}` : ''}`, 'hdr'); y += 14;
         const rows = [];
-        for (const d of ds) { const ht = d.passive ? 44 : rowH; g += this.roomRow(h, vm, d, 1150, y, 340, ht, false); rows.push({ d, y: y + ht / 2 }); y += ht + 8; }
+        // Alle rum samme højde (også passive rum), så de tre linjer altid er inde i rammen
+        for (const d of ds) { const ht = rowH; g += this.roomRow(h, vm, d, 1150, y, 340, ht, false); rows.push({ d, y: y + ht / 2 }); y += ht + 8; }
         y += 26; return rows;
       };
       if (!main && air.length) {
