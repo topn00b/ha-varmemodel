@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.6.5';
+  const VERSION = '0.6.6';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -314,7 +314,7 @@
         const checked = ds.filter((d) => d.chk); const hit = checked.filter((d) => d.status === 'ramt').length;
         o += `<div class="h2">${esc(g.name)}${checked.length ? ` <span class="mut sm" style="text-transform:none;letter-spacing:0">· forudsigelsen ramt i ${hit} af ${checked.length}</span>` : ''}</div><div class="wrap"><table>`;
         o += '<tr><th>Rum</th><th class="n">Nu</th><th class="n">Ventet nu</th><th>Holdt?</th><th class="n">Om 3 t</th><th class="n">Om 6 t</th>'
-          + (compact ? '' : '<th class="n">Laveste ventet</th><th class="n">Afkøling °C/t ved 20 K</th><th class="n">Tidskonstant</th><th class="n">°C pr. kWh</th><th class="n">Varme pr. døgn</th><th class="n">Præcision 6 t</th><th>Telestat</th>') + '</tr>';
+          + (compact ? '' : '<th class="n">Laveste ventet</th><th class="n">Afkøling °C/t ved 20 K</th><th class="n">Tidskonstant</th><th class="n">°C pr. kWh varme (luft-luft: kWh el)</th><th class="n">Varme pr. døgn</th><th class="n">Præcision 6 t</th><th>Telestat</th>') + '</tr>';
         for (const d of ds) {
           const a = d.a; const per = a.varmekilder_grader_pr_kwh || {};
           o += `<tr><td><span class="v" data-e="${esc(d.r.model)}">${esc(d.r.name)}</span>${d.chk && d.chk.flag ? `<span class="flag" data-e="${esc(d.r.model)}" title="afviger mere end dobbelt så meget som normalt">!</span>` : ''}</td>`
@@ -430,9 +430,9 @@
         if (H === null) continue;
         const k1 = (H * 24) / 1000, k10 = (0.1 * H * (20.5 - ude) * 24) / 1000;
         o += `<div class="h2">${esc(s.name)}: hvad er en grad eller et tiltag værd?</div><div class="wrap"><table><tr><th>Hvis …</th><th class="n">Varme pr. døgn</th><th class="n">El pr. døgn</th><th class="n">Pr. måned</th></tr>`
-          + `<tr><td>1 °C lavere inde</td><td class="n">${fmt(k1)} kWh</td><td class="n">${fmt(k1 / cop)} kWh</td><td class="n">${pris ? 'ca. ' + fmt((k1 / cop) * pris * 30, 0) + ' kr' : '–'}</td></tr>`
-          + `<tr><td>10 % mindre varmetab</td><td class="n">${fmt(k10)} kWh</td><td class="n">${fmt(k10 / cop)} kWh</td><td class="n">${pris ? 'ca. ' + fmt((k10 / cop) * pris * 30, 0) + ' kr' : '–'}</td></tr></table></div>`
-          + `<div class="leg">Varmetab ${V(h, s.e('heat_loss'), 0, 'W/K')} · COP ${fmt(cop, 2)} (7 døgn) · elpris ${fmt(pris, 2)} kr/kWh (planens snit) · ${fmt(ude)} °C ude (i går).</div>`;
+          + `<tr><td>1 °C lavere inde</td><td class="n">${fmt(k1)} kWh varme</td><td class="n">${fmt(k1 / cop)} kWh el</td><td class="n">${pris ? 'ca. ' + fmt((k1 / cop) * pris * 30, 0) + ' kr' : '–'}</td></tr>`
+          + `<tr><td>10 % mindre varmetab</td><td class="n">${fmt(k10)} kWh varme</td><td class="n">${fmt(k10 / cop)} kWh el</td><td class="n">${pris ? 'ca. ' + fmt((k10 / cop) * pris * 30, 0) + ' kr' : '–'}</td></tr></table></div>`
+          + `<div class="leg">Varmetab ${V(h, s.e('heat_loss'), 0, 'W/K')} · COP ${fmt(cop, 2)} (7 døgn) · elpris ${fmt(pris, 2)} kr/kWh el (planens snit) · ${fmt(ude)} °C ude (i går).</div>`;
       }
       // vind
       for (const s of vm.sources.filter((x) => x.kind === 'hydronic')) {
@@ -614,7 +614,7 @@
       const ce = main && main.e('command'); const cs = st(h, ce);
       if (cs && cs.state !== 'unknown' && (cs.state === 'heat') !== (pst === 'heat')) plan += ` · styring: ${cs.state === 'heat' ? 'varme' : 'slukket'} (${cs.attributes.reason || ''})`;
       const bg = zc || 'var(--primary-color)';
-      const zone = `<div class="b zb" style="background:${bg};border-color:${bg}"><div class="z">${z ? `${ico} ${esc(z.toUpperCase())} · ` : ''}${fmt(price, 2)} kr/kWh</div>`
+      const zone = `<div class="b zb" style="background:${bg};border-color:${bg}"><div class="z">${z ? `${ico} ${esc(z.toUpperCase())} · ` : ''}${fmt(price, 2)} kr/kWh el</div>`
         + `<div class="sub">Plan: ${esc(plan)}${c.dry_run ? ' (styrer ikke endnu)' : ''}${flags.length ? ' · ' + esc(flags.join(' · ')) : ''}</div></div>`;
       const notes = (c.notes || []).map((n) => { const v = n.attribute ? at(h, n.entity)[n.attribute] : (st(h, n.entity) || {}).state; return v ? `<div>${esc(v)}</div>` : ''; }).join('');
       const acts = (c.actions || []).map((a) => {
@@ -635,11 +635,12 @@
       if (!keys.length) return '<span class="mut">Ingen plan endnu</span>';
       const pr = keys.map((k) => P[k].price).filter((x) => x != null).sort((a, b) => a - b);
       const q1 = pr[Math.floor(pr.length / 3)], q2 = pr[Math.floor((2 * pr.length) / 3)];
-      const HM = hyd.map((s) => {
-        const a = at(h, s.plan); const m = {};
+      // Vandbårne kilder i kW varme; luft-luft-kilder i kW el (deres varme måles ikke)
+      const HM = [...hyd, ...air].map((s) => {
+        const a = at(h, s.plan); const m = {}; const isAir = s.kind !== 'hydronic';
         for (const p of a.history || []) m[Date.parse(p.t)] = p.plan;
-        for (const p of a.plan || []) m[Date.parse(p.t)] = p.heat_kw;
-        return { s, m, mx: Math.max(1, ...Object.values(m).filter((x) => x != null)) };
+        for (const p of a.plan || []) m[Date.parse(p.t)] = isAir ? (p.el_kw ?? p.heat_kw) : p.heat_kw;
+        return { s, m, unit: isAir ? 'kW el' : 'kW varme', none: !(a.plan || []).length, mx: Math.max(isAir ? 0.1 : 1, ...Object.values(m).filter((x) => x != null)) };
       });
       const d0 = new Date(); d0.setHours(0, 0, 0, 0); const nowH = new Date(); nowH.setMinutes(0, 0, 0); const nk = nowH.getTime();
       const cells = (day, fn) => { let o = ''; for (let i = 0; i < 24; i++) { const t = new Date(day); t.setHours(i); const k = t.getTime(); o += fn(k, i, (k < nk ? 'p' : '') + (k === nk ? ' n' : '')); } return o; };
@@ -650,20 +651,20 @@
         const lbl = dd === 0 ? 'I dag' : dd === 1 ? 'I morgen' : day.toLocaleDateString('da-DK', { weekday: 'long' });
         rows += `<div class="zl"><span>${lbl} · pris</span><div class="zr">${cells(day, (k, i, cl) => {
           const p = P[k]; const col = !p ? 'var(--divider-color)' : p.blocked ? RE : p.price <= q1 ? GR : p.price <= q2 ? YE : OR;
-          return `<i class="${cl}" style="background:${col}" title="${hh(i)}:00 · ${p ? fmt(p.price, 2) + ' kr/kWh' + (p.blocked ? ' · blokeret' : '') : 'ingen pris'}"></i>`;
+          return `<i class="${cl}" style="background:${col}" title="${hh(i)}:00 · ${p ? fmt(p.price, 2) + ' kr/kWh el' + (p.blocked ? ' · blokeret' : '') : 'ingen pris'}"></i>`;
         })}</div></div>`;
         for (const x of HM) {
+          if (x.none) { rows += `<div class="zl"><span class="mut sm">↳ ${esc(x.s.name)}</span><span class="mut sm">ingen plan endnu</span></div>`; continue; }
           rows += `<div class="zl"><span class="mut sm">↳ ${esc(x.s.name)}</span><div class="zr v">${cells(day, (k, i, cl) => {
             const v = x.m[k];
-            return `<i class="${cl}" style="background:${v ? OR : 'var(--divider-color)'};${v ? `opacity:${(0.35 + (0.65 * v) / x.mx).toFixed(2)}` : ''}" title="${hh(i)}:00 · ${v ? fmt(v) + ' kW varme' : 'ingen varme'}"></i>`;
+            return `<i class="${cl}" style="background:${v ? OR : 'var(--divider-color)'};${v ? `opacity:${(0.35 + (0.65 * v) / x.mx).toFixed(2)}` : ''}" title="${hh(i)}:00 · ${v ? fmt(v) + ' ' + x.unit : 'ingen varme'}"></i>`;
           })}</div></div>`;
         }
       }
-      for (const s of air) rows += `<div class="zl"><span class="mut sm">↳ ${esc(s.name)}</span><span class="mut sm">ingen plan endnu</span></div>`;
       rows += `<div class="zl"><span></span><div class="zt">${[0, 6, 12, 18, 24].map((x) => `<span style="left:${(x / 24) * 100}%">${hh(x)}</span>`).join('')}</div></div>`;
       const pa = pa0;
       return rows + `<details id="vmzd"><summary>planens begrundelse ▾</summary><div class="sm" style="margin-top:4px">${esc(pa.reason || '')}<br>`
-        + `Behov ${fmt(pa.demand_kwh, 0)} kWh · varme ${fmt(pa.heat_kwh, 0)} kWh · el ${fmt(pa.el_kwh, 0)} kWh · ca. ${fmt(pa.cost_kr, 0)} kr over ${pa.horizon_h ?? '–'} timer<br>`
+        + `Behov ${fmt(pa.demand_kwh, 0)} kWh varme · plan ${fmt(pa.heat_kwh, 0)} kWh varme · ${fmt(pa.el_kwh, 0)} kWh el · ca. ${fmt(pa.cost_kr, 0)} kr over ${pa.horizon_h ?? '–'} timer<br>`
         + `Komfort +${fmt(pa.comfort_offset)} °C · forvarm +${fmt(pa.preload)} °C pr. 6 t blokering · må falde ${fmt(pa.red_allowance)} °C i blokerede timer · maks. pause ${pa.max_pause ?? '–'} timer<br>`
         + (() => { const ca = at(h, hyd[0].e('command')); return ca.reason !== undefined ? `Anbefalet styring: ${esc(ca.reason)} · i dag ${ca.writes_today ?? 0} skrivninger (højst 20) og ${ca.switches_today ?? 0} tænd/sluk (højst 8)<br>` : ''; })()
         + `Frisk plan i dag: ${fmt(pa.fresh_pct_today, 0)} % af kvartererne</div></details>`;
@@ -724,7 +725,7 @@
       p.tank = cfg.tank ? [`${fmt(sv(h, cfg.tank))} °C`, cfg.tank] : null;
       p.vv = [D.dhw ? 'laver varmt vand' : 'nej', f.dhw];
       const T = this._today || {}; const ht = T[f.heat_energy], et = T[f.electricity_energy];
-      p.vdag = [`${fmt(ht)} kWh`, f.heat_energy]; p.edag = [`${fmt(et)} kWh`, f.electricity_energy];
+      p.vdag = [`${fmt(ht)} kWh varme`, f.heat_energy]; p.edag = [`${fmt(et)} kWh el`, f.electricity_energy];
       p.copd = [ht && et ? fmt(ht / et, 2) : '–', main.e('cop_yesterday')];
       const ya = at(h, main.e('cop_yesterday'));
       p.igaar = `i går u. varmt vand ${fmt(ya.cop_uden_varmt_vand, 2)} · forventet ${fmt(ya.forventet_stabil_cop, 2)}`;
