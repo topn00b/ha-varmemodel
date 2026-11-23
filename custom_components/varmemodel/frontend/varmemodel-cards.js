@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.10.1';
+  const VERSION = '0.10.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -332,7 +332,6 @@
         .pill{display:inline-block;padding:2px 10px;border-radius:12px;border:1px solid var(--divider-color,#ccc);cursor:pointer;margin-right:4px}
         .pill.on{background:var(--primary-color,#03a9f4);color:#fff;border-color:transparent}
         .sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin:0 4px 0 10px;vertical-align:-1px}`;
-  const PLEG = '<span class="sw" style="background:#7fb2e5"></span>under gulvet <span class="sw" style="background:#b9dcf2"></span>tæt på <span class="sw" style="background:#a8dbb5"></span>godt <span class="sw" style="background:#f6d98b"></span>tæt på loftet <span class="sw" style="background:#ef9a8f"></span>over loftet';
 
   class PlanCard extends Base {
     static getStubConfig() { return { floors: [{ name: 'Stueplan', width: 700, height: 500, rooms: [{ name: 'Stue', rect: [0, 0, 400, 300] }] }] }; }
@@ -569,7 +568,7 @@
       }
       o += '<div class="h2">Planens indstillinger</div><div class="grid">';
       for (const [k, n, u] of [['max_pause', 'Maks. pause uden gulvvarme', 't'], ['comfort_offset', 'Planen sigter over gulvet med', '°C'], ['boost_delta', 'Jeg fryser hæver med', '°C'],
-        ['boost_hours', 'Jeg fryser gælder højst', 't'], ['red_allowance', 'Må falde i blokerede timer', '°C'], ['cold_caution', 'Forsigtighed ved kulde', '%'], ['flow_margin', 'Maks. fremløb over det lærte', '°C']]) {
+        ['boost_hours', 'Jeg fryser gælder højst', 't'], ['red_allowance', 'Må gå under gulvet i røde timer med', '°C'], ['cold_caution', 'Forsigtighed ved kulde', '%'], ['flow_margin', 'Maks. fremløb over det lærte', '°C']]) {
         const e = vm.e(k); o += row(n, e ? `<span class="v" data-e="${esc(e)}">${fmt(sv(h, e))} ${u}</span>` : '–');
       }
       return o + '</div>';
@@ -775,7 +774,7 @@
       const pa = pa0;
       return rows + `<details id="vmzd"><summary>planens begrundelse ▾</summary><div class="sm" style="margin-top:4px">${esc(pa.reason || '')}<br>`
         + (hyd[0] ? `Behov ${fmt(pa.demand_kwh, 0)} kWh varme · plan ${fmt(pa.heat_kwh, 0)} kWh varme · ${fmt(pa.el_kwh, 0)} kWh el` : `Plan ${fmt(pa.el_kwh, 0)} kWh el`) + ` · ca. ${fmt(pa.cost_kr, 0)} kr over ${pa.horizon_h ?? '–'} timer<br>`
-        + `Komfort +${fmt(pa.comfort_offset)} °C · må falde ${fmt(pa.red_allowance)} °C i blokerede timer · maks. pause ${pa.max_pause ?? '–'} timer<br>`
+        + `Komfort +${fmt(pa.comfort_offset)} °C · må gå ${fmt(pa.red_allowance)} °C under gulvet i røde timer · maks. pause ${pa.max_pause ?? '–'} timer<br>`
         + (() => { if (!hyd[0]) return ''; const ca = at(h, hyd[0].e('command')); return ca.reason !== undefined ? `Anbefalet styring: ${esc(ca.reason)} · i dag ${ca.writes_today ?? 0} skrivninger (højst 20) og ${ca.switches_today ?? 0} tænd/sluk (højst 8)<br>` : ''; })()
         + `Frisk plan i dag: ${fmt(pa.fresh_pct_today, 0)} % af kvartererne</div></details>`;
     }
@@ -832,7 +831,6 @@
       p.plan = `plan: ${PS[D.pst] || D.pst}${D.pst === 'heat' && pa.flow != null ? ` · fremløb ${fmt(pa.flow, 1)} °C` : ''}`;
       p.ind = [`ind ${fmt(D.ret)} °C`, f.return_temp];
       p.ud = [`ud ${fmt(D.flow)} °C${D.pst === 'heat' && pa.flow != null ? ' · mål ' + fmt(pa.flow) : ''}`, f.flow_temp];
-      p.ind = [`ind ${fmt(D.ret)} °C`, f.return_temp];
       p.cop = [D.steady ? `${fmt(D.hpk)} kW · COP ${fmt(D.live)} / ${fmt(D.exp)}` : `${fmt(D.hpk)} kW · COP –`, cfg.heat_power || f.heat_energy, { bg: D.lowMin >= 30 ? YE : null }];
       const fr = sv(h, cfg.flow_rate);
       p.flow = [`${fr === null ? '–' : fmt(fr)} L/min · ΔT ${D.flow !== null && D.ret !== null ? fmt(D.flow - D.ret) : '–'} K`, cfg.flow_rate || f.flow_temp];
@@ -1178,19 +1176,6 @@
         }
         L += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, maks. blæser ${esc(asa.maks_blæser || '–')} · nu trin ${cur ?? '–'}${asa.el_mål_w ? ` · planens el-mål ${fmt(asa.el_mål_w, 0)} W${asa.mål_trin != null ? ` (trin ${asa.mål_trin})` : ' (lærer stadig trinene)'}` : ''}${asa.kører_nu ? ` · kører ${esc(asa.kører_nu)}` : ''}</span></div>`
           + `<div class="sm" style="margin-bottom:4px">${asa.ventilation ? `Ventilation ${esc(asa.ventilation)}${asa.ventilation_virkning_pct != null ? ` · med ventilation ${asa.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(asa.ventilation_virkning_pct, 0)} % varme pr. kWh el` : ' · effekten læres'} · ` : ''}${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div><div class="sm mut" style="margin-top:4px">% = varme i rummene pr. kWh el i forhold til det bedste trin (lært af rumfølerne, efter afkøling og opdrift fra stueplanen). Stigen vælger det trin, der dækker planens varme for mindst el.</div></div>`;
-      }
-      const sp = c.steps;
-      if (!asa.trin_liste && sp && sp.entity) {
-        const cur = sv(h, sp.entity); const lw = sp.learned ? at(h, sp.learned)[sp.learned_attribute || 'w'] || {} : {};
-        const labels = sp.labels || []; const n = Math.max(labels.length, ...Object.keys(lw).map((x) => +x + 1), cur !== null ? cur + 1 : 0);
-        const wmx = Math.max(100, ...Object.values(lw).map(Number));
-        let tr = '';
-        for (let i = n - 1; i >= 0; i--) {
-          const w = num(lw[String(i)]);
-          tr += `<div class="tr${i === cur ? ' on' : ''}"><span class="tn">${i}</span><span class="tl2">${esc(labels[i] || '')}</span>`
-            + `<span class="tbar"><i style="width:${w !== null ? Math.round((100 * w) / wmx) : 0}%"></i></span><span class="tw">${w !== null ? `${fmt(w, 0)} W · ${fmt(w / 1000, 2)} kWh el/t` : '<span class="mut">ikke lært</span>'}</span></div>`;
-        }
-        L += `<div class="b"><div class="pvh">${esc(sp.title || 'Trin')}<span class="mut sm"> · nu ${cur !== null ? fmt(cur, 0) : '–'} · lært forbrug</span></div><div class="trs" data-e="${esc(sp.learned || sp.entity)}">${tr}</div></div>`;
       }
       L += settingsPanel(h, s);
       const R = `<div class="sm" style="margin-bottom:6px">${(c.hours || [0, 3, 6, 12]).map((x) => `<span class="pill${x === k ? ' on' : ''}" data-k="${x}">${x === 0 ? 'nu' : `om ${x} t`}</span>`).join(' ')}</div>`

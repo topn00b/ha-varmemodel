@@ -311,3 +311,14 @@ def test_trims_heat_when_rooms_are_warm() -> None:
     sim = simulate_rooms([warm], hs, [x["heat_kw"] for x in pw.hours])["Rum A"]
     assert min(sim) >= 19.5 + 0.3 - 0.01
     assert make_plan(hs, M, [], 20.0).trimmed_kwh == 0  # uden rummodeller skæres intet
+
+
+def test_air_plan_red_allowance_saves_heat_before_block() -> None:
+    """Brugerens økonomi-valg: må rummet gå 1 °C under gulvet i røde timer, købes der mindre varme før blokeringen."""
+    from custom_components.varmemodel.planner import make_air_plan
+
+    hs = hours(24, price=lambda i: 2.0, t_out=lambda i: 2.0, blocked=lambda i: 14 <= i <= 20)
+    strict = make_air_plan(hs, [_air_room()], e_min=0.3, e_max=1.0)
+    loose = make_air_plan(hs, [_air_room()], e_min=0.3, e_max=1.0, red_allowance=1.0)
+    assert loose.el_kwh < strict.el_kwh
+    assert all(x["heat_kw"] == 0 for x in loose.hours if x["blocked"])

@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import VarmemodelConfigEntry
 import time as _time
 
-from .const import AIR_BOOST, AIR_SWITCH, CONF_BOOST_HOURS
+from .const import AIR_BOOST, AIR_SWITCH
 from .sensor import SourceEntity
 
 

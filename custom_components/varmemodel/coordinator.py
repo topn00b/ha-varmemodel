@@ -61,7 +61,6 @@ from .command import Command, step
 from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
 from .planner import FLOW_LOW_OPEN_S, PlanHour, PlanRoom, SourceModel, estimate_room, flow_boost_step, make_air_plan, make_plan, simulate_rooms
 from .const import (
-    AIR_NUMBERS,
     AIR_BOOST,
     AIR_SWITCH,
     AIR_TIMES,
@@ -126,10 +125,8 @@ from .const import (
     SETTINGS,
     DEFAULT_WINDOW_DAYS,
     DOMAIN,
-    FIT_KEYS,
     MODE_CALIBRATED,
     MODE_FROZEN,
-    SOURCE_AIR_AIR,
     SOURCE_HYDRONIC,
     SUBENTRY_ROOM,
     SUBENTRY_SOURCE,
@@ -219,7 +216,8 @@ class VarmemodelCoordinator:
         self.yesterday: dict[str, dict[str, Any]] = {}
         self.measures: list[dict[str, Any]] = []
         self.commands: dict[str, dict[str, Any]] = {}
-        self.air: dict[str, dict[str, Any]] = {}  # luft-luft-styring pr. kilde: trin, lært forbrug og starttrin  # anbefalet styring pr. vandbåren kilde
+        self.air: dict[str, dict[str, Any]] = {}
+        self.plant_week: float | None = None  # luft-luft-styring pr. kilde: trin, lært forbrug og starttrin  # anbefalet styring pr. vandbåren kilde
         self.plan_stats: dict[str, Any] = {}  # andel kvarterer med frisk plan i dag
         self.last_known: dict[str, list[float]] = {}  # føler -> [værdi, tidspunkt]: bro over korte udfald
         self.valve_since: dict[str, float] = {}  # termostaten kalder på varme siden (rummets nøgle)
@@ -309,6 +307,7 @@ class VarmemodelCoordinator:
         self.measures = data.get("measures", [])
         self.commands = data.get("commands", {})
         self.air = data.get("air", {})
+        self.plant_week = data.get("plant_week")  # varmecentralens snit (7 døgn) – gemmes, så planen har tabet straks efter en genstart
         self.plan_stats = data.get("plan_stats", {})
         self.last_known = data.get("last_known", {})
         for sid, s in self.sources.items():
@@ -358,7 +357,8 @@ class VarmemodelCoordinator:
                 "runs": self.runs[-30:], "mode": self.mode, "calib_version": CALIB_VERSION,
                 "rooms": self.rooms, "room_heat": self.room_heat, "settings": self.settings, "plan_log": self.plan_log,
                 "fc_log": self.fc_log, "yesterday": self.yesterday, "measures": self.measures,
-                "commands": self.commands, "plan_stats": self.plan_stats, "last_known": self.last_known, "air": self.air}
+                "commands": self.commands, "plan_stats": self.plan_stats, "last_known": self.last_known, "air": self.air,
+                "plant_week": self.plant_week}
 
     async def _save(self) -> None:
         await self.store.async_save(self._data())
@@ -426,7 +426,7 @@ class VarmemodelCoordinator:
     def _plant_loss_w(self) -> float:
         """Varmecentralens tab nu (W) ud fra snittet de seneste 7 døgn."""
         h, g = self.plant()
-        t = getattr(self, "plant_week", None)
+        t = self.plant_week
         return h * (t - g) if h > 0 and t is not None else 0.0
 
     def plant(self) -> tuple[float, float]:
@@ -1182,9 +1182,6 @@ class VarmemodelCoordinator:
             return v
         if key == AIR_SWITCH:
             return False
-        for k, *_, dflt in AIR_NUMBERS:
-            if k == key:
-                return dflt
         for k, dflt in AIR_TIMES:
             if k == key:
                 return dflt
@@ -1226,6 +1223,9 @@ class VarmemodelCoordinator:
         label = lambda x: f"{x.preset or x.fan} {x.setpoint:g}"  # noqa: E731
         a = self.air.setdefault(s.sid, {})
         pre, blk = preload_per_room([{"blocked": h["blocked"]} for h in p.hours], p.rooms, 3.0)
+        # Må rummene gå under gulvet i røde timer (brugerens valg), forvarmes der tilsvarende mindre
+        allow = self.setting(CONF_RED_ALLOWANCE)
+        pre = {k: round(v - allow, 2) for k, v in pre.items() if v - allow > 0}
         meas = [r for r in show if r.t_min > -50 and not r.held]
         margins = {r.name: round(r.t_now - r.t_min - pre.get(r.name, 0.0), 2) for r in meas}
         # Ned kun når alle rum er over gulv + forvarmning + rummodellens egen usikkerhed (ingen fast margen)
@@ -1433,7 +1433,7 @@ class VarmemodelCoordinator:
         past = [rq.get(h0 - k * 3600, 0.0) for k in range(6, 0, -1)]
         p = await self.hass.async_add_executor_job(
             partial(make_air_plan, hours, show, e_min, e_max, past_q=past, label=_clock,
-                    comfort=self.setting(CONF_COMFORT_OFFSET)))
+                    comfort=self.setting(CONF_COMFORT_OFFSET), red_allowance=self.setting(CONF_RED_ALLOWANCE)))
         plan = {"kind": "air_air", "hours": p.hours, "rooms": p.rooms, "rooms_planned": [r.name for r in show if r.t_min > -50],
                 "reason": p.reason, "warnings": p.warnings, "el_kwh": p.el_kwh, "heat_kwh": p.heat_kwh, "cost_kr": p.cost_kr,
                 "demand_kwh": None, "target": None, "rooms_skipped": skipped,
@@ -1444,7 +1444,7 @@ class VarmemodelCoordinator:
                                     for e in [next((x for x in self.estimates.values() if x["name"] == r.name), None)] if e},
                 "rooms_band": {r.name: round(r.margin, 2) for r in show}, "caps": {r.name: r.t_max for r in show if r.t_max is not None},
                 "e_min": round(e_min, 2), "e_max": round(e_max, 2), "preload_window": p.preload,
-                "comfort_offset": self.setting(CONF_COMFORT_OFFSET), "red_allowance": 0.0}
+                "comfort_offset": self.setting(CONF_COMFORT_OFFSET), "red_allowance": self.setting(CONF_RED_ALLOWANCE)}
         # Anbefalet styring: luft-luft reagerer hurtigt – mindst 30 min. tændt, 15 min. slukket, højst én ændring pr. 15 min.
         cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
         cmd = step(Command.load(self.commands.get(s.sid)), now, dt_util.now().date().isoformat(),

@@ -218,7 +218,7 @@
         "name": "\"I'm cold\" lasts at most"
       },
       "red_allowance": {
-        "name": "May drop below minimum in blocked hours"
+        "name": "May drop below the floor in red hours by"
       },
       "cold_caution": {
         "name": "Caution when colder than calibrated"

@@ -638,3 +638,12 @@ async def test_air_ladder_shadow_and_control(ha: HomeAssistant) -> None:
     await ha.services.async_call("switch", "turn_on", {"entity_id": boost.entity_id}, blocking=True)
     await ha.async_block_till_done()
     assert ("preset", "powerful") in calls and any(k == "sp" for k, _ in calls)
+
+
+async def test_plant_week_survives_restart(ha: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Varmecentralens 7-døgns snit gemmes, så planen har tabet straks efter en genstart (før 0.10.2: først efter natkalibreringen)."""
+    c = entry.runtime_data
+    c.plant_week = 14.5
+    await c._save()
+    data = await c.store.async_load()
+    assert data["plant_week"] == 14.5

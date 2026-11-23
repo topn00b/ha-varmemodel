@@ -118,6 +118,8 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 
 **Opvarmning før blokeringer:** rummodellerne forudser selv, hvor meget hvert rum falder i en blokering, og planen lægger varme før, så rummene holder gulv + komfort + deres egen usikkerhed hele vejen igennem. Der er ingen fast forvarmning (fjernet i 0.10.0). Begrundelsen og kortet viser opvarmningen før rød.
 
+**Økonomi-valg (0.10.2):** *Må gå under gulvet i røde timer med* gælder nu både vandbårne og luft-luft-kilder. Sæt den fx til 0,5 °C, så accepterer du, at rummene bliver op til så meget koldere end gulvet i blokerede timer – til gengæld købes der mindre (dyr) varme før, og luft-luft-stigen forvarmer tilsvarende mindre.
+
 **Data som de er (0.10.0):** usikkerheden i et rum er rummodellens afprøvede præcision over 6 timer (mindst 0,1 °C) – ingen faste tillæg ved dårlig model eller kulde. *Planen sigter over gulvet med* (komfort) gælder nu også rummene, ikke kun husets samlede behov. Rummodellerne regner ændringen over de samme 6 timer som tilførslen (før blev alle rum forudsagt ca. 17 % for langsomt), og vagten holder en rummodel samlet (værdi og koefficienter).
 
 **»Jeg fryser«** gælder fra den slås til, i højst det valgte antal timer og kun til næste blokerede periode begynder. Der varmes aldrig i blokerede timer.

@@ -15,7 +15,7 @@ from .const import FIT_KEYS, SOURCE_HYDRONIC
 from .coordinator import SourceState, VarmemodelCoordinator
 from .entity import VarmemodelEntity
 
-PRECISION = {"heat_loss": 0, "cop": 2, "cop_steady": 2, "cop_loss": 1, "emission": 3, "max_power": 2, "min_power": 2,
+PRECISION = {"heat_loss": 0, "cop_steady": 2, "cop_loss": 1, "emission": 3, "max_power": 2, "min_power": 2,
              "flow_learned": 1, "defrost": 2, "cooling": 0, "wind_effect": 1}
 
 

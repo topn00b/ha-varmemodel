@@ -386,7 +386,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
 
 def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0.3, e_max: float = 1.0,
                   past_q: list[float] | None = None, label: Callable[[int], str] | None = None,
-                  preload: float = 0.0, comfort: float = 0.0) -> Plan:
+                  preload: float = 0.0, comfort: float = 0.0, red_allowance: float = 0.0) -> Plan:
     """Plan for en luft-luft-varmepumpe i kWh el pr. time (rummodellerne lærer grader pr. kWh el).
 
     Varmen måles ikke, så der er intet husbehov at fordele. Planen varmer kun så meget, at rummene holder
@@ -411,7 +411,11 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
     capped = [r for r in rooms if r.t_max is not None]
 
     def need(r: PlanRoom, i: int) -> float:
-        return r.t_min + comfort + r.margin + pre[i]
+        # Brugerens valg: i blokerede (røde) timer må rummet gå op til ``red_allowance`` under gulvet for at spare
+        return r.t_min + comfort + r.margin + pre[i] - (red_allowance if hours[i].blocked else 0.0)
+
+    def floor_at(r: PlanRoom, i: int) -> float:
+        return r.t_min - (red_allowance if hours[i].blocked else 0.0)
 
     def new_over_cap(sim: dict[str, list[float]], base: dict[str, list[float]]) -> bool:
         """Kommer et rum over loftet (eller længere over) end uden den nye portion?"""
@@ -451,9 +455,10 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
     lab = label or (lambda ts: f"om {(ts - hours[0].ts) // 3600} t")
     for r in planned:
         s = sim[r.name]
-        k = min(range(n), key=lambda j: s[j] - r.t_min)
-        if s[k] < r.t_min:
-            plan.warnings.append(f"{r.name}: {s[k]:.1f} °C {lab(hours[k].ts)} er under gulvet ({r.t_min:.1f})")
+        k = min(range(n), key=lambda j: s[j] - floor_at(r, j))
+        if s[k] < floor_at(r, k):
+            plan.warnings.append(f"{r.name}: {s[k]:.1f} °C {lab(hours[k].ts)} er under gulvet ({r.t_min:.1f}"
+                                 + (f", må gå {red_allowance:.1f} under i rød)" if red_allowance and hours[k].blocked else ")"))
     notes: list[str] = []
     for r in capped:
         if r.t_now > r.t_max:
