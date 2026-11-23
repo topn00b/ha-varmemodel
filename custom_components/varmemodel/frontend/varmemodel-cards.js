@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.7.0';
+  const VERSION = '0.7.1';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -536,6 +536,7 @@
   svg.an .sen{fill:#14a89a}svg.an .tag{fill:#fff;font-size:14px;font-weight:700;text-anchor:middle}
   svg.an .rn{font-size:17px;font-weight:600}svg.an .rt{font-size:21px;font-weight:700}
   svg.an .vt{fill:var(--secondary-text-color);font-size:13px}
+  svg.an .gulv{fill:var(--primary-color);cursor:pointer;text-decoration:underline dotted}
   svg.an .flg{fill:${RE};font-weight:800;font-size:19px}
   `;
   const TX = (x, y, s, cls = '', ex = '') => `<text x="${x}" y="${y}" class="${cls}"${ex}>${esc(s)}</text>`;
@@ -747,6 +748,9 @@
         : d.valve ? (d.valve === 'altid åben' ? 'altid åben' : d.vs === 'on' ? 'telestat åben' : d.vs === 'off' ? 'telestat lukket' : '') : '';
       const sub2 = d.chk ? `ventet ${fmt(d.chk.ventet)} · ${statusTxt(d)}` : 'ingen forudsigelse endnu';
       const fc = d.f3 !== null ? [`om 3 t ${fmt(d.f3)}`, `om 6 t ${fmt(d.f6)}`] : [];
+      // Gulvet (rummets mindste temperatur) – klik åbner hjælperen, så det kan justeres
+      const gE = d.a.min_entitet || d.r.model; const gv = d.a.min_entitet ? sv(h, d.a.min_entitet) : num(d.a.gulv);
+      const G = (gx, gy, cls) => (d.a.i_plan === false || gv === null ? '' : TX(gx, gy, `gulv ${fmt(gv)} °C ✎`, `${cls} gulv`, ` data-e="${esc(gE)}"`));
       if (!tall) {
         const two = !!sub1;
         g += TX(x + 22, y + (two ? 20 : 24), d.r.name, 'rn', nameEx);
@@ -754,6 +758,7 @@
         if (sub1) g += TX(x + 22, y + 37, sub1, 'vt');
         g += TX(x + 22, y + (two ? 51 : 41), sub2, 'vt', col ? ` style="fill:${col}"` : '');
         g += TX(x + 215, y + ht / 2 + 8, tTxt(d), 'rt c', ` data-e="${esc(d.tE)}"${d.est ? ` style="fill:${YE}"` : col ? ` style="fill:${col}"` : ''}`);
+        g += G(x + 215, y + ht - 5, 'vt c');
         fc.forEach((s, i) => { g += TX(x + w - 12, y + ht / 2 - 4 + i * 17, s, 'vt r', nameEx); });
       } else {
         g += TX(x + 16, y + 26, d.r.name, 'rn', nameEx);
@@ -761,6 +766,7 @@
         if (sub1) g += TX(x + w - 12, y + 26, sub1.replace('telestat ', ''), 'vt r');
         g += TX(x + 16, y + 58, tTxt(d), 'rt', ` data-e="${esc(d.tE)}"${d.est ? ` style="fill:${YE}"` : col ? ` style="fill:${col}"` : ''}`);
         if (fc.length) g += TX(x + w - 12, y + 56, `${fmt(d.f3)} → ${fmt(d.f6)}`, 'vt r', nameEx);
+        g += G(x + w - 12, y + 42, 'vt r');
         g += TX(x + 16, y + 80, sub2, 'vt', col ? ` style="fill:${col}"` : '');
       }
       return g;
