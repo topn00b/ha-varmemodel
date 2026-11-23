@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.13.2';
+  const VERSION = '0.13.3';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -285,18 +285,19 @@
   // så luftpilene strømmer, når den varmer. o.detail: gulv (klik = gulv-hjælperen) og forudsigelse i hvert rum.
   function floorSvg(h, vm, f, k, o = {}) {
     const W = f.width || 700, H = f.height || 500;
-    const op = f.image ? (f.room_opacity ?? 0.6) : 1;
+    // Samme glidende farveskala som rumkortene, dæmpet fyld, så tekst i temaets farve kan læses (lyst og mørkt tema)
+    const op = f.image ? (f.room_opacity ?? 0.6) : 0.45;
     let g = f.image ? `<image href="${esc(f.image)}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="none" opacity="${f.image_opacity ?? 1}"/>` : '';
     const labels = [];
     for (const rr of f.rooms || []) {
       const p = pts(rr); if (!p.length) continue;
       const poly = p.map((q) => q.join(',')).join(' ');
       const r = vm.rooms.find((x) => x.name === (rr.room || rr.name));
-      if (!r) { g += `<polygon points="${poly}" fill="#f1f1f1" stroke="#555" stroke-width="4"/>`; const [cx, cy] = mid(p); labels.push(`<text x="${cx}" y="${cy}" class="pn" text-anchor="middle">${esc(rr.label || rr.name || '')}</text>`); continue; }
+      if (!r) { g += `<polygon points="${poly}" fill="none" stroke="var(--divider-color,#888)" stroke-width="3" stroke-dasharray="10 8"/>`; const [cx, cy] = mid(p); labels.push(`<text x="${cx}" y="${cy}" class="pn" text-anchor="middle">${esc(rr.label || rr.name || '')}</text>`); continue; }
       const d = room(h, vm, r); const a = d.a;
       const t = k === 0 ? d.t : (d.fc && d.fc.length >= k ? d.fc[k - 1] : null);
-      const col = TCOL(t, num(a.gulv), num(a.loft));
-      g += `<polygon points="${poly}" fill="${col}" fill-opacity="${op}" stroke="#444" stroke-width="4" data-e="${esc(d.tE || r.model)}"/>`;
+      const col = HCOL(t, num(a.gulv), num(a.loft));
+      g += `<polygon points="${poly}" fill="${col}" fill-opacity="${op}" stroke="${col}" stroke-width="4" data-e="${esc(d.tE || r.model)}"/>`;
       if (rr.sensor) g += `<circle cx="${rr.sensor[0]}" cy="${rr.sensor[1]}" r="10" fill="#d9534f" stroke="#fff" stroke-width="3"><title>føler</title></circle>`;
       if (rr.room) continue;  // del af et andet rum: kun farven
       const [cx, cy] = rr.label_at || mid(p);
@@ -331,7 +332,8 @@
       + `${g}${labels.join('')}</svg>`;
   }
   const PCSS = `.pl{display:flex;flex-wrap:wrap;gap:14px}.pf{flex:1 1 320px;min-width:280px}.psvg{width:100%;height:auto;display:block}
-        .pn{font-size:34px;fill:#222}.pt{font-size:40px;font-weight:700;fill:#111}.ps{font-size:22px;fill:#333}.pu{font-size:18px;fill:#fff}
+        .pn{font-size:30px;fill:var(--primary-text-color)}.pt{font-size:40px;font-weight:700;fill:var(--primary-text-color)}.ps{font-size:22px;fill:var(--secondary-text-color)}.pu{font-size:18px;fill:#fff}
+        .bleg{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.grad{width:120px;height:10px;border-radius:5px;background:linear-gradient(90deg,hsl(212 62% 52%),hsl(150 62% 52%),hsl(140 62% 52%),hsl(42 62% 52%),hsl(4 62% 52%))}
         .gl{fill:#1c5fa8;cursor:pointer;text-decoration:underline dotted}.psvg [data-e]{cursor:pointer}
         .flow{animation:vmflow 1.1s linear infinite}@keyframes vmflow{to{stroke-dashoffset:-44}}
         .pill{display:inline-block;padding:2px 10px;border-radius:12px;border:1px solid var(--divider-color,#ccc);cursor:pointer;margin-right:4px}
@@ -359,7 +361,7 @@
       o += '<div class="pl">';
       for (const f of c.floors || []) o += `<div class="pf"><div class="h2">${esc(f.name || '')}</div>${floorSvg(h, vm, f, k)}</div>`;
       o += '</div>';
-      o += `<div class="sm mut" style="margin-top:6px"><span class="sw" style="background:#7fb2e5"></span>under gulvet <span class="sw" style="background:#b9dcf2"></span>tæt på <span class="sw" style="background:#a8dbb5"></span>godt <span class="sw" style="background:#f6d98b"></span>tæt på loftet <span class="sw" style="background:#ef9a8f"></span>over loftet${k ? ' · forudsigelse' : ''}</div>`;
+      o += `<div class="sm mut bleg" style="margin-top:6px"><span class="grad"></span><span>under gulvet</span><span>godt</span><span>loftet</span>${k ? ' · forudsigelse' : ''} · rød prik = føler</div>`;
       // Valgfri varmekilde: planen time for time og den anbefalede styring (anlæg pr. varmepumpe)
       const s = c.source ? vm.sources.find((x) => x.name === c.source) : null;
       if (s && s.plan) {
