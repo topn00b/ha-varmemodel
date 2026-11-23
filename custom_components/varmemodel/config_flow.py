@@ -19,6 +19,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_ASSIST,
+    CONF_ASSIST_SPEED,
     CONF_CLIMATE,
     CONF_COMPRESSOR,
     CONF_DEFROST,
@@ -122,6 +124,8 @@ AIR_AIR_SCHEMA = vol.Schema({
     vol.Required(CONF_ELECTRICITY): ENERGY,
     vol.Optional(CONF_ELECTRICITY_BACKUP): ENERGY,
     vol.Optional(CONF_CLIMATE): selector.EntitySelector(selector.EntitySelectorConfig(domain="climate")),
+    vol.Optional(CONF_ASSIST): selector.EntitySelector(selector.EntitySelectorConfig(domain=["fan", "switch", "select", "input_boolean", "input_select"])),
+    vol.Optional(CONF_ASSIST_SPEED): selector.EntitySelector(selector.EntitySelectorConfig(domain=["number", "input_number", "sensor"])),
     vol.Optional(CONF_UNIT_TEMP): selector.EntitySelector(selector.EntitySelectorConfig(domain=["climate", "sensor"])),
     vol.Optional(CONF_UNIT_TEMP_ATTR): TEXT,
     vol.Optional(CONF_COMPRESSOR): BINARY,

@@ -295,7 +295,9 @@
             "compressor": "Kompressor kører",
             "defrost": "Afrimning",
             "electricity_backup": "Supplerende elmåler (fx skyen)",
-            "climate": "Klimaentitet (styring; findes selv på enhedens enhed)"
+            "climate": "Klimaentitet (styring; findes selv på enhedens enhed)",
+            "assist_fan": "Ventilation der fordeler varmen (valgfri: virkningen læres for til og fra hver for sig)",
+            "assist_fan_speed": "Ventilationens hastighed (valgfri: 0 = står)"
           },
           "data_description": {
             "electricity_energy": "Uden varmemåler lærer rummene, hvor mange grader de får pr. kWh el.",

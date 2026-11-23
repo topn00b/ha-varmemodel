@@ -115,6 +115,8 @@ SETTINGS = (
 
 # Luft-luft-styring (pr. varmekilde, kun når der er en klimaentitet): tal, valg, tider og kontakten
 CONF_CLIMATE = "climate"
+CONF_ASSIST = "assist_fan"  # luft-luft: ventilation der fordeler varmen (til/fra-tilstand)
+CONF_ASSIST_SPEED = "assist_fan_speed"  # valgfri: dens hastighed (0 = står)
 AIR_NUMBERS: tuple = ()  # 0.9.1: setpunkter og margener flyder (regnes af modellen) – kun blæser og nat vælges
 AIR_SELECTS = ("air_fan_day", "air_fan_night", "air_swing_v", "air_swing_h")
 AIR_TIMES = (("air_night_start", "22:00"), ("air_night_end", "07:00"))

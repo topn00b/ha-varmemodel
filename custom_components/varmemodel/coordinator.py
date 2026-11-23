@@ -65,6 +65,8 @@ from .const import (
     AIR_BOOST,
     AIR_SWITCH,
     AIR_TIMES,
+    CONF_ASSIST,
+    CONF_ASSIST_SPEED,
     CONF_CLIMATE,
     UNCHANGED,
     BACKFILL_DAYS,
@@ -1146,6 +1148,18 @@ class VarmemodelCoordinator:
                         return x.entity_id
         return None
 
+    def air_assist(self, s: SourceState) -> bool | None:
+        """Kører ventilationen, der fordeler varmen? None uden en valgt ventilation."""
+        eid = s.conf.get(CONF_ASSIST)
+        st = self.hass.states.get(eid) if eid else None
+        if st is None or st.state in ("unknown", "unavailable"):
+            return None
+        on = st.state.lower() not in ("off", "fra", "0", "false", "slukket")
+        if on and (sp := s.conf.get(CONF_ASSIST_SPEED)):
+            v = self._state_num(sp)
+            on = v is not None and v > 0
+        return on
+
     def air_options(self, s: SourceState, key: str) -> list[str]:
         """Valgmuligheder for en luft-luft-indstilling, læst fra klimaentiteten."""
         st = self.hass.states.get(self.air_climate(s) or "")
@@ -1220,8 +1234,11 @@ class VarmemodelCoordinator:
         w_l = a.get("w", {})
         el_now = p.hours[0].get("el_kw") if p.hours else None
         eff_l = a.get("eff", {})
+        vent = self.air_assist(s)
+        vkey = "" if vent is None else ("|vent til" if vent else "|vent fra")
         lw = [w_l.get(label(x)) for x in ladder]
-        le = [eff_per_kwh(eff_l, label(x)) for x in ladder]
+        # Virkningen læres pr. ventilations-tilstand: ventilationen ændrer, hvor meget af varmen rummene får
+        le = [eff_per_kwh(eff_l, label(x) + vkey) for x in ladder]
         # Mest varme pr. kWh el, når trinenes virkning er lært; ellers laveste trin, hvis forbrug dækker planens el
         tgt = efficient_step(lw, le, el_now * 1000 if el_now else None)
         if tgt is None:
@@ -1263,20 +1280,23 @@ class VarmemodelCoordinator:
             a["w"] = learn_w(a.get("w", {}), act, kwh * 3600 / (now - prev_e[1]) * 1000)  # type: ignore[arg-type]
             # Virkning: rummenes temperaturændring ud over afkøling og opdrift, pr. kWh el (kun når trinnet har kørt længe)
             tp = a.get("tp") or {}
-            if kwh > 0.02 and now - a["act"][1] >= EFF_HOLD + (now - prev_e[1]) and t_out is not None:
+            if (kwh > 0.02 and now - a["act"][1] >= EFF_HOLD + (now - prev_e[1]) and t_out is not None
+                    and (len(prev_e) < 4 or prev_e[3] == vkey)):
                 gains = [room_gain(tp[r.name], r.t_now, (now - prev_e[1]) / 3600, t_out, r.cool_per_hk, r.free_per_h, r.neighbours)
                          for r in meas if r.name in tp]
                 if gains:
-                    a["eff"] = eff_update(a.get("eff", {}), act, sum(gains) / len(gains), kwh)
-        a["e"] = [e_now, now, act] if e_now is not None else None
+                    a["eff"] = eff_update(a.get("eff", {}), act + (prev_e[3] if len(prev_e) > 3 else ""), sum(gains) / len(gains), kwh)
+        a["e"] = [e_now, now, act, vkey] if e_now is not None else None
         a["tp"] = {r.name: r.t_now for r in meas}
         w = a.get("w", {})
         cur = ladder[min(i, len(ladder) - 1)] if i is not None else None
         a["view"] = {"klima": clim, "trin": i, "mål_trin": tgt, "el_mål_w": round(el_now * 1000) if el_now else None, "nat": night, "maks_blæser": cap, "styrer": bool(self.air_setting(s, AIR_SWITCH)), "grund": reason,
                      "kører_nu": act, "blokering": blk, "forvarmning": pre or None, "margen": margins or None,
                      "trin_liste": [{"trin": k, "blæser": x.preset or x.fan, "setpunkt": x.setpoint, "w": w.get(label(x)),
-                                     "grader_pr_kwh_el": None if (ev := eff_per_kwh(a.get("eff", {}), label(x))) is None else round(ev, 3),
-                                     "målinger": int((a.get("eff", {}).get(label(x)) or [0, 0, 0])[2])} for k, x in enumerate(ladder)],
+                                     "grader_pr_kwh_el": None if (ev := eff_per_kwh(a.get("eff", {}), label(x) + vkey)) is None else round(ev, 3),
+                                     "målinger": int((a.get("eff", {}).get(label(x) + vkey) or [0, 0, 0])[2])} for k, x in enumerate(ladder)],
+                     "ventilation": None if vent is None else ("til" if vent else "fra"),
+                     "ventilation_virkning_pct": self._vent_effect(a.get("eff", {})),
                      "starttrin": dict(starts), "skiftet": _ts_local_iso(changed) if changed else None}
         out: dict[str, Any] = {"step": i}
         if a["on"] and cur is not None:
@@ -1286,6 +1306,18 @@ class VarmemodelCoordinator:
             out.update(on=True, preset="powerful" if "powerful" in presets else out.get("preset"))
         a["view"]["jeg_fryser"] = boost
         return out
+
+    @staticmethod
+    def _vent_effect(eff: dict[str, list[float]]) -> float | None:
+        """Hvor meget mere varme rummene får pr. kWh el med ventilationen kørende (%), over trin målt begge veje."""
+        ratios = []
+        for k in eff:
+            if k.endswith("|vent til"):
+                base = k[: -len("|vent til")]
+                on, off = eff_per_kwh(eff, k), eff_per_kwh(eff, base + "|vent fra")
+                if on is not None and off is not None and off > 0:
+                    ratios.append(on / off)
+        return round((sum(ratios) / len(ratios) - 1) * 100) if ratios else None
 
     async def _air_apply(self, s: SourceState, clim: str, d: dict[str, Any]) -> None:
         """Skriv anbefalingen til klimaentiteten – kun det, der er forskelligt, og højst 60 skrivninger pr. døgn."""

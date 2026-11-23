@@ -112,3 +112,15 @@ def test_efficient_step_prefers_more_heat_per_kwh() -> None:
     # plan 600 W = 375: kun High (400) dækker
     assert efficient_step(w, e, 600) == 1
     assert eff_per_kwh(eff_update({}, "x", 0.1, 0.1), "x") is None  # for få målinger
+
+
+def test_ventilation_effect_compares_same_steps() -> None:
+    """Ventilationens effekt: virkning med og uden på de samme trin."""
+    from custom_components.varmemodel.coordinator import VarmemodelCoordinator
+
+    eff: dict = {}
+    for _ in range(10):
+        eff = eff_update(eff, "Low 20|vent til", 0.12, 0.1)
+        eff = eff_update(eff, "Low 20|vent fra", 0.10, 0.1)
+    assert VarmemodelCoordinator._vent_effect(eff) == 20
+    assert VarmemodelCoordinator._vent_effect({}) is None

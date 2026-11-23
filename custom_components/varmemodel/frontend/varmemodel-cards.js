@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.9.4';
+  const VERSION = '0.9.5';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -1161,7 +1161,7 @@
             + `<span class="tbar"><i style="width:${w !== null ? Math.round((100 * w) / wmx) : 0}%"></i></span><span class="tw">${w !== null ? `${fmt(w, 0)} W · ${fmt(w / 1000, 2)} kWh el/t` : '<span class="mut">ikke lært</span>'}${num(x.grader_pr_kwh_el) !== null && eb > 0 ? ` · <b title="rummenes varme pr. kWh el i forhold til det bedste trin">${fmt((100 * x.grader_pr_kwh_el) / eb, 0)} %</b>` : ''}</span></div>`;
         }
         L += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, maks. blæser ${esc(asa.maks_blæser || '–')} · nu trin ${cur ?? '–'}${asa.el_mål_w ? ` · planens el-mål ${fmt(asa.el_mål_w, 0)} W${asa.mål_trin != null ? ` (trin ${asa.mål_trin})` : ' (lærer stadig trinene)'}` : ''}${asa.kører_nu ? ` · kører ${esc(asa.kører_nu)}` : ''}</span></div>`
-          + `<div class="sm" style="margin-bottom:4px">${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div><div class="sm mut" style="margin-top:4px">% = varme i rummene pr. kWh el i forhold til det bedste trin (lært af rumfølerne, efter afkøling og opdrift fra stueplanen). Stigen vælger det trin, der dækker planens varme for mindst el.</div></div>`;
+          + `<div class="sm" style="margin-bottom:4px">${asa.ventilation ? `Ventilation ${esc(asa.ventilation)}${asa.ventilation_virkning_pct != null ? ` · med ventilation ${asa.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(asa.ventilation_virkning_pct, 0)} % varme pr. kWh el` : ' · effekten læres'} · ` : ''}${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div><div class="sm mut" style="margin-top:4px">% = varme i rummene pr. kWh el i forhold til det bedste trin (lært af rumfølerne, efter afkøling og opdrift fra stueplanen). Stigen vælger det trin, der dækker planens varme for mindst el.</div></div>`;
       }
       const sp = c.steps;
       if (!asa.trin_liste && sp && sp.entity) {
