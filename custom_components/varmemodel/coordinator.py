@@ -9,6 +9,7 @@ from functools import partial
 import logging
 from math import cos, radians, sin
 import time
+from statistics import median
 from typing import Any
 
 from homeassistant.components.recorder import get_instance, history
@@ -65,6 +66,7 @@ from .const import (
     AIR_SWITCH,
     AIR_TIMES,
     CONF_ASSIST,
+    CONF_EL_POWER,
     CONF_ASSIST_SPEED,
     CONF_CLIMATE,
     CONF_FLOW_TARGET,
@@ -950,7 +952,18 @@ class VarmemodelCoordinator:
             cool_per_hk=float(fitd["value"]) / 20, free_per_h=float(ex.get("free_heat_k_per_day") or 0.0) / 24,
             margin=margin, accuracy=acc, neighbours=nbs, held=held, estimated=est is not None,
             t_max=_num(r.get("max")) if r.get("max") is not None else None,
+            # Termostat: målt andel af kildens varme (ventil-data) og lukketemperatur = gulv + bånd (kun vandbårne rum)
+            share=self._room_share(r, s), t_close=(t_min + self.setting(CONF_COMFORT_OFFSET))
+            if s.kind == SOURCE_HYDRONIC and t_min > -50 and self._room_share(r, s) else None,
         )
+
+    def _room_share(self, r: dict[str, Any], s: SourceState) -> float | None:
+        """Rummets målte andel af den vandbårne kildes varme (fra ventilernes åbne tid), 0–1; None uden ventil-data."""
+        if s.kind != SOURCE_HYDRONIC:
+            return None
+        rh = (self.room_heat or {}).get(r["key"]) or {}
+        pct = _num(rh.get("share_pct"))
+        return pct / 100 if rh.get("valve_data") and pct and pct > 0 else None
 
     def _valve_open_since(self, r: dict[str, Any], now: float) -> float | None:
         """Siden hvornår rummets termostat/telestat har kaldt på varme uafbrudt (None = lukket eller ukendt)."""
@@ -1244,7 +1257,8 @@ class VarmemodelCoordinator:
         await self._save()
         await self.async_replan()
 
-    def _air_step(self, s: SourceState, clim: str, p: Any, show: list[PlanRoom], on: bool, blocked: bool, now: float) -> dict[str, Any]:
+    def _air_step(self, s: SourceState, clim: str, p: Any, show: list[PlanRoom], on: bool, blocked: bool, now: float,
+                  p_w: float | None = None) -> dict[str, Any]:
         """Stigen for en luft-luft-kilde: hvilket trin (blæser + setpunkt) planens »varme« skal køre på.
 
         Lærer samtidig forbrug pr. trin og starttrin pr. udetemperatur ud fra det, der faktisk kører –
@@ -1262,7 +1276,9 @@ class VarmemodelCoordinator:
         sp_min = max(float(attrs.get("min_temp") or 16), round((max(floors) if floors else 20.0) / stp) * stp)
         sp_max = min(float(attrs.get("max_temp") or 30), sp_min + 3.0)
         ladder = build_ladder(fans, cap, sp_min, sp_max, stp, quiet)
-        label = lambda x: f"{x.preset or x.fan} {x.setpoint:g}"  # noqa: E731
+        # Trin navngives relativt til laveste setpunkt (det flyder med gulvene), så læring overlever, at gulvene ændres
+        rel = lambda fan, sp: f"{fan} +{float(sp) - sp_min:.1f}"  # noqa: E731
+        label = lambda x: rel(x.preset or x.fan, x.setpoint)  # noqa: E731
         a = self.air.setdefault(s.sid, {})
         pre, blk = preload_per_room([{"blocked": h["blocked"]} for h in p.hours], p.rooms, 3.0)
         # Må rummene gå under gulvet i røde timer (brugerens valg), forvarmes der tilsvarende mindre
@@ -1308,9 +1324,9 @@ class VarmemodelCoordinator:
         act = None
         if st is not None and st.state == "heat":
             if quiet and attrs.get("preset_mode") == "quiet":
-                act = f"quiet {float(attrs.get('temperature') or sp_min):g}"
+                act = rel("quiet", attrs.get("temperature") or sp_min)
             else:
-                act = f"{attrs.get('fan_mode')} {float(attrs.get('temperature') or 0):g}"
+                act = rel(attrs.get("fan_mode"), attrs.get("temperature") or sp_min)
         if act != (a.get("act") or [None])[0]:
             a["act"] = [act, now]
         e_eid = s.eid(CONF_ELECTRICITY)
@@ -1319,10 +1335,17 @@ class VarmemodelCoordinator:
         prev_e = a.get("e")
         df = s.eid(CONF_DEFROST)
         defrosting = bool(df and (x := self.hass.states.get(df)) and x.state == "on")
-        if (act and prev_e and e_now is not None and 600 <= now - prev_e[1] <= 1300 and prev_e[2] == act
-                and now - a["act"][1] >= W_SETTLE + (now - prev_e[1]) and not defrosting and e_now >= prev_e[0]):
-            kwh = (e_now - prev_e[0]) / (1000.0 if unit.lower() == "wh" else 1.0)
-            a["w"] = learn_w(a.get("w", {}), act, kwh * 3600 / (now - prev_e[1]) * 1000)  # type: ignore[arg-type]
+        if (act and prev_e and 600 <= now - prev_e[1] <= 1300 and prev_e[2] == act
+                and now - a["act"][1] >= W_SETTLE + (now - prev_e[1]) and not defrosting
+                and (p_w is not None or (e_now is not None and prev_e[0] is not None and e_now >= prev_e[0]))):
+            # Effektmåleren (W, snit af kvarteret) er præcis; energimåleren er grov (fx 0,1 kWh) og bruges kun uden den
+            if p_w is not None:
+                kwh, w_meas = p_w * (now - prev_e[1]) / 3.6e6, p_w
+            else:
+                kwh = (e_now - prev_e[0]) / (1000.0 if unit.lower() == "wh" else 1.0)
+                w_meas = kwh * 3600 / (now - prev_e[1]) * 1000
+            if w_meas > 50:
+                a["w"] = learn_w(a.get("w", {}), act, w_meas)  # type: ignore[arg-type]
             # Virkning: rummenes temperaturændring ud over afkøling og opdrift, pr. kWh el (kun når trinnet har kørt længe)
             tp = a.get("tp") or {}
             if (kwh > 0.02 and now - a["act"][1] >= EFF_HOLD + (now - prev_e[1]) and t_out is not None
@@ -1331,7 +1354,7 @@ class VarmemodelCoordinator:
                          for r in meas if r.name in tp]
                 if gains:
                     a["eff"] = eff_update(a.get("eff", {}), act + (prev_e[3] if len(prev_e) > 3 else ""), sum(gains) / len(gains), kwh)
-        a["e"] = [e_now, now, act, vkey] if e_now is not None else None
+        a["e"] = [e_now, now, act, vkey] if (e_now is not None or p_w is not None) else None
         a["tp"] = {r.name: r.t_now for r in meas}
         w = a.get("w", {})
         cur = ladder[min(i, len(ladder) - 1)] if i is not None else None
@@ -1413,6 +1436,44 @@ class VarmemodelCoordinator:
         self.settings[f"{s.sid}.{FLOW_SWITCH}"] = bool(on)
         await self._save()
         await self.async_replan()
+
+    def _power_mean_sync(self, eid: str, start: float, end: float) -> float | None:
+        """Snit af eleffekten (W) i perioden fra 5-minutters statistik."""
+        st = statistics_during_period(self.hass, dt_util.utc_from_timestamp(start), dt_util.utc_from_timestamp(end), {eid}, "5minute",
+                                      None, {"mean"})
+        vals = [v for x in st.get(eid, []) if (v := _num(x.get("mean"))) is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    def _air_backfill_sync(self, clim: str, peid: str, start: float, end: float) -> dict[str, list[float]]:
+        """Forbrug pr. trin fra historikken: klimaentitetens blæser/setpunkt/forudindstilling og 5-minutters effekt.
+
+        Trin navngives relativt til det laveste setpunkt, der blev brugt til varme i perioden (samme navne som stigen)."""
+        res = history.get_significant_states(self.hass, dt_util.utc_from_timestamp(start), dt_util.utc_from_timestamp(end), [clim],
+                                             include_start_time_state=True, significant_changes_only=False)
+        segs = []
+        for x in res.get(clim, []):
+            at_ = getattr(x, "attributes", {}) or {}
+            segs.append((x.last_updated.timestamp(), x.state, at_.get("fan_mode"), _num(at_.get("temperature")), at_.get("preset_mode")))
+        heat = [t for _, sta, _, t, _ in segs if sta == "heat" and t is not None]
+        if not heat:
+            return {}
+        base = min(heat)
+        st = statistics_during_period(self.hass, dt_util.utc_from_timestamp(start), dt_util.utc_from_timestamp(end), {peid}, "5minute",
+                                      None, {"mean"})
+        out: dict[str, list[float]] = {}
+        k = 0
+        for x in st.get(peid, []):
+            ts, w = _ts(x["start"]), _num(x.get("mean"))
+            while k + 1 < len(segs) and segs[k + 1][0] <= ts:
+                k += 1
+            if w is None or w <= 50 or not segs or segs[k][0] > ts:
+                continue
+            t0, sta, fan, sp, pre = segs[k]
+            if sta != "heat" or sp is None or ts < t0 + W_SETTLE:
+                continue
+            name = "quiet" if pre == "quiet" else fan
+            out.setdefault(f"{name} +{sp - base:.1f}", []).append(w)
+        return out
 
     async def _air_apply(self, s: SourceState, clim: str, d: dict[str, Any]) -> None:
         """Skriv anbefalingen til klimaentiteten – kun det, der er forskelligt, og højst 60 skrivninger pr. døgn."""
@@ -1548,7 +1609,15 @@ class VarmemodelCoordinator:
         clim = self.air_climate(s)
         if clim:
             try:
-                d.update(self._air_step(s, clim, p, show, cmd.on, bool(cur and cur["blocked"]), now))
+                peid = s.conf.get(CONF_EL_POWER)
+                p_w = await self.hass.async_add_executor_job(self._power_mean_sync, peid, now - 900, now) if peid else None
+                a = self.air.setdefault(s.sid, {})
+                if peid and not a.get("bf"):
+                    # Første gang: forbrug pr. trin fra de seneste døgns historik (det, varmepumpen faktisk har kørt)
+                    bf = await self.hass.async_add_executor_job(self._air_backfill_sync, clim, peid, now - 3 * 86400, now)
+                    a["w"] = {**{k: round(median(v)) for k, v in bf.items() if len(v) >= 3}, **(a.get("w") or {})}
+                    a["bf"] = True
+                d.update(self._air_step(s, clim, p, show, cmd.on, bool(cur and cur["blocked"]), now, p_w))
             except Exception:  # noqa: BLE001 – stigen må aldrig vælte planen
                 _LOGGER.exception("Luft-luft-stigen fejlede")
         self.commands[s.sid] = d

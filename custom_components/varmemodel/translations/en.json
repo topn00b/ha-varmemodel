@@ -299,7 +299,8 @@
             "electricity_backup": "Additional electricity meter (e.g. cloud)",
             "climate": "Climate entity (control; found automatically on the unit's device)",
             "assist_fan": "Distribution fan (optional: heat is learned separately with it on and off)",
-            "assist_fan_speed": "Distribution fan speed (optional: 0 = stopped)"
+            "assist_fan_speed": "Distribution fan speed (optional: 0 = stopped)",
+            "el_power": "Electric power (optional: W per ladder step is learned from it; energy meters are too coarse)"
           },
           "data_description": {
             "electricity_energy": "Without a heat meter the rooms learn how many degrees they get per kWh of electricity.",

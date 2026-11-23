@@ -346,3 +346,33 @@ def test_margin_grows_with_lead_time() -> None:
 
     r = PlanRoom(name="x", t_now=20, t_min=20, heat_now=0, heat_delayed=0, cool_per_hk=0, margin=0.6)
     assert abs(_mg(r, 0) - 0.1) < 1e-9 and abs(_mg(r, 2) - 0.3) < 1e-9 and _mg(r, 5) == 0.6 and _mg(r, 20) == 0.6
+
+
+def test_closed_valves_send_heat_to_open_rooms() -> None:
+    """Termostater: et rum over sin lukketemperatur får ingen varme; de åbne rum får dets andel (målt andel)."""
+    from custom_components.varmemodel.planner import simulate_rooms
+
+    hs = hours(6, t_out=lambda i: 2.0)
+    warm = PlanRoom(name="Varm", t_now=21.0, t_min=20.0, heat_now=0.05, heat_delayed=0.0, cool_per_hk=0.0, share=0.5, t_close=20.5)
+    cold = PlanRoom(name="Kold", t_now=19.8, t_min=20.0, heat_now=0.05, heat_delayed=0.0, cool_per_hk=0.0, share=0.5, t_close=20.5)
+    q = [2.0] * 6
+    sim = simulate_rooms([warm, cold], hs, q)
+    assert sim["Varm"][0] == 21.0  # lukket: ingen varme
+    assert abs(sim["Kold"][0] - (19.8 + 0.05 * 2.0 * 2)) < 1e-6  # fik også den lukkede kreds' andel
+    fixed = simulate_rooms([PlanRoom(name="Kold", t_now=19.8, t_min=20.0, heat_now=0.05, heat_delayed=0.0, cool_per_hk=0.0)], hs, q)
+    assert sim["Kold"][0] > fixed["Kold"][0]
+
+
+def test_valves_let_plan_reach_weak_room_without_overheating() -> None:
+    """Et rum med lille andel løftes ved, at de varme rum lukker deres kredse: kravet nås med næsten samme varme,
+    hvor faste andele ikke kan nå det (de varmer bare de andre rum op)."""
+    hs = hours(24, t_out=lambda i: 8.0)
+
+    def rooms(valves: bool):
+        mk = lambda n, t, hn, sh: PlanRoom(name=n, t_now=t, t_min=20.0, heat_now=hn, heat_delayed=0.0, cool_per_hk=0.003, margin=0.2,
+                                           share=sh if valves else None, t_close=20.5 if valves else None)
+        return [mk("Svag", 19.9, 0.015, 0.25), mk("Stærk", 20.8, 0.04, 0.75)]
+    with_valves = make_plan(hs, M, rooms(True), 20.0)
+    without = make_plan(hs, M, rooms(False), 20.0)
+    assert with_valves.deficit < 0.05 < without.deficit
+    assert with_valves.heat_kwh <= without.heat_kwh * 1.15

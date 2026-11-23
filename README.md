@@ -257,6 +257,8 @@ Med `source: <varmekildens navn>` viser kortet kun den varmekilde: dens rum, pla
 | *Nat begynder / slutter* (tid) | standard 22:00–07:00 |
 | *Lameller op/ned og side* (valg) | »uændret« eller en fast stilling |
 
+**Forbrug pr. trin (0.12.1):** vælg luft-luft-kildens *Eleffekt* (W) i opsætningen – energimålere er for grove pr. kvarter. Trinene navngives relativt til laveste setpunkt (fx »High +1,5«), så læringen overlever, at gulvene og dermed setpunkterne flytter sig. Første gang fyldes forbruget pr. trin ud fra de seneste 3 døgns historik (det, varmepumpen faktisk har kørt).
+
 **Mest varme pr. kWh el uden ekstra følere:** for hvert trin lærer Varmemodel, hvor meget rummene stiger pr. kWh el – målt ændring minus det, rummet ville have gjort uden varmepumpen (afkøling mod ude, gratis varme som opdrift fra etagen under, naborum). Det læres kun, når trinnet har kørt i mindst 45 min. Når to eller flere trin er lært, vælger stigen det trin, der dækker planens varme for mindst el – og svarer dermed selv på, om lav blæser i mange timer eller høj i få er billigst. Kortet viser virkningen pr. trin i % af det bedste.
 
 **Ventilation der fordeler varmen:** vælg den (og evt. dens hastighed) i luft-luft-kildens opsætning. Så læres virkningen pr. trin for ventilation til og fra hver for sig, og kortet viser, hvor meget mere varme rummene får pr. kWh el, når den kører – en løbende A/B-test.

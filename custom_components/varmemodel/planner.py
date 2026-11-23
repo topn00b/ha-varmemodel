@@ -44,6 +44,8 @@ class PlanRoom:
     held: bool = False  # temperaturen er ikke målt nu: den sidst kendte eller forudsagt (føleren er væk)
     estimated: bool = False  # føleren har været væk i over 30 min.: temperaturen er forudsagt fra sidste måling
     t_max: float | None = None  # loft: planen varmer aldrig så meget, at rummet kommer over (luft-luft)
+    share: float | None = None  # rummets målte andel af kildens varme, når kredsen er åben (0–1); None = altid sin faste andel
+    t_close: float | None = None  # rummets termostat lukker kredsen ved denne temperatur (gulv + bånd); None = altid åben
 
 
 @dataclass
@@ -151,18 +153,33 @@ def _el(m: SourceModel, t_out: float, p: float, target: float) -> float:
 
 
 def simulate_rooms(rooms: list[PlanRoom], hours: list[PlanHour], q: list[float], past_q: list[float] | None = None) -> dict[str, list[float]]:
-    """Forudsagt temperatur ved udgangen af hver time for hvert rum."""
+    """Forudsagt temperatur ved udgangen af hver time for hvert rum.
+
+    Termostater: et rum med målt varmeandel (``share``) og lukketemperatur (``t_close``) får ingen varme, mens det er
+    over lukketemperaturen; dets andel fordeles på de åbne rum i forhold til deres målte andele (højst 3×). Sådan går
+    vandet i virkeligheden til de kredse, der stadig kalder. Rum uden andel får altid deres faste del (som før)."""
     past = list(past_q or [0.0] * 6)[-6:]
     past = [0.0] * (6 - len(past)) + past
-    out: dict[str, list[float]] = {}
-    for r in rooms:
-        t, series = r.t_now, []
-        for i, h in enumerate(hours):
-            q_delay = q[i - 6] if i >= 6 else past[i]
-            t = (t + r.heat_now * q[i] + r.heat_delayed * q_delay + r.cool_per_hk * (h.t_out - t) + r.free_per_h
+    temps = {r.name: r.t_now for r in rooms}
+    out: dict[str, list[float]] = {r.name: [] for r in rooms}
+    given: dict[str, list[float]] = {r.name: [] for r in rooms}  # den varme rummet faktisk fik pr. time (efter ventil)
+    shared = [r for r in rooms if r.share and r.t_close is not None]
+    total = sum(r.share for r in shared)
+    for i, h in enumerate(hours):
+        open_share = sum(r.share for r in shared if temps[r.name] < r.t_close)
+        scale = min(3.0, total / open_share) if shared and open_share > 0 else 1.0
+        for r in rooms:
+            t = temps[r.name]
+            if r.share and r.t_close is not None:
+                qe = 0.0 if t >= r.t_close else q[i] * scale
+            else:
+                qe = q[i]
+            q_delay = given[r.name][i - 6] if i >= 6 else past[i]
+            t = (t + r.heat_now * qe + r.heat_delayed * q_delay + r.cool_per_hk * (h.t_out - t) + r.free_per_h
                  + sum(k * (tn - t) for k, tn in r.neighbours))
-            series.append(round(t, 2))
-        out[r.name] = series
+            given[r.name].append(qe)
+            temps[r.name] = t
+            out[r.name].append(round(t, 2))
     return out
 
 
