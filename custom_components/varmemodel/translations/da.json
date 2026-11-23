@@ -225,6 +225,9 @@
       },
       "flow_margin": {
         "name": "Maks. fremløb over det lærte"
+      },
+      "economy": {
+        "name": "Økonomi: må gå under gulvet med"
       }
     },
     "binary_sensor": {

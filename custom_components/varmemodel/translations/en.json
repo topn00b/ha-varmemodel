@@ -225,6 +225,9 @@
       },
       "flow_margin": {
         "name": "Max flow above the learned flow"
+      },
+      "economy": {
+        "name": "Economy: rooms may drop below the floor by"
       }
     },
     "binary_sensor": {

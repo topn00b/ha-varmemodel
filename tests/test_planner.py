@@ -376,3 +376,13 @@ def test_valves_let_plan_reach_weak_room_without_overheating() -> None:
     without = make_plan(hs, M, rooms(False), 20.0)
     assert with_valves.deficit < 0.05 < without.deficit
     assert with_valves.heat_kwh <= without.heat_kwh * 1.15
+
+
+def test_economy_knob_buys_less_heat_at_lower_flow() -> None:
+    """Økonomi-knappen: accepterer rummene at ligge lidt under gulvet, køber planen mindre varme ved lavere fremløb."""
+    hs = hours(24, t_out=lambda i: 2.0)
+    room = PlanRoom(name="Stue", t_now=20.2, t_min=20.0, heat_now=0.06, heat_delayed=0.02, cool_per_hk=0.004, margin=0.2)
+    base = make_plan(hs, M, [room], 20.0)
+    eco = make_plan(hs, M, [room], 19.5, economy=0.5)
+    assert eco.heat_kwh < base.heat_kwh
+    assert max(x["flow"] or 0 for x in eco.hours) <= max(x["flow"] or 0 for x in base.hours)

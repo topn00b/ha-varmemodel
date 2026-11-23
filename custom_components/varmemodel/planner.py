@@ -208,10 +208,11 @@ def estimate_room(r: PlanRoom, t0: float, ts0: float, end: float, q5: dict[int, 
 def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
-              red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None, comfort: float = 0.0) -> Plan:
+              red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None, comfort: float = 0.0,
+              economy: float = 0.0) -> Plan:
     """Planen. Forudsiger modellen, at et rum kommer under planens grænse, fordi fremløbsgrænsen holder varmen
     nede, hæves grænsen 1 °C ad gangen (højst ``FLOW_BOOST_MAX``) til rummene holder – i god tid, da gulvet er langsomt."""
-    args = (hours, model, rooms, target, max_pause, past_q, label, boost, boost_hours, red_allowance, preload, comfort)
+    args = (hours, model, rooms, target, max_pause, past_q, label, boost, boost_hours, red_allowance, preload, comfort, economy)
     base = _plan_once(*args, flow_margin)
     if flow_margin is None or base.deficit <= 0.05:
         return base
@@ -231,7 +232,8 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
 def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
-              red_allowance: float = 0.0, preload: float = 0.0, comfort: float = 0.0, flow_margin: float | None = None) -> Plan:
+              red_allowance: float = 0.0, preload: float = 0.0, comfort: float = 0.0, economy: float = 0.0,
+              flow_margin: float | None = None) -> Plan:
     """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra.
 
     ``boost`` (»jeg fryser«) hæver målet og rummenes min. i de første ``boost_hours`` timer.
@@ -247,7 +249,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
 
     def limit(r: PlanRoom, i: int) -> float:
         """Laveste tilladte temperatur for rummet ved udgangen af time i."""
-        return r.t_min + (boost if i < boost_hours else 0.0) - (red_allowance if hours[i].blocked else 0.0)
+        return r.t_min + (boost if i < boost_hours else 0.0) - economy - (red_allowance if hours[i].blocked else 0.0)
 
     # Forvarmning: kravet stiger med antal timer inde i en blokering (time 1 i en blokering: preload/6 osv.)
     pre: list[float] = []
@@ -410,7 +412,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
 
 def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0.3, e_max: float = 1.0,
                   past_q: list[float] | None = None, label: Callable[[int], str] | None = None,
-                  preload: float = 0.0, comfort: float = 0.0, red_allowance: float = 0.0) -> Plan:
+                  preload: float = 0.0, comfort: float = 0.0, red_allowance: float = 0.0, economy: float = 0.0) -> Plan:
     """Plan for en luft-luft-varmepumpe i kWh el pr. time (rummodellerne lærer grader pr. kWh el).
 
     Varmen måles ikke, så der er intet husbehov at fordele. Planen varmer kun så meget, at rummene holder
@@ -436,10 +438,10 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
 
     def need(r: PlanRoom, i: int) -> float:
         # Brugerens valg: i blokerede (røde) timer må rummet gå op til ``red_allowance`` under gulvet for at spare
-        return r.t_min + _mg(r, i) + pre[i] - (red_allowance if hours[i].blocked else 0.0)
+        return r.t_min + _mg(r, i) + pre[i] - economy - (red_allowance if hours[i].blocked else 0.0)
 
     def floor_at(r: PlanRoom, i: int) -> float:
-        return r.t_min - (red_allowance if hours[i].blocked else 0.0)
+        return r.t_min - economy - (red_allowance if hours[i].blocked else 0.0)
 
     def new_over_cap(sim: dict[str, list[float]], base: dict[str, list[float]]) -> bool:
         """Kommer et rum over loftet (eller længere over) end uden den nye portion?"""

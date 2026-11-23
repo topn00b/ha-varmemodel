@@ -121,6 +121,7 @@ from .const import (
     CONF_BOOST_DELTA,
     PLAN_HORIZON_H,
     CONF_BOOST_HOURS,
+    CONF_ECONOMY,
     CONF_RED_ALLOWANCE,
     CONF_COLD_CAUTION,
     CONF_FLOW_MARGIN,
@@ -1300,9 +1301,14 @@ class VarmemodelCoordinator:
         eff_l = a.get("eff", {})
         vent = self.air_assist(s)
         vkey = "" if vent is None else ("|vent til" if vent else "|vent fra")
-        lw = [w_l.get(label(x)) for x in ladder]
+        # Pr. udetemperatur-bånd (5 °C): ved kulde trækker samme trin mere og giver mindre varme pr. kWh el.
+        # Uden nok data i båndet bruges trinets samlede tal (alle udetemperaturer).
+        bkey = f"@{b}" if b is not None else ""
+        wb = lambda k: w_l.get(k + bkey, w_l.get(k))  # noqa: E731
+        lw = [wb(label(x)) for x in ladder]
         # Virkningen læres pr. ventilations-tilstand: ventilationen ændrer, hvor meget af varmen rummene får
-        le = [eff_per_kwh(eff_l, label(x) + vkey) for x in ladder]
+        eb = lambda k: eff_per_kwh(eff_l, k + bkey) if eff_per_kwh(eff_l, k + bkey) is not None else eff_per_kwh(eff_l, k)  # noqa: E731
+        le = [eb(label(x) + vkey) for x in ladder]
         # Mest varme pr. kWh el, når trinenes virkning er lært; ellers laveste trin, hvis forbrug dækker planens el
         tgt = efficient_step(lw, le, el_now * 1000 if el_now else None)
         if tgt is None:
@@ -1348,7 +1354,7 @@ class VarmemodelCoordinator:
                 kwh = (e_now - prev_e[0]) / (1000.0 if unit.lower() == "wh" else 1.0)
                 w_meas = kwh * 3600 / (now - prev_e[1]) * 1000
             if w_meas > 50:
-                a["w"] = learn_w(a.get("w", {}), act, w_meas)  # type: ignore[arg-type]
+                a["w"] = learn_w(learn_w(a.get("w", {}), act, w_meas), act + bkey, w_meas) if bkey else learn_w(a.get("w", {}), act, w_meas)  # type: ignore[arg-type]
             # Virkning: rummenes temperaturændring ud over afkøling og opdrift, pr. kWh el (kun når trinnet har kørt længe)
             tp = a.get("tp") or {}
             if (kwh > 0.02 and now - a["act"][1] >= EFF_HOLD + (now - prev_e[1]) and t_out is not None
@@ -1356,15 +1362,19 @@ class VarmemodelCoordinator:
                 gains = [room_gain(tp[r.name], r.t_now, (now - prev_e[1]) / 3600, t_out, r.cool_per_hk, r.free_per_h, r.neighbours)
                          for r in meas if r.name in tp]
                 if gains:
-                    a["eff"] = eff_update(a.get("eff", {}), act + (prev_e[3] if len(prev_e) > 3 else ""), sum(gains) / len(gains), kwh)
+                    g_, k_ = sum(gains) / len(gains), act + (prev_e[3] if len(prev_e) > 3 else "")
+                    a["eff"] = eff_update(a.get("eff", {}), k_, g_, kwh)
+                    if bkey:
+                        a["eff"] = eff_update(a["eff"], k_ + bkey, g_, kwh)
         a["e"] = [e_now, now, act, vkey] if (e_now is not None or p_w is not None) else None
         a["tp"] = {r.name: r.t_now for r in meas}
         w = a.get("w", {})
         cur = ladder[min(i, len(ladder) - 1)] if i is not None else None
         a["view"] = {"klima": clim, "trin": i, "mål_trin": tgt, "el_mål_w": round(el_now * 1000) if el_now else None, "nat": night, "maks_blæser": cap, "styrer": bool(self.air_setting(s, AIR_SWITCH)), "grund": reason,
                      "kører_nu": act, "blokering": blk, "forvarmning": pre or None, "margen": margins or None,
-                     "trin_liste": [{"trin": k, "blæser": x.preset or x.fan, "setpunkt": x.setpoint, "w": w.get(label(x)),
-                                     "grader_pr_kwh_el": None if (ev := eff_per_kwh(a.get("eff", {}), label(x) + vkey)) is None else round(ev, 3),
+                     "ude_bånd": b,
+                     "trin_liste": [{"trin": k, "blæser": x.preset or x.fan, "setpunkt": x.setpoint, "w": wb(label(x)),
+                                     "grader_pr_kwh_el": None if (ev := eb(label(x) + vkey)) is None else round(ev, 3),
                                      "målinger": int((a.get("eff", {}).get(label(x) + vkey) or [0, 0, 0])[2])} for k, x in enumerate(ladder)],
                      "ventilation": None if vent is None else ("til" if vent else "fra"),
                      "ventilation_entitet": s.conf.get(CONF_ASSIST), "ventilation_hastighed_entitet": s.conf.get(CONF_ASSIST_SPEED),
@@ -1631,7 +1641,10 @@ class VarmemodelCoordinator:
         past = [rq.get(h0 - k * 3600, 0.0) for k in range(6, 0, -1)]
         p = await self.hass.async_add_executor_job(
             partial(make_air_plan, hours, show, e_min, e_max, past_q=past, label=_clock,
-                    comfort=self.setting(CONF_COMFORT_OFFSET), red_allowance=self.setting(CONF_RED_ALLOWANCE)))
+                    comfort=self.setting(CONF_COMFORT_OFFSET), red_allowance=self.setting(CONF_RED_ALLOWANCE),
+                    economy=self.setting(CONF_ECONOMY)))
+        if (eco := self.setting(CONF_ECONOMY)) > 0:
+            p.reason += f" – økonomi: rummene må gå {eco:.2f} °C under gulvet"
         plan = {"kind": "air_air", "hours": p.hours, "rooms": p.rooms, "rooms_planned": [r.name for r in show if r.t_min > -50],
                 "reason": p.reason, "warnings": p.warnings, "el_kwh": p.el_kwh, "heat_kwh": p.heat_kwh, "cost_kr": p.cost_kr,
                 "demand_kwh": None, "target": None, "rooms_skipped": skipped,
@@ -1802,7 +1815,7 @@ class VarmemodelCoordinator:
             cold = caution > 0 and cold_lim is not None and coldest is not None and coldest < cold_lim - 1
             if cold:
                 model.heat_loss_w_k *= 1 + caution / 100
-            target = (sum(mins) / len(mins) + offset) if mins else 20.5
+            target = (sum(mins) / len(mins) + offset - self.setting(CONF_ECONOMY)) if mins else 20.5
             # Gulvet afgiver varmen fra de seneste 6 timer med forsinkelse: den målte varme går med i forudsigelsen
             try:
                 recent_q, recent_out = await get_instance(self.hass).async_add_executor_job(self._recent_sync, s, h0 - 12 * 3600, h0)
@@ -1811,8 +1824,10 @@ class VarmemodelCoordinator:
             past_q = [recent_q.get(h0 - k * 3600, 0.0) for k in range(6, 0, -1)]
             p = await self.hass.async_add_executor_job(
                 partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), past_q=past_q, label=_clock,
-                        boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE),
+                        boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE), economy=self.setting(CONF_ECONOMY),
                         comfort=offset, flow_margin=self.setting(CONF_FLOW_MARGIN) + fb["k"]))
+            if (eco := self.setting(CONF_ECONOMY)) > 0:
+                p.reason += f" – økonomi: rummene må gå {eco:.2f} °C under gulvet"
             # Log: det planlagte for timen (første plan i timen) og rummenes forudsigelse – til »i går« og »!«
             log = self.plan_log.setdefault(sid, {})
             if p.hours and p.hours[0]["ts"] == h0 and str(h0) not in log:

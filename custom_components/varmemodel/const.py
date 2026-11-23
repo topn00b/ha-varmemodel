@@ -89,6 +89,7 @@ CONF_BOOST_DELTA = "boost_delta"
 PLAN_HORIZON_H = 48
 CONF_BOOST_HOURS = "boost_hours"
 CONF_RED_ALLOWANCE = "red_allowance"
+CONF_ECONOMY = "economy"
 CONF_COLD_CAUTION = "cold_caution"
 CONF_PRELOAD = "preload"
 CONF_FLOW_MARGIN = "flow_margin"
@@ -105,6 +106,8 @@ SETTINGS = (
     ("boost_delta", 0, 5, 0.5, "°C", 1.0),
     ("boost_hours", 1, 12, 1, "h", 5),
     ("red_allowance", 0, 3, 0.5, "°C", 0.0),
+    # Økonomi: rummene må altid ligge op til så meget under gulvet – planen køber mindre varme og finder et lavere fremløb
+    ("economy", 0, 3, 0.25, "°C", 0.0),
     # Koldere end varmetabet er målt ved: + så mange % varmetab (og +0,2 °C margen i rummene); 0 = slået fra
     ("cold_caution", 0, 30, 1, "%", 10),
     # Lavt og jævnt: højst så mange °C over det fremløb, modellen har lært huset bruger ved timens udetemperatur
