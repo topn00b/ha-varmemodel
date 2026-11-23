@@ -196,9 +196,9 @@ def test_preload_charges_floors_before_long_block() -> None:
     assert sum(x["heat_kw"] for x in p3.hours[:9]) > sum(x["heat_kw"] for x in p0.hours[:9])
     # Forvarmningen er markeret time for time og samlet i et vindue, der slutter når blokeringen begynder
     w = p3.preload
-    assert w and w["block_from"] == 9 * 3600 and w["block_to"] == 17 * 3600 and w["to"] <= 9 * 3600 and w["kwh"] > 0
-    assert all(x.get("preload", 0) <= x["heat_kw"] for x in p3.hours) and all(x["preload"] == 0 for x in p3.hours[9:])
-    assert f"forvarmer kl. {w['from'] // 3600:02d}–{w['to'] // 3600:02d} til blokeringen 09–17" in p3.reason
+    assert w and w["block_from"] == 9 * 3600 and w["block_to"] == 17 * 3600 and w["to"] == 9 * 3600 and w["kwh"] > 0
+    assert all(x["preload"] in (0, x["heat_kw"]) for x in p3.hours) and all(x["preload"] == 0 for x in p3.hours[9:])
+    assert f"opvarmer kl. {w['from'] // 3600:02d}–09 før blokeringen 09–17" in p3.reason
 
 
 def _air_room(name="Rum A", t_now=19.6, t_min=19.5, t_max=None, now=0.7, delayed=-0.2, cool=0.02, free=0.15):
@@ -219,8 +219,8 @@ def test_air_plan_keeps_floor_in_cheap_hours_never_in_red() -> None:
     assert sum(q[2:5]) > 0 and "kWh el" in p.reason
     assert all(x["setpoint"] is not None for x in p.hours if x["heat_kw"] > 0)
     # Varme lagt før den røde blok for at holde rummet gennem den er forvarmning – med tidspunkt
-    assert p.preload and p.preload["block_from"] == 14 * 3600 and p.preload["to"] <= 14 * 3600
-    assert sum(x["preload"] for x in p.hours) > 0 and "forvarmer om 7 t–om 14 t til blokeringen om 14 t–om 21 t" in p.reason
+    assert p.preload and p.preload["block_from"] == 14 * 3600 and p.preload["to"] == 14 * 3600
+    assert sum(x["preload"] for x in p.hours) > 0 and "før blokeringen om 14 t–om 21 t" in p.reason
 
 
 def test_air_plan_respects_cap_of_warm_room() -> None:
