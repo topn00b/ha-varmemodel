@@ -74,7 +74,8 @@ from .const import (
     HYDRO_MAX_FLIPS,
     HYDRO_SWITCH,
     SOFT_EVAL_S,
-    SOFT_SPAN_K,
+    SOFT_FLOOR,
+    SOFT_OVER_RETURN_K,
     SOFT_START,
     SOFT_STEP_K,
     FLOW_MAX_WRITES,
@@ -1423,13 +1424,13 @@ class VarmemodelCoordinator:
             want = cmd["flow"]
         if want is None:
             return
-        # Blød start: lige efter tænding løftes målet gradvist (retur + 2 °C, højst SOFT_SPAN_K under planen, +SOFT_STEP_K
-        # pr. kvarter), så kompressoren ikke går til fuld effekt mod et koldt gulv (bedre COP, færre afrimninger i kulde)
+        # Blød start: lige efter tænding løftes målet gradvist (retur + 4 °C, mindst 20 °C, +SOFT_STEP_K pr. kvarter),
+        # så kompressoren ikke går til fuld effekt mod et koldt gulv (bedre COP, færre afrimninger i kulde)
         hs = self.air.setdefault(f"hydro:{s.sid}", {})
         if hs.get("soft") and hs.get("start_t"):
             if hs.get("ramp0") is None:
                 ret = self._state_num(s.eid(CONF_RETURN))
-                hs["ramp0"] = max((ret + 2.0) if ret is not None else want - SOFT_SPAN_K, want - SOFT_SPAN_K)
+                hs["ramp0"] = max((ret + SOFT_OVER_RETURN_K) if ret is not None else want - 3 * SOFT_STEP_K, SOFT_FLOOR)
             ramp = hs["ramp0"] + SOFT_STEP_K * int((time.time() - hs["start_t"]) // 900)
             if ramp < want:
                 want = ramp

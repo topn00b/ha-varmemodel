@@ -745,7 +745,7 @@ async def test_hydro_control_switches_heat_pump(ha: HomeAssistant) -> None:
 
 
 async def test_soft_start_ramps_flow_target(ha: HomeAssistant) -> None:
-    """Blød start: lige efter tænding skrives retur + 2 °C (højst 6 °C under planen), derefter +2 °C pr. kvarter."""
+    """Blød start: lige efter tænding skrives retur + 4 °C (mindst 20 °C), derefter +2 °C pr. kvarter."""
     now = time.time()
     h0 = int(now // 3600 * 3600)
     loc = dt_util.get_default_time_zone()
@@ -770,8 +770,8 @@ async def test_soft_start_ramps_flow_target(ha: HomeAssistant) -> None:
     hours = [{"flow": 34.0, "blocked": False}]
     c.commands[s.sid] = {"flow": 34}
     await c._flow_apply(s, hours, False)
-    assert calls == [28.0]  # max(retur 22 + 2, 34 − 6) = 28
+    assert calls == [26.0]  # retur 22 + 4
     hs["start_t"] = time.time() - 1800  # to kvarterer inde
-    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 28, "min_temp": 20, "max_temp": 45})
+    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 26, "min_temp": 20, "max_temp": 45})
     await c._flow_apply(s, hours, False)
-    assert calls[-1] == 32.0
+    assert calls[-1] == 30.0
