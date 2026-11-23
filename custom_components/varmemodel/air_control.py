@@ -144,3 +144,45 @@ def band(t_out: float | None) -> str | None:
     if t_out is None:
         return None
     return str(int(t_out // 5 * 5))
+
+
+EFF_HOLD = 2700  # virkning pr. trin læres først, når trinnet har kørt så længe (gulv og luft er faldet til ro)
+EFF_DECAY = 0.98  # ældre målinger vægter lidt mindre
+EFF_MIN_N = 8  # så mange kvarterer, før et trins virkning bruges
+
+
+def room_gain(t_prev: float, t_now: float, hours: float, t_out: float, cool_per_hk: float, free_per_h: float,
+              neighbours: list[tuple[float, float]]) -> float:
+    """Den del af rummets temperaturændring, varmepumpen står for: målt ændring minus det, rummet ville have
+    gjort uden den (afkøling mod ude, gratis varme som opdrift fra etagen under, varme fra naborum)."""
+    passive = hours * (free_per_h - cool_per_hk * (t_prev - t_out) + sum(k * (tn - t_prev) for k, tn in neighbours))
+    return (t_now - t_prev) - passive
+
+
+def eff_update(eff: dict[str, list[float]], label: str, gain: float, kwh: float) -> dict[str, list[float]]:
+    """Læg et kvarters varme (°C, snit af rummene) og el (kWh) til trinnets sum. Giver en ny ordbog."""
+    new = {k: list(v) for k, v in eff.items()}
+    g, e, n = new.get(label, [0.0, 0.0, 0.0])
+    new[label] = [round(g * EFF_DECAY + gain, 4), round(e * EFF_DECAY + kwh, 4), n + 1]
+    return new
+
+
+def eff_per_kwh(eff: dict[str, list[float]], label: str) -> float | None:
+    """°C pr. kWh el for trinnet (None før der er nok målinger)."""
+    v = eff.get(label)
+    if not v or v[2] < EFF_MIN_N or v[1] <= 0:
+        return None
+    return v[0] / v[1]
+
+
+def efficient_step(ladder_w: list[float | None], ladder_eff: list[float | None], target_w: float | None) -> int | None:
+    """Det trin, der giver planens varme for mindst el: blandt trin med lært forbrug og virkning vælges det med
+    lavest forbrug, hvis varme (W × virkning) dækker planens varme (mål-W × gennemsnitlig virkning).
+    None, før mindst to trin har begge dele."""
+    known = [(i, w, e) for i, (w, e) in enumerate(zip(ladder_w, ladder_eff)) if w is not None and e is not None and e > 0]
+    if target_w is None or len(known) < 2:
+        return None
+    avg = sum(e for _, _, e in known) / len(known)
+    need = target_w * avg
+    ok = [(w, i) for i, w, e in known if w * e >= need]
+    return min(ok)[1] if ok else max(known, key=lambda x: x[1] * x[2])[0]

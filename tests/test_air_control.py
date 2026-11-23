@@ -12,7 +12,11 @@ from custom_components.varmemodel.air_control import (
     fan_options,
     is_night,
     learn_w,
+    eff_per_kwh,
+    eff_update,
+    efficient_step,
     preload_per_room,
+    room_gain,
     target_step,
 )
 
@@ -85,3 +89,26 @@ def test_learned_watt_is_moving_average() -> None:
 
 def test_band() -> None:
     assert band(2.3) == "0" and band(-0.1) == "-5" and band(7.0) == "5" and band(None) is None
+
+
+def test_room_gain_removes_cooling_and_free_heat() -> None:
+    """Varmepumpens andel: målt ændring minus afkøling mod ude og opdrift (gratis varme) i perioden."""
+    g = room_gain(20.0, 20.1, 0.25, 0.0, 0.02, 0.1, [])
+    # uden varme: 0,25 t × (0,1 − 0,02·20) = −0,075 °C → varmepumpen stod for 0,175 °C
+    assert abs(g - 0.175) < 1e-9
+
+
+def test_efficient_step_prefers_more_heat_per_kwh() -> None:
+    """Lavt trin med bedre virkning vælges, når det dækker planens varme – ellers et højere."""
+    eff: dict = {}
+    for _ in range(10):
+        eff = eff_update(eff, "Low 20", 0.06, 0.08)   # 0,75 °C/kWh el
+        eff = eff_update(eff, "High 23", 0.10, 0.20)  # 0,50 °C/kWh el
+    e_low, e_high = eff_per_kwh(eff, "Low 20"), eff_per_kwh(eff, "High 23")
+    assert abs(e_low - 0.75) < 0.01 and abs(e_high - 0.5) < 0.01
+    w, e = [320.0, 800.0], [e_low, e_high]
+    # plan 300 W ved gennemsnitlig virkning (0,625) = 187 varme-enheder: Low giver 240 → Low
+    assert efficient_step(w, e, 300) == 0
+    # plan 600 W = 375: kun High (400) dækker
+    assert efficient_step(w, e, 600) == 1
+    assert eff_per_kwh(eff_update({}, "x", 0.1, 0.1), "x") is None  # for få målinger

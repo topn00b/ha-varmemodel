@@ -249,6 +249,8 @@ Med `source: <varmekildens navn>` viser kortet kun den varmekilde: dens rum, pla
 | *Nat begynder / slutter* (tid) | standard 22:00–07:00 |
 | *Lameller op/ned og side* (valg) | »uændret« eller en fast stilling |
 
+**Mest varme pr. kWh el uden ekstra følere:** for hvert trin lærer Varmemodel, hvor meget rummene stiger pr. kWh el – målt ændring minus det, rummet ville have gjort uden varmepumpen (afkøling mod ude, gratis varme som opdrift fra etagen under, naborum). Det læres kun, når trinnet har kørt i mindst 45 min. Når to eller flere trin er lært, vælger stigen det trin, der dækker planens varme for mindst el – og svarer dermed selv på, om lav blæser i mange timer eller høj i få er billigst. Kortet viser virkningen pr. trin i % af det bedste.
+
 Resten regner modellen selv: setpunkterne flyder fra rummenes højeste gulv og 3 °C op (inden for klimaentitetens grænser), trinnet følger planens el-mål for timen (planen har valgt timer og mængde efter pris), og der gås kun ned, når alle rum er over gulv + forvarmning + rummodellens egen usikkerhed.
 
 Stigen: først blæseren op (laveste trin er varmepumpens *quiet*, hvis den har det), så setpunktet op – blæseren højst til den valgte maks. Når planen siger varme, går stigen ét trin op pr. kvarter, mens et rum er under sit gulv (+ forvarmning før en blokering, regnet som planens forventede fald i rummet), og ét trin ned, når alle rum har været over gulvet + margen i 30 min., og trinnet har holdt i 45 min. Starttrinnet huskes pr. 5 °C udetemperatur, og forbruget pr. trin læres af elmåleren ud fra det, der faktisk kører – også mens Varmemodel kun anbefaler. Sensoren *Trin på stigen* viser trinene, det lærte forbrug, margen og forvarmning pr. rum.

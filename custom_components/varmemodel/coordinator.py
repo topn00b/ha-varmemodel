@@ -45,8 +45,13 @@ from .air_control import (
     W_SETTLE,
     band,
     build_ladder,
+    EFF_HOLD,
     choose_step,
+    eff_per_kwh,
+    eff_update,
+    efficient_step,
     fan_options,
+    room_gain,
     target_step,
     is_night,
     learn_w,
@@ -1214,7 +1219,13 @@ class VarmemodelCoordinator:
         idx_of = {label(x): i for i, x in enumerate(ladder)}
         w_l = a.get("w", {})
         el_now = p.hours[0].get("el_kw") if p.hours else None
-        tgt = target_step([w_l.get(label(x)) for x in ladder], el_now * 1000 if el_now else None)
+        eff_l = a.get("eff", {})
+        lw = [w_l.get(label(x)) for x in ladder]
+        le = [eff_per_kwh(eff_l, label(x)) for x in ladder]
+        # Mest varme pr. kWh el, når trinenes virkning er lært; ellers laveste trin, hvis forbrug dækker planens el
+        tgt = efficient_step(lw, le, el_now * 1000 if el_now else None)
+        if tgt is None:
+            tgt = target_step(lw, el_now * 1000 if el_now else None)
         boost = self.air_boost_active(s)
         if boost:
             i, changed, down_since, reason = len(ladder) - 1, now, None, "jeg fryser – øverste trin"
@@ -1250,12 +1261,22 @@ class VarmemodelCoordinator:
                 and now - a["act"][1] >= W_SETTLE + (now - prev_e[1]) and not defrosting and e_now >= prev_e[0]):
             kwh = (e_now - prev_e[0]) / (1000.0 if unit.lower() == "wh" else 1.0)
             a["w"] = learn_w(a.get("w", {}), act, kwh * 3600 / (now - prev_e[1]) * 1000)  # type: ignore[arg-type]
+            # Virkning: rummenes temperaturændring ud over afkøling og opdrift, pr. kWh el (kun når trinnet har kørt længe)
+            tp = a.get("tp") or {}
+            if kwh > 0.02 and now - a["act"][1] >= EFF_HOLD + (now - prev_e[1]) and t_out is not None:
+                gains = [room_gain(tp[r.name], r.t_now, (now - prev_e[1]) / 3600, t_out, r.cool_per_hk, r.free_per_h, r.neighbours)
+                         for r in meas if r.name in tp]
+                if gains:
+                    a["eff"] = eff_update(a.get("eff", {}), act, sum(gains) / len(gains), kwh)
         a["e"] = [e_now, now, act] if e_now is not None else None
+        a["tp"] = {r.name: r.t_now for r in meas}
         w = a.get("w", {})
         cur = ladder[min(i, len(ladder) - 1)] if i is not None else None
         a["view"] = {"klima": clim, "trin": i, "mål_trin": tgt, "el_mål_w": round(el_now * 1000) if el_now else None, "nat": night, "maks_blæser": cap, "styrer": bool(self.air_setting(s, AIR_SWITCH)), "grund": reason,
                      "kører_nu": act, "blokering": blk, "forvarmning": pre or None, "margen": margins or None,
-                     "trin_liste": [{"trin": k, "blæser": x.preset or x.fan, "setpunkt": x.setpoint, "w": w.get(label(x))} for k, x in enumerate(ladder)],
+                     "trin_liste": [{"trin": k, "blæser": x.preset or x.fan, "setpunkt": x.setpoint, "w": w.get(label(x)),
+                                     "grader_pr_kwh_el": None if (ev := eff_per_kwh(a.get("eff", {}), label(x))) is None else round(ev, 3),
+                                     "målinger": int((a.get("eff", {}).get(label(x)) or [0, 0, 0])[2])} for k, x in enumerate(ladder)],
                      "starttrin": dict(starts), "skiftet": _ts_local_iso(changed) if changed else None}
         out: dict[str, Any] = {"step": i}
         if a["on"] and cur is not None:
