@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.13.1';
+  const VERSION = '0.13.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -936,14 +936,19 @@
         // Knapperne i samme række (slår til/fra)
         const acts = c.actions || [];
         if (acts.length) {
-          g += BOX(900, 20, 590, 116, 'Knapper');
-          const n = Math.min(acts.length, 3), bw = (550 - (n - 1) * 12) / n;
+          // Én eller to rækker under overskriften; teksten forkortes, så den altid er inde i knappen
+          const two = acts.length > 3;
+          g += BOX(900, 20, 590, 116, two ? '' : 'Knapper');
+          const n = Math.min(acts.length, 3), bw = (550 - (n - 1) * 12) / n, bh = two ? 40 : 38;
           acts.slice(0, 6).forEach((a, i) => {
             const s0 = st(h, a.entity); const on = !!s0 && s0.state === 'on';
-            const x = 920 + (i % 3) * (bw + 12), y = 46 + Math.floor(i / 3) * 46;
-            const lbl = (a.name || a.entity) + (on ? ' · ' + new Date(s0.last_changed).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' }) : '');
-            g += `<g class="act${on ? ' on' : ''}" data-act="${esc(a.entity)}"><rect x="${x}" y="${y + (acts.length > 3 ? -6 : 10)}" width="${bw}" height="38" rx="8"/>`
-              + TX(x + bw / 2, y + (acts.length > 3 ? 18 : 34), lbl, 'c') + '</g>';
+            const x = 920 + (i % 3) * (bw + 12), y = two ? 30 + Math.floor(i / 3) * 52 : 64;
+            const tid = on ? ' · ' + new Date(s0.last_changed).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' }) : '';
+            const max = Math.floor((bw - 16) / 8.2);
+            let lbl = (a.name || a.entity) + tid;
+            if (lbl.length > max) lbl = (a.name || a.entity).length > max ? (a.name || a.entity).slice(0, max - 1) + '…' : (a.name || a.entity);
+            g += `<g class="act${on ? ' on' : ''}" data-act="${esc(a.entity)}"><title>${esc((a.name || a.entity) + tid)}</title><rect x="${x}" y="${y}" width="${bw}" height="${bh}" rx="8"/>`
+              + TX(x + bw / 2, y + bh / 2 + 5, lbl, 'c') + '</g>';
           });
         }
         g += BOX(580, 20, 300, 116, 'Energi i dag') + TX(636, 64, 'kWh varme', 'm c') + TX(730, 64, 'kWh el', 'm c') + TX(824, 64, 'COP', 'm c');
