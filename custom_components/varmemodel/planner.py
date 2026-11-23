@@ -184,10 +184,10 @@ def estimate_room(r: PlanRoom, t0: float, ts0: float, end: float, q5: dict[int, 
 def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
-              red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None) -> Plan:
+              red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None, comfort: float = 0.0) -> Plan:
     """Planen. Forudsiger modellen, at et rum kommer under planens grænse, fordi fremløbsgrænsen holder varmen
     nede, hæves grænsen 1 °C ad gangen (højst ``FLOW_BOOST_MAX``) til rummene holder – i god tid, da gulvet er langsomt."""
-    args = (hours, model, rooms, target, max_pause, past_q, label, boost, boost_hours, red_allowance, preload)
+    args = (hours, model, rooms, target, max_pause, past_q, label, boost, boost_hours, red_allowance, preload, comfort)
     base = _plan_once(*args, flow_margin)
     if flow_margin is None or base.deficit <= 0.05:
         return base
@@ -207,7 +207,7 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
 def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
-              red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None) -> Plan:
+              red_allowance: float = 0.0, preload: float = 0.0, comfort: float = 0.0, flow_margin: float | None = None) -> Plan:
     """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra.
 
     ``boost`` (»jeg fryser«) hæver målet og rummenes min. i de første ``boost_hours`` timer.
@@ -290,7 +290,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
         worst: tuple[int, PlanRoom] | None = None
         for r in rooms:
             for i, t in enumerate(sim[r.name]):
-                if t < limit(r, i) + r.margin + pre[i] and (r.name, i) not in skip:
+                if t < limit(r, i) + comfort + r.margin + pre[i] and (r.name, i) not in skip:
                     if worst is None or i < worst[0]:
                         worst = (i, r)
                     break
@@ -311,7 +311,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
     #     dermed fremløbet, når modellen forudser, at rummene klarer sig med mindre. Uden rummodeller: intet skæres.
     if rooms:
         def need_ok(sim2: dict[str, list[float]], base: dict[str, list[float]]) -> bool:
-            return all(t >= limit(r, i) + r.margin + pre[i] - 1e-6 or t >= b - 1e-6
+            return all(t >= limit(r, i) + comfort + r.margin + pre[i] - 1e-6 or t >= b - 1e-6
                        for r in rooms for i, (t, b) in enumerate(zip(sim2[r.name], base[r.name])))
 
         sim = simulate_rooms(rooms, hours, q, past_q)

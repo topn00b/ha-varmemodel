@@ -343,3 +343,23 @@ def test_cop_loss_same_method_as_today():
     f = fit_cop_loss(Fit(None), five, comp, [], [])
     assert f.value == cop_today(five, comp, [], [], None)["loss_start_defrost_pct"]
     assert f.value > 0
+
+
+def test_room_fit_recovers_true_coefficients() -> None:
+    """Rummodellen: ændringen og tilførslen dækker de samme 6 timer – ingen systematisk underskydning (før 0.10.0: ca. 17 %)."""
+    import random as _r
+
+    from custom_components.varmemodel.calibration import RoomHour, fit_room
+
+    rnd = _r.Random(3)
+    cool, heat = 0.010, 0.050
+    t, hs = 20.0, []
+    for i in range(24 * 40):
+        q = 3.0 if (i % 24) in range(2, 8) or rnd.random() < 0.15 else 0.0
+        t_out = 3.0 + 4 * __import__("math").sin(i / 30)
+        hs.append(RoomHour(ts=1_700_000_000 + i * 3600, t_room=round(t, 3), t_out=t_out, inputs={"A": q}))
+        t = t + heat * q + cool * (t_out - t)
+    f = fit_room(hs)
+    src = f.extra["sources"]["A"]
+    assert abs(f.value / 20 - cool) / cool < 0.08
+    assert abs(src["now"] - heat) / heat < 0.08 and abs(src["delayed"]) < 0.25 * heat

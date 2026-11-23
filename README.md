@@ -100,7 +100,7 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 4. For lange pauser brydes med den billigste time.
 5. **Fremløbsmål** = mål + effekt ÷ gulvets typiske afgivelse (medianen), begrænset til 25–45 °C og rundet til 0,5 °C. Varmepumpen sættes i heat-tilstand og får fremløbsmålet direkte. Den anbefalede styring giver fremløbsmålet (`flow_setpoint`); det ændres højst én gang i timen og med mindst 1 °C.
 
-**Indstillinger (tal-entiteter på huset):** *Maks. pause uden gulvvarme*, *Komfort over min.*, *»Jeg fryser« hæver målet*, *»Jeg fryser« gælder højst* (timer), *Må falde under min. i blokerede timer*, *Forsigtighed ved kulde* (%) og *Forvarm pr. 6 timers blokering* (°C). De påvirker kun planen.
+**Indstillinger (tal-entiteter på huset):** *Maks. pause uden gulvvarme*, *Komfort over min.*, *»Jeg fryser« hæver målet*, *»Jeg fryser« gælder højst* (timer), *Må falde under min. i blokerede timer*, *Forsigtighed ved kulde* (%) og *(fjernet i 0.10.0)* (°C). De påvirker kun planen.
 
 **Forsigtighed ved kulde:** er vejrudsigten mere end 1 °C koldere end det laveste, varmetabet er målt ved, regnes der med så mange % større varmetab, og rummenes margen hæves 0,2 °C. Standard er 10 %, og 0 slår det fra.
 
@@ -116,7 +116,9 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 
 **Fremløb for lavt – reserve:** tager modellen fejl, så et rum er under sit gulv *og* under det, modellen ventede, mens termostaten eller telestaten har kaldt på varme uafbrudt i 6 timer, hæves fremløbsgrænsen 1 °C. Der går mindst 6 timer mellem hvert trin (højst +5 °C), og den sænkes igen 1 °C pr. 6 timer. Vises som advarsel på kortet og i attributten `flow_boost`.
 
-**Forvarmning før blokeringer:** gulvvarme, der skal være slukket i mange timer (fx dyr el), skal lades op før. I blokerede timer hæves rummenes krav med *Forvarm pr. 6 timers blokering* for hver 6 timer inde i blokeringen, dog højst 1 °C. Med standarden 0,3 °C skal rummene stå 0,2 °C højere sidst i en blokering på 4 timer og 0,35 °C højere sidst i en på 7 timer. Planen lægger derfor mere varme før lange blokeringer, mens *Komfort over min.* kan holdes lav resten af tiden. Begrundelsen viser, hvor meget der forvarmes til den næste blokering på mindst 3 timer. 0 slår det fra.
+**Opvarmning før blokeringer:** rummodellerne forudser selv, hvor meget hvert rum falder i en blokering, og planen lægger varme før, så rummene holder gulv + komfort + deres egen usikkerhed hele vejen igennem. Der er ingen fast forvarmning (fjernet i 0.10.0). Begrundelsen og kortet viser opvarmningen før rød.
+
+**Data som de er (0.10.0):** usikkerheden i et rum er rummodellens afprøvede præcision over 6 timer (mindst 0,1 °C) – ingen faste tillæg ved dårlig model eller kulde. *Planen sigter over gulvet med* (komfort) gælder nu også rummene, ikke kun husets samlede behov. Rummodellerne regner ændringen over de samme 6 timer som tilførslen (før blev alle rum forudsagt ca. 17 % for langsomt), og vagten holder en rummodel samlet (værdi og koefficienter).
 
 **»Jeg fryser«** gælder fra den slås til, i højst det valgte antal timer og kun til næste blokerede periode begynder. Der varmes aldrig i blokerede timer.
 

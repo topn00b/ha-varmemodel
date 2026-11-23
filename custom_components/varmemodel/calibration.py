@@ -837,7 +837,9 @@ def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: i
             for k in nuse:
                 r.append(sum(h.neighbours[k] - cur[0].t_room for h in cur))
             rows.append(r)
-            y.append(cur[-1].t_room - cur[0].t_room)
+            # Ændringen over de samme 6 timer, som tilførslen er summeret over (fra timen før blokken til dens sidste time).
+            # Før 0.10.0 dækkede ændringen kun 5 timer, så alle rum blev forudsagt ca. 17 % for langsomt.
+            y.append(cur[-1].t_room - prev[-1].t_room)
             touts += [h.t_out for h in cur]
         if len(rows) < min_blocks:
             return None

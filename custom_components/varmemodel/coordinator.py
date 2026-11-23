@@ -116,7 +116,6 @@ from .const import (
     CONF_BOOST_HOURS,
     CONF_RED_ALLOWANCE,
     CONF_COLD_CAUTION,
-    CONF_PRELOAD,
     CONF_FLOW_MARGIN,
     CONF_MEASURES_CALENDAR,
     CONF_PLANT_ROOM,
@@ -650,6 +649,9 @@ class VarmemodelCoordinator:
                                     (prev.get("t_out_min"), prev.get("t_out_max")) if prev else (None, None))
             keep_prev = note.startswith("begrænset") or f.value is None
             extra = dict(pe) if keep_prev else f.extra
+            if keep_prev and prev and prev.get("value") is not None:
+                # Vagten holder hele den forrige model (værdi og koefficienter sammen), så den hænger sammen med sig selv
+                value = prev["value"]
             if keep_prev and value is not None and eid in room_hours:
                 # Vagten beholder den forrige model: afprøv den, der faktisk bruges, så præcisionen passer til den
                 for k in ("validated_6h_k", "validated_bias_6h_k", "validated_windows"):
@@ -931,7 +933,8 @@ class VarmemodelCoordinator:
             if (tn := self._nb_value(nb_eid)) is not None:
                 nbs.append((float(nb.get("per_h_k") or 0.0), tn))
         acc = max(float(ex.get("accuracy_6h_k") or 0.3), float(ex.get("validated_6h_k") or 0.0))
-        margin = min(0.6, max(0.2, acc)) + (0.2 if (fitd.get("r2") or 0) < 0.3 else 0.0)
+        # Usikkerhed = rummodellens afprøvede præcision over 6 timer (data som de er; mindst 0,1 °C for følerens opløsning)
+        margin = max(0.1, acc)
         if est is not None:
             # Uden måling vokser usikkerheden: + rummets præcision for hver 6 timer ud over de første 6, højst 1 °C
             blind_h = (time.time() - float(est["since"])) / 3600
@@ -1430,7 +1433,7 @@ class VarmemodelCoordinator:
         past = [rq.get(h0 - k * 3600, 0.0) for k in range(6, 0, -1)]
         p = await self.hass.async_add_executor_job(
             partial(make_air_plan, hours, show, e_min, e_max, past_q=past, label=_clock,
-                    preload=self.setting(CONF_PRELOAD), comfort=self.setting(CONF_COMFORT_OFFSET)))
+                    comfort=self.setting(CONF_COMFORT_OFFSET)))
         plan = {"kind": "air_air", "hours": p.hours, "rooms": p.rooms, "rooms_planned": [r.name for r in show if r.t_min > -50],
                 "reason": p.reason, "warnings": p.warnings, "el_kwh": p.el_kwh, "heat_kwh": p.heat_kwh, "cost_kr": p.cost_kr,
                 "demand_kwh": None, "target": None, "rooms_skipped": skipped,
@@ -1440,7 +1443,7 @@ class VarmemodelCoordinator:
                                     for r in show if r.estimated
                                     for e in [next((x for x in self.estimates.values() if x["name"] == r.name), None)] if e},
                 "rooms_band": {r.name: round(r.margin, 2) for r in show}, "caps": {r.name: r.t_max for r in show if r.t_max is not None},
-                "e_min": round(e_min, 2), "e_max": round(e_max, 2), "preload": self.setting(CONF_PRELOAD), "preload_window": p.preload,
+                "e_min": round(e_min, 2), "e_max": round(e_max, 2), "preload_window": p.preload,
                 "comfort_offset": self.setting(CONF_COMFORT_OFFSET), "red_allowance": 0.0}
         # Anbefalet styring: luft-luft reagerer hurtigt – mindst 30 min. tændt, 15 min. slukket, højst én ændring pr. 15 min.
         cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
@@ -1593,8 +1596,6 @@ class VarmemodelCoordinator:
             cold = caution > 0 and cold_lim is not None and coldest is not None and coldest < cold_lim - 1
             if cold:
                 model.heat_loss_w_k *= 1 + caution / 100
-                for pr in show:
-                    pr.margin += 0.2
             target = (sum(mins) / len(mins) + offset) if mins else 20.5
             # Gulvet afgiver varmen fra de seneste 6 timer med forsinkelse: den målte varme går med i forudsigelsen
             try:
@@ -1605,7 +1606,7 @@ class VarmemodelCoordinator:
             p = await self.hass.async_add_executor_job(
                 partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), past_q=past_q, label=_clock,
                         boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE),
-                        preload=self.setting(CONF_PRELOAD), flow_margin=self.setting(CONF_FLOW_MARGIN) + fb["k"]))
+                        comfort=offset, flow_margin=self.setting(CONF_FLOW_MARGIN) + fb["k"]))
             # Log: det planlagte for timen (første plan i timen) og rummenes forudsigelse – til »i går« og »!«
             log = self.plan_log.setdefault(sid, {})
             if p.hours and p.hours[0]["ts"] == h0 and str(h0) not in log:
@@ -1676,7 +1677,7 @@ class VarmemodelCoordinator:
                                               for r in show if r.estimated
                                               for e in [next((x for x in self.estimates.values() if x["name"] == r.name), None)] if e},
                           "boost": boost_on, "boost_until": boost_note,
-                          "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE), "preload": self.setting(CONF_PRELOAD),
+                          "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
                           "preload_window": p.preload, "flow_boost": fb if fb["k"] or fb["rooms"] else None, "flow_raise": p.flow_raise or None, "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
             # Anbefalet styring: planens ønske nu omsat efter reglerne, der skåner varmepumpen
             cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None

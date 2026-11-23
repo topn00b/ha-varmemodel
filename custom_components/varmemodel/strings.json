@@ -209,7 +209,7 @@
         "name": "Max pause without floor heating"
       },
       "comfort_offset": {
-        "name": "Comfort above minimum"
+        "name": "Plan aims above the floor by"
       },
       "boost_delta": {
         "name": "\"I'm cold\" raises the target"
@@ -222,9 +222,6 @@
       },
       "cold_caution": {
         "name": "Caution when colder than calibrated"
-      },
-      "preload": {
-        "name": "Preload per 6 h of blocking"
       },
       "flow_margin": {
         "name": "Max flow above the learned flow"

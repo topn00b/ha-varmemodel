@@ -41,7 +41,7 @@ FIT_KEYS: dict[str, str | None] = {
 }
 
 # Øges når selve regnemetoden ændres: så regnes tallene forfra uden ±10 %-grænsen
-CALIB_VERSION = 4
+CALIB_VERSION = 5
 
 CALIBRATION_HOUR = 3
 CALIBRATION_MINUTE = 17
@@ -107,8 +107,6 @@ SETTINGS = (
     ("red_allowance", 0, 3, 0.5, "°C", 0.0),
     # Koldere end varmetabet er målt ved: + så mange % varmetab (og +0,2 °C margen i rummene); 0 = slået fra
     ("cold_caution", 0, 30, 1, "%", 10),
-    # Bevidst forvarmning før blokeringer: rummenes krav stiger så mange °C pr. 6 timer inde i blokeringen; 0 = slået fra
-    ("preload", 0, 1, 0.1, "°C", 0.3),
     # Lavt og jævnt: højst så mange °C over det fremløb, modellen har lært huset bruger ved timens udetemperatur
     ("flow_margin", -5, 5, 0.5, "°C", 0.0),
 )

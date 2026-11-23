@@ -209,7 +209,7 @@
         "name": "Maks. pause uden gulvvarme"
       },
       "comfort_offset": {
-        "name": "Komfort over min."
+        "name": "Planen sigter over gulvet med"
       },
       "boost_delta": {
         "name": "»Jeg fryser« hæver målet"
@@ -222,9 +222,6 @@
       },
       "cold_caution": {
         "name": "Forsigtighed ved kulde"
-      },
-      "preload": {
-        "name": "Forvarm pr. 6 timers blokering"
       },
       "flow_margin": {
         "name": "Maks. fremløb over det lærte"
