@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import VarmemodelConfigEntry
 import time as _time
 
-from .const import AIR_BOOST, AIR_SWITCH
+from .const import AIR_BOOST, AIR_SWITCH, CONF_FLOW_TARGET, FLOW_SWITCH
 from .sensor import SourceEntity
 
 
@@ -21,6 +21,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
     for sid, s in c.sources.items():
         if c.air_climate(s):
             async_add_entities([AirControlSwitch(c, s), AirBoostSwitch(c, s)], config_subentry_id=sid)
+        elif s.conf.get(CONF_FLOW_TARGET):
+            async_add_entities([FlowControlSwitch(c, s)], config_subentry_id=sid)
 
 
 class AirControlSwitch(SourceEntity, SwitchEntity):
@@ -60,3 +62,27 @@ class AirBoostSwitch(SourceEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.coordinator.async_set_air(self.src, AIR_BOOST, 0)
+
+
+class FlowControlSwitch(SourceEntity, SwitchEntity):
+    """Vandbåren: Varmemodel skriver fremløbsmålet (tænd/sluk og termostater styres stadig andetsteds)."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: Any, s: Any) -> None:
+        super().__init__(coordinator, s, FLOW_SWITCH)
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.flow_control(self.src)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        f = self.coordinator.air.get(f"flow:{self.src.sid}") or {}
+        return {"skrivninger_i_dag": f.get("writes", 0), "seneste": f.get("last")}
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self.coordinator.async_set_flow_control(self.src, True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self.coordinator.async_set_flow_control(self.src, False)

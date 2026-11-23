@@ -238,6 +238,9 @@
       },
       "air_boost": {
         "name": "Jeg fryser"
+      },
+      "flow_control": {
+        "name": "Varmemodel styrer fremløb"
       }
     },
     "time": {
@@ -274,13 +277,15 @@
             "compressor": "Kompressor kører",
             "defrost": "Afrimning",
             "dhw": "Varmt vand",
-            "electricity_backup": "Supplerende elmåler (fx skyen)"
+            "electricity_backup": "Supplerende elmåler (fx skyen)",
+            "flow_target": "Fremløbsmål (entiteten Varmemodel skriver fremløbsmålet til, fx varmepumpens climate i varme-tilstand)"
           },
           "data_description": {
             "heat_energy": "Uden den kan COP, varmetab og gulvets afgivelse ikke regnes ud.",
             "compressor": "Bruges til fulde driftstimer, starter og fordeling af varmen på rummene.",
             "dhw": "Timer med varmt vand holdes ude af rumopvarmningen.",
-            "electricity_backup": "Bruges i timer, hvor hovedmåleren ikke har data – fx før den blev sat op. Skaleres automatisk til hovedmålerens niveau ud fra de timer, hvor begge har data."
+            "electricity_backup": "Bruges i timer, hvor hovedmåleren ikke har data – fx før den blev sat op. Skaleres automatisk til hovedmålerens niveau ud fra de timer, hvor begge har data.",
+            "flow_target": "Fremløbsmål (entiteten Varmemodel skriver fremløbsmålet til, fx varmepumpens climate i varme-tilstand)"
           }
         },
         "air_air": {

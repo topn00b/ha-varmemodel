@@ -118,5 +118,8 @@ CONF_ASSIST_SPEED = "assist_fan_speed"  # valgfri: dens hastighed (0 = står)
 AIR_SELECTS = ("air_fan_day", "air_fan_night", "air_swing_v", "air_swing_h")
 AIR_TIMES = (("air_night_start", "22:00"), ("air_night_end", "07:00"))
 AIR_SWITCH = "air_control"
-AIR_BOOST = "air_boost"  # »jeg fryser« for luft-luft: øverste trin (powerful), også i blokerede timer, i højst »jeg fryser gælder højst« timer
+AIR_BOOST = "air_boost"
+CONF_FLOW_TARGET = "flow_target"  # vandbåren: entiteten Varmemodel skriver fremløbsmålet til (climate eller number)
+FLOW_SWITCH = "flow_control"  # vandbåren: Varmemodel styrer fremløbet (tænd/sluk og termostater styres stadig andetsteds)
+FLOW_MAX_WRITES = 20  # højst så mange skrivninger af fremløbsmålet pr. døgn  # »jeg fryser« for luft-luft: øverste trin (powerful), også i blokerede timer, i højst »jeg fryser gælder højst« timer
 UNCHANGED = "uændret"

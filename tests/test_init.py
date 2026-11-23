@@ -678,3 +678,37 @@ async def test_measure_is_tied_to_floor(ha: HomeAssistant) -> None:
     assert c.measure_source("Justering af luft-luft lameller").kind == "air_air"
     assert c.measure_source("Isolering af rør ved varmepumpen").kind == "hydronic"
     assert c.measure_source("Flyttet termostat i stue").kind == "hydronic"  # rummets egen kilde (ingen rum i testen → vandbåren)
+
+
+async def test_flow_control_writes_plan_flow_only_in_heat_mode(ha: HomeAssistant) -> None:
+    """P1: med »Varmemodel styrer fremløb« skrives planens fremløb til varmepumpen – kun i varme-tilstand og kun ved ændring."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    ha.states.async_set("climate.vp_flow", "auto", {"temperature": 17, "min_temp": 20, "max_temp": 50})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub({**HYD, "flow_target": "climate.vp_flow"}, "source")])
+    e.add_to_hass(ha)
+    calls: list = []
+    ha.services.async_register("climate", "set_temperature", lambda call: calls.append(call.data["temperature"]))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c._recent_sync = lambda s, a, b: ({}, {})
+    sw = next(s for s in ha.states.async_all("switch") if s.entity_id.endswith("flow"))
+    await ha.services.async_call("switch", "turn_on", {"entity_id": sw.entity_id}, blocking=True)
+    await ha.async_block_till_done()
+    assert not calls  # auto-tilstand: varmepumpen følger sin egen kurve – ingen skrivning
+    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 17, "min_temp": 20, "max_temp": 50})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert len(calls) == 1 and 20 <= calls[0] <= 50
+    ha.states.async_set("climate.vp_flow", "heat", {"temperature": calls[0], "min_temp": 20, "max_temp": 50})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert len(calls) == 1  # uændret mål: ingen ny skrivning

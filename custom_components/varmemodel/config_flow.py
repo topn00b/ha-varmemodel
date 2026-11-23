@@ -20,6 +20,7 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_ASSIST,
+    CONF_FLOW_TARGET,
     CONF_ASSIST_SPEED,
     CONF_CLIMATE,
     CONF_COMPRESSOR,
@@ -118,6 +119,7 @@ HYDRONIC_SCHEMA = vol.Schema({
     vol.Optional(CONF_COMPRESSOR): BINARY,
     vol.Optional(CONF_DEFROST): BINARY,
     vol.Optional(CONF_DHW): BINARY,
+    vol.Optional(CONF_FLOW_TARGET): selector.EntitySelector(selector.EntitySelectorConfig(domain=["climate", "number", "input_number"])),
 })
 
 AIR_AIR_SCHEMA = vol.Schema({

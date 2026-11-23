@@ -67,6 +67,9 @@ from .const import (
     CONF_ASSIST,
     CONF_ASSIST_SPEED,
     CONF_CLIMATE,
+    CONF_FLOW_TARGET,
+    FLOW_MAX_WRITES,
+    FLOW_SWITCH,
     UNCHANGED,
     BACKFILL_DAYS,
     CALIB_VERSION,
@@ -1362,6 +1365,55 @@ class VarmemodelCoordinator:
                     ratios.append(on / off)
         return round((sum(ratios) / len(ratios) - 1) * 100) if ratios else None
 
+    async def _flow_apply(self, s: SourceState, hours: list[dict[str, Any]], blocked: bool) -> None:
+        """Skriv planens fremløbsmål til varmepumpen (P1: Varmemodel styrer kun fremløbet; tænd/sluk og termostater
+        styres stadig andetsteds). Kun når varmepumpen står i varme-tilstand, aldrig i blokerede timer, kun ved en
+        ændring på mindst 1 °C og højst FLOW_MAX_WRITES gange pr. døgn. Uden planlagt varme nu bruges næste planlagte
+        fremløb, så en varmepumpe, der startes af anden styring, kører med planens lave fremløb."""
+        eid = s.conf.get(CONF_FLOW_TARGET)
+        st = self.hass.states.get(eid) if eid else None
+        if st is None or st.state in ("unavailable", "unknown") or blocked:
+            return
+        dom = eid.split(".", 1)[0]
+        if dom == "climate" and st.state != "heat":
+            return  # fremløbsmålet virker kun i varme-tilstand (auto følger varmepumpens egen kurve)
+        want = next((x["flow"] for x in hours if x.get("flow") is not None and not x.get("blocked")), None)
+        cmd = self.commands.get(s.sid) or {}
+        if cmd.get("flow") is not None:
+            want = cmd["flow"]
+        if want is None:
+            return
+        a = st.attributes
+        lo, hi = _num(a.get("min_temp", a.get("min"))), _num(a.get("max_temp", a.get("max")))
+        want = float(min(max(want, lo if lo is not None else 20.0), hi if hi is not None else 45.0))
+        cur = _num(a.get("temperature")) if dom == "climate" else _num(st.state)
+        f = self.air.setdefault(f"flow:{s.sid}", {})
+        day = dt_util.now().date().isoformat()
+        if f.get("day") != day:
+            f["day"], f["writes"] = day, 0
+        if cur is not None and abs(cur - want) < 1.0:
+            return
+        if f["writes"] >= FLOW_MAX_WRITES:
+            _LOGGER.warning("%s: over %s skrivninger af fremløbet i dag – Varmemodel holder pause", s.name, FLOW_MAX_WRITES)
+            return
+        try:
+            if dom == "climate":
+                await self.hass.services.async_call("climate", "set_temperature", {"entity_id": eid, "temperature": want}, blocking=True)
+            else:
+                await self.hass.services.async_call(dom, "set_value", {"entity_id": eid, "value": want}, blocking=True)
+            f["writes"] += 1
+            f["last"] = {"t": time.time(), "flow": want}
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("%s: kunne ikke skrive fremløbet", s.name)
+
+    def flow_control(self, s: SourceState) -> bool:
+        return bool(self.settings.get(f"{s.sid}.{FLOW_SWITCH}"))
+
+    async def async_set_flow_control(self, s: SourceState, on: bool) -> None:
+        self.settings[f"{s.sid}.{FLOW_SWITCH}"] = bool(on)
+        await self._save()
+        await self.async_replan()
+
     async def _air_apply(self, s: SourceState, clim: str, d: dict[str, Any]) -> None:
         """Skriv anbefalingen til klimaentiteten – kun det, der er forskelligt, og højst 60 skrivninger pr. døgn."""
         st = self.hass.states.get(clim)
@@ -1724,6 +1776,8 @@ class VarmemodelCoordinator:
                        bool(cur and cur["heat_kw"] > 0), (round(cur["flow"]) if cur and cur.get("flow") is not None else None),
                        bool(cur and cur["blocked"]))
             self.commands[sid] = cmd.dump()
+            if s.conf.get(CONF_FLOW_TARGET) and self.settings.get(f"{sid}.{FLOW_SWITCH}"):
+                await self._flow_apply(s, p.hours, bool(cur and cur["blocked"]))
         self.plans = plans
         self._flag_missing(now, out_flag)
         if len(hours) < 6:

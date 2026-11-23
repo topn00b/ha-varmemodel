@@ -118,6 +118,8 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 
 **Opvarmning før blokeringer:** rummodellerne forudser selv, hvor meget hvert rum falder i en blokering, og planen lægger varme før, så rummene holder gulv + komfort + deres egen usikkerhed hele vejen igennem. Der er ingen fast forvarmning (fjernet i 0.10.0). Begrundelsen og kortet viser opvarmningen før rød.
 
+**Varmemodel styrer fremløbet (vandbåren, 0.12.0):** vælg *Fremløbsmål* (fx varmepumpens climate-entitet) i varmekildens opsætning. Så får kilden kontakten *Varmemodel styrer fremløb*. Når den er til, skriver Varmemodel planens fremløbsmål – kun når varmepumpen står i varme-tilstand, aldrig i blokerede timer, kun ved en ændring på mindst 1 °C og højst 20 gange pr. døgn. Tænd/sluk og termostater styres stadig af din egen automation (trin P1 i en gradvis overtagelse). Uden planlagt varme lige nu bruges planens næste fremløb, så en varmepumpe, der startes af anden styring, kører lavt.
+
 **Energitiltag pr. etage (0.11.1):** skriv varmekildens navn, et rums navn eller »1. sal« i kalender-begivenhedens titel eller beskrivelse, så måles tiltaget på den etage. Vandbåren kilde: etagens varmetab (W/K) fra den målte varme. Luft-luft: etagens el pr. grad (W el/K) – varmen måles ikke, men ændringen i % viser, om tiltaget virker. Uden etage måles på den vandbårne kilde.
 
 **Økonomi-valg (0.10.2):** *Må gå under gulvet i røde timer med* gælder nu både vandbårne og luft-luft-kilder. Sæt den fx til 0,5 °C, så accepterer du, at rummene bliver op til så meget koldere end gulvet i blokerede timer – til gengæld købes der mindre (dyr) varme før, og luft-luft-stigen forvarmer tilsvarende mindre.
