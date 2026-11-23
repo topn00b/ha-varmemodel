@@ -68,7 +68,9 @@ class Plan:
     cost_kr: float = 0.0
     reason: str = ""
     warnings: list[str] = field(default_factory=list)
-    preload: dict[str, Any] | None = None  # første forvarmning: fra/til, blokeringen den dækker og mængden
+    preload: dict[str, Any] | None = None
+    deficit: float = 0.0  # største forudsagte manko under planens grænse (°C, 0 = alle rum holder)
+    flow_raise: float = 0.0  # så mange °C er fremløbsgrænsen hævet, fordi rummene ellers forudsiges under grænsen  # første forvarmning: fra/til, blokeringen den dækker og mængden
 
 
 STEP = 0.25  # kWh pr. portion
@@ -108,12 +110,15 @@ def _preload_window(hours: list[PlanHour], q: list[float], label: Callable[[int]
 
 
 FLOW_BOOST_MAX = 5  # fremløb for lavt: højst så mange °C over grænsen
-FLOW_LOW_OPEN_S = 7200  # termostaten skal have kaldt på varme så længe, før fremløbet regnes for lavt
+# Gulvvarme er langsom (op mod 5–6 timer, før en ændring kan mærkes): reserven venter 6 timer og ændrer højst hver 6. time
+FLOW_LOW_OPEN_S = 6 * 3600
+FLOW_BOOST_STEP_S = 6 * 3600
 
 
 def flow_boost_step(prev: dict[str, Any] | None, now: float, rooms_low: list[str]) -> dict[str, Any]:
-    """Fremløb for lavt: hæv fremløbsgrænsen 1 °C pr. time, så længe et rum er under sit gulv, mens
-    termostaten har kaldt på varme i mindst 2 timer; sænk den igen 1 °C pr. time, når ingen rum er det.
+    """Reserve, når modellen tager fejl: hæv fremløbsgrænsen 1 °C, når et rum er under sit gulv og under det,
+    modellen ventede, mens termostaten har kaldt på varme i mindst 6 timer. Gulvet er langsomt, så der går
+    mindst 6 timer mellem hvert trin – op og ned.
 
     ``prev``/resultat: {"k": °C over grænsen, "t": sidste ændring, "rooms": rummene der kalder}.
     """
@@ -121,9 +126,9 @@ def flow_boost_step(prev: dict[str, Any] | None, now: float, rooms_low: list[str
     if rooms_low:
         if k == 0:
             k, t = 1, now
-        elif now - t >= 3600 and k < FLOW_BOOST_MAX:
+        elif now - t >= FLOW_BOOST_STEP_S and k < FLOW_BOOST_MAX:
             k, t = k + 1, now
-    elif k > 0 and now - t >= 3600:
+    elif k > 0 and now - t >= FLOW_BOOST_STEP_S:
         k, t = k - 1, now
     return {"k": k, "t": t, "rooms": sorted(rooms_low)}
 
@@ -176,6 +181,29 @@ def estimate_room(r: PlanRoom, t0: float, ts0: float, end: float, q5: dict[int, 
 
 
 def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
+              max_pause: int = 0, past_q: list[float] | None = None,
+              label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
+              red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None) -> Plan:
+    """Planen. Forudsiger modellen, at et rum kommer under planens grænse, fordi fremløbsgrænsen holder varmen
+    nede, hæves grænsen 1 °C ad gangen (højst ``FLOW_BOOST_MAX``) til rummene holder – i god tid, da gulvet er langsomt."""
+    args = (hours, model, rooms, target, max_pause, past_q, label, boost, boost_hours, red_allowance, preload)
+    base = _plan_once(*args, flow_margin)
+    if flow_margin is None or base.deficit <= 0.05:
+        return base
+    best = base
+    for k in range(1, FLOW_BOOST_MAX + 1):
+        p = _plan_once(*args, flow_margin + k)
+        # Kun hvis det hjælper mærkbart: mindst 0,1 °C mindre manko pr. grad hævet (ellers kan fremløbet ikke rette det)
+        if p.deficit < best.deficit and base.deficit - p.deficit >= 0.1 * k:
+            best, best.flow_raise = p, float(k)
+        if p.deficit <= 0.05:
+            break
+    if best.flow_raise:
+        best.reason += f" – fremløbsgrænsen hævet {best.flow_raise:.0f} °C, så rummene forudsiges at holde"
+    return best
+
+
+def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
               red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None) -> Plan:
@@ -302,6 +330,7 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
         k = min(range(n), key=lambda j: s[j] - limit(r, j))
         if s[k] < limit(r, k):
             plan.warnings.append(f"{r.name}: {s[k]:.1f} °C {lab(hours[k].ts)} er under planens grænse ({limit(r, k):.1f})")
+            plan.deficit = max(plan.deficit, round(limit(r, k) - s[k], 2))
     pq, plan.preload, pre_txt = _preload_window(hours, q, lab)
     for i, h in enumerate(hours):
         p = round(q[i], 2)

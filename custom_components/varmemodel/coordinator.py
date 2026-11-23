@@ -1304,9 +1304,11 @@ class VarmemodelCoordinator:
                 if r["in_plan"] and t_min is not None:
                     rooms.append(pr)
                     mins.append(t_min)
-                    # Fremløb for lavt: termostaten har kaldt på varme i 2 timer, og rummet er stadig under gulvet
+                    # Reserve: termostaten har kaldt på varme i 6 timer, og rummet er under gulvet og under det, modellen ventede
                     since = self._valve_open_since(r, now)
-                    if since is not None and now - since >= FLOW_LOW_OPEN_S and not pr.held and pr.t_now < t_min:
+                    chk = self.rooms_check.get(pr.name) or {}
+                    if (since is not None and now - since >= FLOW_LOW_OPEN_S and not pr.held and pr.t_now < t_min
+                            and chk.get("status") == "under"):
                         low.append(pr.name)
             fb = self.flow_boost[sid] = flow_boost_step(self.flow_boost.get(sid), now, low)
             # Koldere end det, modellen er målt ved: forsigtig plan (+ indstillingens % varmetab, +0,2 °C margen i rummene)
@@ -1400,7 +1402,7 @@ class VarmemodelCoordinator:
                                               for e in [next((x for x in self.estimates.values() if x["name"] == r.name), None)] if e},
                           "boost": boost_on, "boost_until": boost_note,
                           "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE), "preload": self.setting(CONF_PRELOAD),
-                          "preload_window": p.preload, "flow_boost": fb if fb["k"] or fb["rooms"] else None, "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
+                          "preload_window": p.preload, "flow_boost": fb if fb["k"] or fb["rooms"] else None, "flow_raise": p.flow_raise or None, "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
             # Anbefalet styring: planens ønske nu omsat efter reglerne, der skåner varmepumpen
             cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
             cmd = step(Command.load(self.commands.get(sid)), now, dt_util.now().date().isoformat(),

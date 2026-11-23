@@ -265,28 +265,35 @@ def test_low_and_even_caps_flow_at_learned_flow() -> None:
 
 
 def test_flow_boost_steps_up_and_down() -> None:
-    """Fremløb for lavt: +1 °C pr. time mens et rum kalder og er under gulvet, højst 5; derefter −1 °C pr. time."""
-    from custom_components.varmemodel.planner import FLOW_BOOST_MAX, flow_boost_step
+    """Reserve: +1 °C, derefter højst ét trin pr. 6 timer (gulvet er langsomt), højst 5; ned igen 1 °C pr. 6 timer."""
+    from custom_components.varmemodel.planner import FLOW_BOOST_MAX, FLOW_BOOST_STEP_S, flow_boost_step
 
     b = flow_boost_step(None, 0, ["Rum A"])
     assert b["k"] == 1 and b["rooms"] == ["Rum A"]
-    b = flow_boost_step(b, 1800, ["Rum A"])
-    assert b["k"] == 1  # højst én gang i timen
+    b = flow_boost_step(b, 5 * 3600, ["Rum A"])
+    assert b["k"] == 1  # ikke før der er gået 6 timer
     for i in range(1, 10):
-        b = flow_boost_step(b, i * 3600, ["Rum A"])
+        b = flow_boost_step(b, i * FLOW_BOOST_STEP_S, ["Rum A"])
     assert b["k"] == FLOW_BOOST_MAX
-    b = flow_boost_step(b, 10 * 3600, [])
+    t = 10 * FLOW_BOOST_STEP_S
+    b = flow_boost_step(b, t, [])
     assert b["k"] == FLOW_BOOST_MAX - 1 and not b["rooms"]
-    b = flow_boost_step(b, 10 * 3600 + 600, [])
+    b = flow_boost_step(b, t + 3 * 3600, [])
     assert b["k"] == FLOW_BOOST_MAX - 1
 
 
-def test_flow_boost_lifts_flow_limit() -> None:
-    """Et hævet fremløbsloft giver planen lov til højere fremløb, når rummene mangler varme."""
-    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, emission_kw_k=0.283, flow_c0=30.0, flow_slope=-0.6)
-    hs = hours(12, t_out=lambda i: 1.0)
-    cold = PlanRoom(name="Rum A", t_now=19.0, t_min=20.0, heat_now=0.08, heat_delayed=0.05, cool_per_hk=0.006, margin=0.2)
-    p0 = make_plan(hs, m, [cold], 20.0, flow_margin=0.0)
-    p3 = make_plan(hs, m, [cold], 20.0, flow_margin=3.0)
-    assert max(x["flow"] or 0 for x in p0.hours) <= 30.0 - 0.6 + 0.25
-    assert max(x["flow"] or 0 for x in p3.hours) > max(x["flow"] or 0 for x in p0.hours)
+def test_plan_raises_flow_limit_when_forecast_says_rooms_drop() -> None:
+    """Forudsigende: kommer et rum under grænsen, fordi fremløbsgrænsen holder varmen nede, hæves grænsen i planen."""
+    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, emission_kw_k=0.283, flow_c0=26.0, flow_slope=-0.6)
+    # 10 timers blokering ved −3 °C: med fremløbet på den lærte linje forudsiges rummet under grænsen sidst i blokeringen
+    hs = hours(20, t_out=lambda i: -3.0, blocked=lambda i: 6 <= i <= 15)
+    room = PlanRoom(name="Rum A", t_now=20.3, t_min=20.0, heat_now=0.08, heat_delayed=0.05, cool_per_hk=0.006, margin=0.2)
+    p = make_plan(hs, m, [room], 20.0, flow_margin=0.0)
+    assert p.flow_raise == 2 and p.deficit <= 0.05 and "fremløbsgrænsen hævet 2 °C" in p.reason
+    assert max(x["flow"] or 0 for x in p.hours) > 26.0 + 0.6 * 3 + 0.25
+    # Kan en hævning ikke rette det (rummet er allerede under gulvet nu), hæves der ikke forgæves
+    now_cold = PlanRoom(name="Rum A", t_now=19.0, t_min=20.0, heat_now=0.03, heat_delayed=0.05, cool_per_hk=0.006, margin=0.2)
+    assert make_plan(hours(12, t_out=lambda i: 1.0), m, [now_cold], 20.0, flow_margin=0.0).flow_raise == 0
+    # Holder rummene uden: ingen hævning
+    ok = make_plan(hours(12, t_out=lambda i: 1.0), m, [], 20.0, flow_margin=0.0)
+    assert ok.flow_raise == 0
