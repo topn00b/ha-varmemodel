@@ -1398,14 +1398,30 @@ class VarmemodelCoordinator:
                 a["soft_cap_w"] = lw[mid] if mid < len(lw) else None  # planen regner med midterste trin pr. time
                 up_every = AIR_SOFT_UP_EVERY
                 rising = self._air_rise.get(s.sid) or {}
+                # Højere end det afprøvede: gå ned til midten (eller det trin, der er vist nødvendigt) og prøv det i 30 min.
+                tested = a.get("soft_tested")
+                ceiling = max(mid, tested) if tested is not None else mid
+                if prev is not None and prev > ceiling:
+                    prev = ceiling
+                    a["changed"] = now
+                    a["soft_note"] = f"rolig opstart: prøver trin {ceiling} i 30 min., før der skrues op"
             i, changed, down_since, reason = choose_step(prev, n_steps, margins, down_ok,
                                                          now, float(a.get("changed", 0.0)), a.get("down_since"), start, tgt,
                                                          **({"up_every": up_every, "rising": rising, "min_rise": AIR_SOFT_MIN_RISE}
                                                             if up_every else {}))
+            if up_every:
+                if prev is not None and i is not None and i > prev:
+                    a["soft_tested"] = i  # trinnet under var ikke nok: dette trin er vist nødvendigt
+                elif margins and min(margins.values()) >= 0:
+                    a["soft_tested"] = None  # rummene er nået op: næste gang prøves fra midten igen
+                if note := a.pop("soft_note", None):
+                    reason = f"{note} – {reason}"
         else:
             i, changed, down_since = a.get("step"), float(a.get("changed", 0.0)), None
             reason = "blokeret – slukket" if blocked else "planen varmer ikke nu"
         a.update(on=bool((on and not blocked) or boost), step=i, changed=changed, down_since=down_since)
+        if not a["on"]:
+            a["soft_tested"] = None  # ny start prøver fra midten igen
         if a["on"] and not boost and i is not None and margins and min(margins.values()) >= 0 and not pre and b and now - changed >= LEARN_HOLD:
             starts[b] = label(ladder[min(i, len(ladder) - 1)])
         # Det trin, der faktisk kører nu (matches på blæser og setpunkt), og forbruget pr. trin ud fra elmåleren

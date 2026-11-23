@@ -869,3 +869,13 @@ async def test_low_flow_search_rules(ha: HomeAssistant) -> None:
     assert await c._low_flow(s, hs, 27.0) == 27.0  # aldrig over planens fremløb
     v = c.flow_search(s)
     assert v["mål"] == 28.0 and v["status"] == "sænker" and v["log"]
+
+
+def test_calm_ladder_drops_untested_high_step() -> None:
+    """Rolig opstart: et trin over det afprøvede (fx 11 fra før) sættes ned til midten og prøves 30 min."""
+    import inspect
+
+    from custom_components.varmemodel import coordinator as co
+
+    src = inspect.getsource(co.VarmemodelCoordinator._air_step)
+    assert "prøver trin" in src and "soft_tested" in src
