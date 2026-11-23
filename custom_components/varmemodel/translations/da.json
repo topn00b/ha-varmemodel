@@ -202,6 +202,14 @@
       },
       "air_swing_h": {
         "name": "Lameller side"
+      },
+      "soft_start": {
+        "name": "Blød start",
+        "state": {
+          "fra": "fra",
+          "til": "til",
+          "test": "test (hver anden start)"
+        }
       }
     },
     "number": {

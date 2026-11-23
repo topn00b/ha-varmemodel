@@ -202,6 +202,14 @@
       },
       "air_swing_h": {
         "name": "Louvres sideways"
+      },
+      "soft_start": {
+        "name": "Soft start",
+        "state": {
+          "fra": "off",
+          "til": "on",
+          "test": "test (every other start)"
+        }
       }
     },
     "number": {

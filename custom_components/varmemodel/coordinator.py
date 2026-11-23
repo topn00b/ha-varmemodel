@@ -73,6 +73,10 @@ from .const import (
     CONF_ONOFF_TARGET,
     HYDRO_MAX_FLIPS,
     HYDRO_SWITCH,
+    SOFT_EVAL_S,
+    SOFT_SPAN_K,
+    SOFT_START,
+    SOFT_STEP_K,
     FLOW_MAX_WRITES,
     FLOW_SWITCH,
     UNCHANGED,
@@ -1419,6 +1423,18 @@ class VarmemodelCoordinator:
             want = cmd["flow"]
         if want is None:
             return
+        # Blød start: lige efter tænding løftes målet gradvist (retur + 2 °C, højst SOFT_SPAN_K under planen, +SOFT_STEP_K
+        # pr. kvarter), så kompressoren ikke går til fuld effekt mod et koldt gulv (bedre COP, færre afrimninger i kulde)
+        hs = self.air.setdefault(f"hydro:{s.sid}", {})
+        if hs.get("soft") and hs.get("start_t"):
+            if hs.get("ramp0") is None:
+                ret = self._state_num(s.eid(CONF_RETURN))
+                hs["ramp0"] = max((ret + 2.0) if ret is not None else want - SOFT_SPAN_K, want - SOFT_SPAN_K)
+            ramp = hs["ramp0"] + SOFT_STEP_K * int((time.time() - hs["start_t"]) // 900)
+            if ramp < want:
+                want = ramp
+            else:
+                hs["soft"] = False  # blød start færdig: planens fremløb
         a = st.attributes
         lo, hi = _num(a.get("min_temp", a.get("min"))), _num(a.get("max_temp", a.get("max")))
         # Entitetens trin (fx hele grader – nogle varmepumper runder ellers et halvt fremløbsmål ned); uden trin: hele grader
@@ -1468,6 +1484,15 @@ class VarmemodelCoordinator:
                                                 blocking=True)
             h["flips"] += 1
             h["last"] = {"t": time.time(), "on": want_on}
+            if want_on:
+                # Ny start: blød eller almindelig (test: hver anden) – vurderes efter SOFT_EVAL_S
+                mode = self.settings.get(f"{s.sid}.{SOFT_START}", "test")
+                soft = mode == "til" or (mode == "test" and not h.get("last_soft", False))
+                h.update(start_t=time.time(), soft=soft, ramp0=None, last_soft=soft if mode == "test" else h.get("last_soft", False))
+                h.setdefault("starts", []).append({"t": round(time.time()), "soft": soft, "t_out": self._state_num(self._id(CONF_OUTDOOR))})
+                h["starts"] = h["starts"][-80:]
+            else:
+                h["start_t"], h["soft"] = None, False
         except Exception:  # noqa: BLE001
             _LOGGER.exception("%s: kunne ikke %s varmepumpen", s.name, "tænde" if want_on else "slukke")
             return
@@ -1476,6 +1501,36 @@ class VarmemodelCoordinator:
             async def _later(_now: Any) -> None:
                 await self._flow_apply(s, hours, False)
             async_call_later(self.hass, 120, _later)
+
+    def _soft_eval_sync(self, s: SourceState, starts: list[dict[str, Any]]) -> None:
+        """Vurdér færdige starte: varme, el og afrimninger de første 90 min. (5-minutters statistik og afrimningens historik)."""
+        heat, el, df = s.eid(CONF_HEAT), s.eid(CONF_ELECTRICITY), s.eid(CONF_DEFROST)
+        for x in starts:
+            if "cop" in x or time.time() - x["t"] < SOFT_EVAL_S + 600 or not heat or not el:
+                continue
+            a, b = dt_util.utc_from_timestamp(x["t"]), dt_util.utc_from_timestamp(x["t"] + SOFT_EVAL_S)
+            st = statistics_during_period(self.hass, a, b, {heat, el}, "5minute", {"energy": "kWh"}, {"change"})
+            q = sum(v for r in st.get(heat, []) if (v := _num(r.get("change"))) is not None)
+            e = sum(v for r in st.get(el, []) if (v := _num(r.get("change"))) is not None)
+            n = 0
+            if df:
+                res = history.get_significant_states(self.hass, a, b, [df], include_start_time_state=False, significant_changes_only=False)
+                n = sum(1 for z in res.get(df, []) if z.state == "on")
+            x.update(q=round(q, 2), e=round(e, 3), cop=round(q / e, 2) if e > 0.05 else None, afrim=n)
+
+    def soft_summary(self, s: SourceState) -> dict[str, Any]:
+        """Blød start mod almindelig start (ude under 6 °C): COP og afrimninger pr. start de første 90 min."""
+        rows = [x for x in (self.air.get(f"hydro:{s.sid}") or {}).get("starts", []) if x.get("cop") is not None
+                and (x.get("t_out") is None or x["t_out"] < 6)]
+        out: dict[str, Any] = {}
+        for name, soft in (("blød", True), ("almindelig", False)):
+            r = [x for x in rows if x["soft"] == soft]
+            q, e = sum(x["q"] for x in r), sum(x["e"] for x in r)
+            out[name] = {"starter": len(r), "cop": round(q / e, 2) if e > 0 else None,
+                         "afrimninger_pr_start": round(sum(x.get("afrim", 0) for x in r) / len(r), 2) if r else None}
+        if out["blød"]["cop"] and out["almindelig"]["cop"]:
+            out["cop_forskel_pct"] = round((out["blød"]["cop"] / out["almindelig"]["cop"] - 1) * 100, 1)
+        return out
 
     def hydro_control(self, s: SourceState) -> bool:
         return bool(self.settings.get(f"{s.sid}.{HYDRO_SWITCH}"))
@@ -1907,6 +1962,12 @@ class VarmemodelCoordinator:
                        bool(cur and cur["blocked"]))
             self.commands[sid] = cmd.dump()
             full = bool(s.conf.get(CONF_ONOFF_TARGET) and self.settings.get(f"{sid}.{HYDRO_SWITCH}"))
+            hst = self.air.get(f"hydro:{sid}") or {}
+            if any("cop" not in x and now - x["t"] > SOFT_EVAL_S + 600 for x in hst.get("starts", [])):
+                try:
+                    await get_instance(self.hass).async_add_executor_job(self._soft_eval_sync, s, hst["starts"])
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug("Vurdering af blød start fejlede", exc_info=True)
             if full:
                 await self._hydro_apply(s, cmd.on, bool(cur and cur["blocked"]), p.hours)
             if s.conf.get(CONF_FLOW_TARGET) and (full or self.settings.get(f"{sid}.{FLOW_SWITCH}")):

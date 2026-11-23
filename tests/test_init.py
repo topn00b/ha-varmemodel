@@ -742,3 +742,36 @@ async def test_hydro_control_switches_heat_pump(ha: HomeAssistant) -> None:
         assert calls == ["heat"]
     else:
         assert calls == []
+
+
+async def test_soft_start_ramps_flow_target(ha: HomeAssistant) -> None:
+    """Blød start: lige efter tænding skrives retur + 2 °C (højst 6 °C under planen), derefter +2 °C pr. kvarter."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "-2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.retur", "22.0", {"state_class": "measurement"})
+    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 33, "min_temp": 20, "max_temp": 45})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub({**HYD, "flow_target": "climate.vp_flow", "return_temp": "sensor.retur"}, "source")])
+    e.add_to_hass(ha)
+    calls: list = []
+    ha.services.async_register("climate", "set_temperature", lambda call: calls.append(call.data["temperature"]))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    s = next(iter(c.sources.values()))
+    hs = c.air.setdefault(f"hydro:{s.sid}", {})
+    hs.update(soft=True, start_t=time.time(), ramp0=None)
+    hours = [{"flow": 34.0, "blocked": False}]
+    c.commands[s.sid] = {"flow": 34}
+    await c._flow_apply(s, hours, False)
+    assert calls == [28.0]  # max(retur 22 + 2, 34 − 6) = 28
+    hs["start_t"] = time.time() - 1800  # to kvarterer inde
+    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 28, "min_temp": 20, "max_temp": 45})
+    await c._flow_apply(s, hours, False)
+    assert calls[-1] == 32.0
