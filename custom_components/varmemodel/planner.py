@@ -70,6 +70,7 @@ class Plan:
     warnings: list[str] = field(default_factory=list)
     preload: dict[str, Any] | None = None
     deficit: float = 0.0  # største forudsagte manko under planens grænse (°C, 0 = alle rum holder)
+    trimmed_kwh: float = 0.0  # varme skåret fra husets behov, fordi rummene forudsiges at holde uden
     flow_raise: float = 0.0  # så mange °C er fremløbsgrænsen hævet, fordi rummene ellers forudsiges under grænsen  # første forvarmning: fra/til, blokeringen den dækker og mængden
 
 
@@ -305,6 +306,32 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
         else:
             skip.add((r.name, i_bad))
 
+    # 3b) skær overskud væk: husets behov er kun et udgangspunkt. Holder rummene sig over kravet uden en portion
+    #     (fordi de er varme nu, eller gulvet har varme gemt), fjernes den – dyreste først. Så sænkes effekten og
+    #     dermed fremløbet, når modellen forudser, at rummene klarer sig med mindre. Uden rummodeller: intet skæres.
+    if rooms:
+        def need_ok(sim2: dict[str, list[float]], base: dict[str, list[float]]) -> bool:
+            return all(t >= limit(r, i) + r.margin + pre[i] - 1e-6 or t >= b - 1e-6
+                       for r in rooms for i, (t, b) in enumerate(zip(sim2[r.name], base[r.name])))
+
+        sim = simulate_rooms(rooms, hours, q, past_q)
+        for _ in range(400):
+            # Dyreste sidste portion først (pris × ekstra el for den, inkl. lavere COP ved højere fremløb)
+            cands = sorted((i for i in free if q[i] > 0), key=lambda i: -hours[i].price * (
+                _el(model, hours[i].t_out, q[i], target) - _el(model, hours[i].t_out, max(q[i] - STEP, 0.0), target)))
+            cut = False
+            for i in cands:
+                old = q[i]
+                q[i] = old - STEP if old - STEP >= model.p_min - 1e-9 else 0.0
+                sim2 = simulate_rooms(rooms, hours, q, past_q)
+                if need_ok(sim2, sim):
+                    sim, cut = sim2, True
+                    plan.trimmed_kwh = round(plan.trimmed_kwh + old - q[i], 2)
+                    break
+                q[i] = old
+            if not cut:
+                break
+
     # 4) for lange pauser brydes med pausens billigste frie time
     if max_pause > 0:
         for _ in range(50):
@@ -350,6 +377,8 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
     notes: list[str] = []
     if pre_txt:
         notes.append(pre_txt)
+    if plan.trimmed_kwh >= 0.5:
+        notes.append(f"{plan.trimmed_kwh:.1f} kWh varme mindre end husets behov – rummene forudsiges at holde uden")
     plan.reason = (f"{on} timer, {plan.heat_kwh} kWh varme for ca. {plan.cost_kr} kr" + "".join(" – " + x for x in notes)
                    + (" – " + "; ".join(plan.warnings) if plan.warnings else ""))
     return plan

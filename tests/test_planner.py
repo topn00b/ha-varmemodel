@@ -297,3 +297,17 @@ def test_plan_raises_flow_limit_when_forecast_says_rooms_drop() -> None:
     # Holder rummene uden: ingen hævning
     ok = make_plan(hours(12, t_out=lambda i: 1.0), m, [], 20.0, flow_margin=0.0)
     assert ok.flow_raise == 0
+
+
+def test_trims_heat_when_rooms_are_warm() -> None:
+    """Husets behov er kun udgangspunktet: er rummene varme nok, skæres varmen ned (lavere effekt og fremløb)."""
+    hs = hours(12, t_out=lambda i: 2.0)
+    warm = PlanRoom(name="Rum A", t_now=21.5, t_min=19.5, heat_now=0.08, heat_delayed=0.05, cool_per_hk=0.006, margin=0.3)
+    cold = PlanRoom(name="Rum A", t_now=19.8, t_min=19.5, heat_now=0.08, heat_delayed=0.05, cool_per_hk=0.006, margin=0.3)
+    pw = make_plan(hs, M, [warm], 20.0)
+    pc = make_plan(hs, M, [cold], 20.0)
+    assert pw.trimmed_kwh > 0 and pw.heat_kwh < pc.heat_kwh and "mindre end husets behov" in pw.reason
+    from custom_components.varmemodel.planner import simulate_rooms
+    sim = simulate_rooms([warm], hs, [x["heat_kw"] for x in pw.hours])["Rum A"]
+    assert min(sim) >= 19.5 + 0.3 - 0.01
+    assert make_plan(hs, M, [], 20.0).trimmed_kwh == 0  # uden rummodeller skæres intet

@@ -110,6 +110,8 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 
 **Lavt og jævnt (standard):** fremløbet må højst ligge *Maks. fremløb over det lærte* over det fremløb, modellen har lært huset bruger ved timens udetemperatur (standard 0 °C). Det begrænser effekten pr. time, så varmen spredes over flere timer ved lavere effekt. Det giver lavere fremløb, højere COP, færre afrimninger og færre start/stop. Sæt den højere, hvis planen må koncentrere varmen mere i de billigste timer.
 
+**Kun den varme rummene behøver:** husets behov (varmetab × (mål − ude)) er kun udgangspunktet. Forudsiger rummodellerne, at rummene holder sig over kravet med mindre – fordi de er varme nu, eller gulvet har varme gemt – skæres overskuddet væk, dyreste portion først. Det giver lavere effekt og dermed lavere fremløb. Begrundelsen siger, hvor meget der er skåret. Uden rummodeller skæres intet.
+
 **Fremløb for lavt – forudsigende:** gulvvarme er langsom (5–6 timer, før en ændring kan mærkes), så planen venter ikke på, at rummene bliver kolde. Forudsiger rummodellerne, at et rum kommer under planens grænse, fordi fremløbsgrænsen holder varmen nede (typisk sidst i en lang blokering), prøver planen grænsen +1, +2 … +5 °C og bruger den mindste, der får rummene til at holde – men kun hvis det hjælper mindst 0,1 °C pr. grad. Det står i begrundelsen og i attributten `flow_raise`.
 
 **Fremløb for lavt – reserve:** tager modellen fejl, så et rum er under sit gulv *og* under det, modellen ventede, mens termostaten eller telestaten har kaldt på varme uafbrudt i 6 timer, hæves fremløbsgrænsen 1 °C. Der går mindst 6 timer mellem hvert trin (højst +5 °C), og den sænkes igen 1 °C pr. 6 timer. Vises som advarsel på kortet og i attributten `flow_boost`.
