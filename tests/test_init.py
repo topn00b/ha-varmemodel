@@ -665,3 +665,16 @@ async def test_room_model_from_older_method_is_replaced(ha: HomeAssistant, entry
         c._rooms_fit = orig
     r = c.rooms["sensor.rum_1"]
     assert r["value"] == 0.30 and r["guard"].startswith("ny model") and r["extra"]["sources"]["A"]["now"] == 0.05
+
+
+async def test_measure_is_tied_to_floor(ha: HomeAssistant) -> None:
+    """Et energitiltag måles på den etage, det gælder: kildens navn eller »1. sal« i teksten, ellers den vandbårne."""
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data=HOUSE, subentries_data=[_sub(HYD, "source"), _sub(AIR, "source")])
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    assert c.measure_source("Ny tætningsliste – 1. sal").kind == "air_air"
+    assert c.measure_source("Justering af luft-luft lameller").kind == "air_air"
+    assert c.measure_source("Isolering af rør ved varmepumpen").kind == "hydronic"
+    assert c.measure_source("Flyttet termostat i stue").kind == "hydronic"  # rummets egen kilde (ingen rum i testen → vandbåren)

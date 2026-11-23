@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.11.0';
+  const VERSION = '0.11.1';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -258,12 +258,17 @@
     ['Støj: maks. blæser', ['air_fan_day', 'air_fan_night', 'air_night_start', 'air_night_end']],
     ['Lameller', ['air_swing_v', 'air_swing_h']],
   ];
+  // Kortets egne navne (uafhængigt af HA's systemsprog)
+  const SET_NAMES = {
+    air_control: 'Varmemodel styrer', air_boost: 'Jeg fryser', air_fan_day: 'Maks. blæser dag', air_fan_night: 'Maks. blæser nat',
+    air_night_start: 'Nat begynder', air_night_end: 'Nat slutter', air_swing_v: 'Lameller op/ned', air_swing_h: 'Lameller side',
+  };
   function settingsPanel(h, src, title = 'Indstillinger') {
     let o = '';
     for (const [g, keys] of SET_GROUPS) {
       const rows = keys.map((k) => {
         const eid = src.e(k); const s0 = st(h, eid); if (!s0) return '';
-        const a = s0.attributes || {}; const dom = eid.split('.')[0]; const name = String(a.friendly_name || k).replace(src.name, '').trim();
+        const a = s0.attributes || {}; const dom = eid.split('.')[0]; const name = SET_NAMES[k] || String(a.friendly_name || k).replace(src.name, '').trim();
         let ctl = '';
         if (dom === 'select') ctl = `<select data-svc="select.select_option" data-eid="${esc(eid)}">${(a.options || []).map((x) => `<option${x === s0.state ? ' selected' : ''}>${esc(x)}</option>`).join('')}</select>`;
         else if (dom === 'number') ctl = `<input type="number" data-svc="number.set_value" data-eid="${esc(eid)}" value="${esc(s0.state)}" min="${a.min}" max="${a.max}" step="${a.step}"><span class="mut sm"> ${esc(a.unit_of_measurement || '')}</span>`;
@@ -523,14 +528,15 @@
       o += '<div class="h2">Før og efter tiltag</div>';
       if (!ma['kalender']) o += '<div class="mut">Vælg en kalender med tiltag under Varmemodels <i>Konfigurer</i>.</div>';
       else {
-        o += `<div class="wrap"><table><tr><th>Tiltag</th><th>Dato</th><th class="n">Varmetab før</th><th class="n">Efter</th><th class="n">Ændring</th><th>Data</th></tr>`;
+        o += `<div class="wrap"><table><tr><th>Tiltag</th><th>Etage</th><th>Dato</th><th class="n">Før</th><th class="n">Efter</th><th class="n">Ændring</th><th>Data</th></tr>`;
         for (const m of list) {
-          o += `<tr><td>${esc(m.navn)}</td><td>${esc(m.dato)}</td><td class="n">${A(h, ms, m['før_w_k'], 1, 'W/K')}</td><td class="n">${A(h, ms, m.efter_w_k, 1, 'W/K')}</td>`
+          const u = m.enhed || 'W/K';
+          o += `<tr><td>${esc(m.navn)}</td><td>${esc(m.kilde || '')}</td><td>${esc(m.dato)}</td><td class="n">${A(h, ms, m['før_w_k'], 1, u)}</td><td class="n">${A(h, ms, m.efter_w_k, 1, u)}</td>`
             + `<td class="n ${m['ændring_pct'] < 0 ? 'green' : m['ændring_pct'] > 0 ? 'red' : ''}">${m['ændring_pct'] == null ? '–' : sgn(m['ændring_pct']) + ' %'}</td>`
             + `<td class="mut sm">${m.dage_før} døgn før · ${m.dage_efter} efter${m.note ? ' · ' + esc(m.note) : ''}</td></tr>`;
         }
-        if (!list.length) o += '<tr><td colspan="6" class="mut">Ingen tiltag i kalenderen endnu.</td></tr>';
-        o += `</table></div><div class="leg">Tilføj et tiltag som en begivenhed i kalenderen <button class="lnk" data-nav="/calendar">Åbn kalenderen</button>. Varmetabet regnes for sig før og efter datoen (kræver ca. 16 døgn på hver side) ved næste nats kalibrering.</div>`;
+        if (!list.length) o += '<tr><td colspan="7" class="mut">Ingen tiltag i kalenderen endnu.</td></tr>';
+        o += `</table></div><div class="leg">Tilføj et tiltag som en begivenhed i kalenderen <button class="lnk" data-nav="/calendar">Åbn kalenderen</button>. Skriv varmekildens navn, et rums navn eller »1. sal« i titel eller beskrivelse, så måles tiltaget på den etage – ellers på den vandbårne. Varmetabet (vandbåren: W/K varme; luft-luft: W el/K) regnes for sig før og efter datoen (kræver ca. 16 døgn på hver side) ved næste nats kalibrering.</div>`;
       }
       return o + LEG;
     }
@@ -643,6 +649,7 @@
   .sr input[type=number]{width:70px}
   .tg2{font:inherit;font-size:13px;font-weight:600;border-radius:12px;padding:3px 14px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer}
   .tg2.on{background:${OR};border-color:${OR};color:#fff}
+  .pv2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:8px;margin-top:10px;align-items:start}
   .bento{display:grid;gap:8px}
   .bt{position:relative;border-radius:12px;padding:10px 12px;background:color-mix(in srgb,var(--c) 16%,var(--card-background-color));border:1px solid color-mix(in srgb,var(--c) 45%,transparent);border-left:5px solid var(--c);min-height:118px;display:flex;flex-direction:column;gap:4px;min-width:0}
   .bh{display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap}.bn{font-weight:600;cursor:pointer}
@@ -959,7 +966,8 @@
         if (p.ab || p.dc) g += TX(1015, 406, p.balTxt, 'm c', D.bal ? ` style="fill:${GR};font-weight:700"` : '');
       }
       // rummene, opdelt efter varmekilde
-      let y = 136;
+      // Rumlisten starter under knap-boksen i øverste række (den går til y 136)
+      let y = main && (c.actions || []).length ? 166 : 136;
       const block = (s, rowH) => {
         const ds = s.rooms.map((r) => room(h, vm, r)); const chk = ds.filter((d) => d.chk); const hit = chk.filter((d) => d.status === 'ramt').length;
         g += TX(1150, y, `${s.name}${chk.length ? ` · forudsigelse ramt ${hit}/${chk.length}` : ''}`, 'hdr'); y += 14;
@@ -1159,7 +1167,8 @@
       const days = []; for (let i = 6; i >= 0; i--) { const a = t0 - i * 864e5; days.push({ a, v: rows ? rows.filter((r) => r.t >= a && r.t < a + 864e5).reduce((x, r) => x + r.v, 0) : null }); }
       const dm = Math.max(0.5, ...days.map((x) => x.v || 0));
       const dbar = days.map((x, i) => `<div class="db"><i style="height:${Math.round((48 * (x.v || 0)) / dm)}px${i === 6 ? ';background:' + OR : ''}"></i><span>${fmt(x.v, 1)}</span><span class="mut">${i === 6 ? 'i dag' : new Date(x.a).toLocaleDateString('da-DK', { weekday: 'short' }).replace('.', '')}</span></div>`).join('');
-      L += `<div class="b"><div class="pvh">kWh el<span class="mut sm"> · pr. time, 24 t tilbage og planen 12 t frem</span></div>${rows ? svg : '<div class="mut sm">henter …</div>'}`
+      let K = '', S = '';
+      K += `<div class="b"><div class="pvh">kWh el<span class="mut sm"> · pr. time, 24 t tilbage og planen 12 t frem</span></div>${rows ? svg : '<div class="mut sm">henter …</div>'}`
         + `<div class="sm"><span class="sw" style="background:${GR}"></span>billig <span class="sw" style="background:${YE}"></span>middel <span class="sw" style="background:${OR}"></span>dyr <span class="sw" style="background:${RE}"></span>rød · stiplet = plan</div>`
         + `<div class="sm" style="margin-top:6px">I dag <b>${fmt(today, 1)} kWh el</b> · i går ${M(h, s.e('el_yesterday'), 1, 'kWh el')} · snit 7 døgn ${M(h, s.e('el_week'), 1, 'kWh el')}</div>`
         + `<div class="dbs">${dbar}</div></div>`;
@@ -1174,14 +1183,15 @@
           tr += `<div class="tr${x.trin === cur ? ' on' : ''}${x.trin === asa.mål_trin ? ' mt' : ''}"><span class="tn">${x.trin}</span><span class="tl2">${esc(x.blæser || '')} · ${fmt(x.setpunkt, 1)} °C</span>`
             + `<span class="tbar"><i style="width:${w !== null ? Math.round((100 * w) / wmx) : 0}%"></i></span><span class="tw">${w !== null ? `${fmt(w, 0)} W · ${fmt(w / 1000, 2)} kWh el/t` : '<span class="mut">ikke lært</span>'}${num(x.grader_pr_kwh_el) !== null && eb > 0 ? ` · <b title="rummenes varme pr. kWh el i forhold til det bedste trin">${fmt((100 * x.grader_pr_kwh_el) / eb, 0)} %</b>` : ''}</span></div>`;
         }
-        L += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, maks. blæser ${esc(asa.maks_blæser || '–')} · nu trin ${cur ?? '–'}${asa.el_mål_w ? ` · planens el-mål ${fmt(asa.el_mål_w, 0)} W${asa.mål_trin != null ? ` (trin ${asa.mål_trin})` : ' (lærer stadig trinene)'}` : ''}${asa.kører_nu ? ` · kører ${esc(asa.kører_nu)}` : ''}</span></div>`
+        S += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, maks. blæser ${esc(asa.maks_blæser || '–')} · nu trin ${cur ?? '–'}${asa.el_mål_w ? ` · planens el-mål ${fmt(asa.el_mål_w, 0)} W${asa.mål_trin != null ? ` (trin ${asa.mål_trin})` : ' (lærer stadig trinene)'}` : ''}${asa.kører_nu ? ` · kører ${esc(asa.kører_nu)}` : ''}</span></div>`
           + `<div class="sm" style="margin-bottom:4px">${asa.ventilation ? `Ventilation ${esc(asa.ventilation)}${asa.ventilation_virkning_pct != null ? ` · med ventilation ${asa.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(asa.ventilation_virkning_pct, 0)} % varme pr. kWh el` : ' · effekten læres'} · ` : ''}${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div><div class="sm mut" style="margin-top:4px">% = varme i rummene pr. kWh el i forhold til det bedste trin (lært af rumfølerne, efter afkøling og opdrift fra stueplanen). Stigen vælger det trin, der dækker planens varme for mindst el.</div></div>`;
       }
       L += settingsPanel(h, s);
       const R = `<div class="sm" style="margin-bottom:6px">${(c.hours || [0, 3, 6, 12]).map((x) => `<span class="pill${x === k ? ' on' : ''}" data-k="${x}">${x === 0 ? 'nu' : `om ${x} t`}</span>`).join(' ')}</div>`
         + this.bento(h, vm, c.floor, k, { unit, unitEntity: sc.climate, unitName: s.name })
         + `<div class="sm mut bleg" style="margin-top:8px"><span class="grad"></span><span>under gulvet</span><span>godt</span><span>loftet</span> · kurve: 12 t målt, stiplet = forudsigelse · ✎ ret gulvet</div>`;
-      return `<div class="pv"><div class="pvl">${L}</div><div class="pvr">${R}</div></div>`;
+      // Venstre: varmepumpen, ventilationen og indstillingerne. Højre: etagen og under den kWh og stigen side om side
+      return `<div class="pv"><div class="pvl">${L}</div><div class="pvr">${R}<div class="pv2">${K}${S}</div></div></div>`;
     }
     airPlan(h, s) {
       const ps = st(h, s.plan); if (!ps) return 'plan: –';

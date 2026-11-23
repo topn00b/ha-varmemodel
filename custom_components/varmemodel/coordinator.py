@@ -667,7 +667,7 @@ class VarmemodelCoordinator:
         self.room_heat = self._room_heat(hours_by_source)
         self.yesterday = self._yesterday(day_of, yday[0])
         try:
-            self.measures = await self._measures()
+            self.measures = await self._measures(room_hours)
         except Exception:  # noqa: BLE001 – tiltag må ikke vælte kalibreringen
             _LOGGER.exception("Før/efter for tiltag fejlede")
         n_hours = max((len(s.last_hours) for s in self.sources.values()), default=0)
@@ -1080,11 +1080,43 @@ class VarmemodelCoordinator:
             }
         return out
 
-    async def _measures(self) -> list[dict[str, Any]]:
-        """Før/efter for hvert energitiltag i kalenderen: varmetabet regnet hver for sig før og efter datoen."""
+    def measure_source(self, text: str) -> SourceState | None:
+        """Hvilken varmekilde (etage) et tiltag gælder: kildens navn i titel/beskrivelse, ellers etage-ord, ellers den vandbårne."""
+        t = (text or "").lower()
+        for s in self.sources.values():
+            if s.name and s.name.lower() in t:
+                return s
+        # Et rums navn i teksten: rummets varmekilde (fx »termostat i <rum>« → rummets etage)
+        for r in sorted(self.rooms_cfg, key=lambda x: -len(x.get("name") or "")):
+            if r.get("name") and r["name"].lower() in t and (rs := self.room_source(r)) is not None:
+                return rs
+        air = next((s for s in self.sources.values() if s.kind != SOURCE_HYDRONIC), None)
+        if air and any(w in t for w in ("1. sal", "1.sal", "første sal", "overetage", "1st floor", "upstairs")):
+            return air
+        return self.hydronic
+
+    def _zone_hours(self, s: SourceState, room_hours: dict[str, list[Any]] | None) -> list[Hour]:
+        """Kildens timer med kildens egen tilførsel (varme, eller el for luft-luft) og etagens temperatur (snit af dens rum)."""
+        zone: dict[int, list[float]] = {}
+        for r in self.rooms_cfg:
+            if self.room_source(r) is s:
+                for rh in (room_hours or {}).get(r["key"]) or []:
+                    if rh.t_room is not None:
+                        zone.setdefault(rh.ts, []).append(rh.t_room)
+        out = []
+        for h in s.last_hours:
+            q = self._source_input(s, h)
+            zt = zone.get(h.ts)
+            out.append(replace(h, q=q, t_in=(sum(zt) / len(zt)) if zt else (h.t_in if s.kind == SOURCE_HYDRONIC else None)))
+        return out
+
+    async def _measures(self, room_hours: dict[str, list[Any]] | None = None) -> list[dict[str, Any]]:
+        """Før/efter for hvert energitiltag i kalenderen, for den etage (varmekilde) tiltaget gælder.
+
+        Vandbåren kilde: etagens varmetab (W/K) fra den målte varme. Luft-luft: etagens el pr. grad (W el/K) – varmen
+        måles ikke, men ændringen i % viser, om tiltaget virker (så længe COP er nogenlunde den samme)."""
         cal = self._id(CONF_MEASURES_CALENDAR)
-        src = self.hydronic
-        if not cal or src is None or not src.last_hours:
+        if not cal or self.hydronic is None:
             return []
         days = int(self.conf.get(CONF_WINDOW_DAYS) or DEFAULT_WINDOW_DAYS)
         end = dt_util.now()
@@ -1092,9 +1124,13 @@ class VarmemodelCoordinator:
             "calendar", "get_events", {"start_date_time": end - timedelta(days=days), "end_date_time": end},
             target={"entity_id": cal}, blocking=True, return_response=True)
         events = ((resp or {}).get(cal) or {}).get("events") or []
-        hours = src.last_hours
+        zh: dict[str, list[Hour]] = {}
         out = []
         for ev in events:
+            src = self.measure_source(f"{ev.get('summary') or ''} {ev.get('description') or ''}") or self.hydronic
+            if src.sid not in zh:
+                zh[src.sid] = self._zone_hours(src, room_hours)
+            hours = zh[src.sid]
             d = dt_util.parse_datetime(str(ev.get("start"))) or None
             if d is None:
                 dd = dt_util.parse_date(str(ev.get("start")))
@@ -1108,7 +1144,8 @@ class VarmemodelCoordinator:
             fb = await self.hass.async_add_executor_job(partial(fit_heat_loss, before, plant_w_k=pw, ground=pg))
             fa = await self.hass.async_add_executor_job(partial(fit_heat_loss, after, plant_w_k=pw, ground=pg))
             chg = round((fa.value - fb.value) / fb.value * 100, 1) if fa.value and fb.value else None
-            out.append({"navn": ev.get("summary"), "dato": d.date().isoformat(), "før_w_k": fb.value and round(fb.value, 1),
+            out.append({"navn": ev.get("summary"), "dato": d.date().isoformat(), "kilde": src.name,
+                        "enhed": "W/K" if src.kind == SOURCE_HYDRONIC else "W el/K", "før_w_k": fb.value and round(fb.value, 1),
                         "efter_w_k": fa.value and round(fa.value, 1), "ændring_pct": chg,
                         "dage_før": round(len(before) / 24), "dage_efter": round(len(after) / 24),
                         "forklaringsgrad_før": fb.r2 and round(fb.r2, 2), "forklaringsgrad_efter": fa.r2 and round(fa.r2, 2),
