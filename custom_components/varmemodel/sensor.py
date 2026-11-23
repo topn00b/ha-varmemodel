@@ -372,7 +372,8 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "updated": _ts_local(upd), "valid_until": _ts_local(upd + 2700) if upd else None,
             "inputs_ok": m.get("inputs_ok"), "missing": m.get("missing") or None, "horizon_h": m.get("horizon_h"),
             "plan": [{"t": _ts_local(x["ts"]), **{k: x.get(k) for k in ("heat_kw", "flow", "shift", "price", "t_out", "blocked", "cost")},
-                      **({"setpoint": x["setpoint"]} if x.get("setpoint") is not None else {})} for x in hrs],
+                      **({"setpoint": x["setpoint"]} if x.get("setpoint") is not None else {}),
+                      **({"preload": x["preload"]} if x.get("preload") else {})} for x in hrs],
             "kind": p.get("kind") or "hydronic", "caps": p.get("caps") or None, "e_min": p.get("e_min"), "e_max": p.get("e_max"),
             "rooms_forecast": p.get("rooms"),
             "rooms_check": self.coordinator.rooms_check or None,
@@ -381,6 +382,8 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "fresh_pct_today": m.get("fresh_pct_today"),
             "følere": _sensors(self.src),
             "boost_until": p.get("boost_until"), "boost_delta": p.get("boost_delta"), "red_allowance": p.get("red_allowance"), "preload": p.get("preload"),
+            "preload_window": (lambda w: {"fra": _ts_local(w["from"]), "til": _ts_local(w["to"]), "blokering_fra": _ts_local(w["block_from"]),
+                                          "blokering_til": _ts_local(w["block_to"]), "kwh": w["kwh"]} if w else None)(p.get("preload_window")),
             "max_pause": p.get("max_pause"), "comfort_offset": p.get("comfort_offset"),
             "history": [{"t": _ts_local(int(k)), "plan": v["p"], "price": v["pr"], "blocked": v["b"]}
                         for k, v in sorted((self.coordinator.plan_log.get(self.src.sid) or {}).items(), key=lambda kv: int(kv[0]))[-48:]],

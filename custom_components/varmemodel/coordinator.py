@@ -1174,7 +1174,7 @@ class VarmemodelCoordinator:
                                     for r in show if r.estimated
                                     for e in [next((x for x in self.estimates.values() if x["name"] == r.name), None)] if e},
                 "rooms_band": {r.name: round(r.margin, 2) for r in show}, "caps": {r.name: r.t_max for r in show if r.t_max is not None},
-                "e_min": round(e_min, 2), "e_max": round(e_max, 2), "preload": self.setting(CONF_PRELOAD),
+                "e_min": round(e_min, 2), "e_max": round(e_max, 2), "preload": self.setting(CONF_PRELOAD), "preload_window": p.preload,
                 "comfort_offset": self.setting(CONF_COMFORT_OFFSET), "red_allowance": 0.0}
         # Anbefalet styring: luft-luft reagerer hurtigt – mindst 30 min. tændt, 15 min. slukket, højst én ændring pr. 15 min.
         cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
@@ -1388,7 +1388,7 @@ class VarmemodelCoordinator:
                                               for e in [next((x for x in self.estimates.values() if x["name"] == r.name), None)] if e},
                           "boost": boost_on, "boost_until": boost_note,
                           "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE), "preload": self.setting(CONF_PRELOAD),
-                          "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
+                          "preload_window": p.preload, "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
             # Anbefalet styring: planens ønske nu omsat efter reglerne, der skåner varmepumpen
             cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
             cmd = step(Command.load(self.commands.get(sid)), now, dt_util.now().date().isoformat(),

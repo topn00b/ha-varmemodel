@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.7.1';
+  const VERSION = '0.7.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -42,7 +42,7 @@
   };
   const whenM = (iso) => { const d = new Date(iso); return isNaN(d) ? '–' : `${when(iso)}:${hh(d.getMinutes())}`; };
   const kW = (h, e) => { const v = sv(h, e); if (v === null) return null; return String(at(h, e).unit_of_measurement || '').toLowerCase() === 'w' ? v / 1000 : v; };
-  const GR = '#2e9e5b', YE = '#d29b12', RE = '#d6453d', BL = '#3b82c4', OR = '#f2711c', ORT = '#e8890c';
+  const GR = '#2e9e5b', YE = '#d29b12', RE = '#d6453d', BL = '#3b82c4', OR = '#f2711c', ORT = '#e8890c', PU = '#8b5cf6';
   const mixCol = (v) => (v === null ? null : v > 1.5 ? RE : v > 0.5 ? YE : v < -0.5 ? BL : GR);
 
   // ------------------------------------------------------------------ Varmemodels entiteter
@@ -282,8 +282,8 @@
       if (s && s.plan) {
         const pa = at(h, s.plan); const ca = at(h, s.e('command')); const cst = (st(h, s.e('command')) || {}).state;
         const pl = (pa.plan || []).slice(0, 24); const mx = Math.max(0.1, ...pl.map((x) => x.heat_kw || 0));
-        o += `<div class="h2">${esc(s.name)}: plan</div><div class="tl">${pl.map((x) => `<div class="tc${x.blocked ? ' rd' : ''}" title="${esc(`${when(x.t)}: ${fmt(x.heat_kw, 2)} ${s.kind === 'hydronic' ? 'kW varme' : 'kWh el'} · ${fmt(x.price, 2)} kr${x.blocked ? ' · blokeret' : ''}`)}"><div class="tb" style="height:${Math.round(100 * (x.heat_kw || 0) / mx)}%"></div><div class="tt">${hh(new Date(x.t).getHours())}</div></div>`).join('')}</div>`;
-        o += `<div class="sm" style="margin-top:4px"><span class="v" data-e="${esc(s.e('command'))}">Anbefalet: ${cst === 'heat' ? 'varme' : cst === 'off' ? 'slukket' : '–'}${ca.setpoint != null ? ` · setpunkt ${fmt(ca.setpoint)} °C` : ''}</span> · ${esc(ca.reason || '')}<br>${esc(pa.reason || '')}</div>`;
+        o += `<div class="h2">${esc(s.name)}: plan</div><div class="tl">${pl.map((x) => `<div class="tc${x.blocked ? ' rd' : ''}" title="${esc(`${when(x.t)}: ${fmt(x.heat_kw, 2)} ${s.kind === 'hydronic' ? 'kW varme' : 'kWh el'} · ${fmt(x.price, 2)} kr${x.blocked ? ' · blokeret' : ''}${x.preload ? ` · heraf ${fmt(x.preload, 2)} forvarmning` : ''}`)}"><div class="tb" style="height:${Math.round(100 * (x.heat_kw || 0) / mx)}%${x.preload ? `;background:repeating-linear-gradient(135deg,${PU} 0 4px,${OR} 4px 8px)` : ''}"></div><div class="tt">${hh(new Date(x.t).getHours())}</div></div>`).join('')}</div>`;
+        o += `<div class="sm" style="margin-top:4px"><span class="v" data-e="${esc(s.e('command'))}">Anbefalet: ${cst === 'heat' ? 'varme' : cst === 'off' ? 'slukket' : '–'}${ca.setpoint != null ? ` · setpunkt ${fmt(ca.setpoint)} °C` : ''}</span> · ${esc(ca.reason || '')}<br>${this.preText(h, s) ? `<b>${esc(this.preText(h, s))}</b><br>` : ''}${esc(pa.reason || '')}</div>`;
       }
       return o;
     }
@@ -632,8 +632,9 @@
       const HM = [...hyd, ...air].map((s) => {
         const a = at(h, s.plan); const m = {}; const isAir = s.kind !== 'hydronic';
         for (const p of a.history || []) m[Date.parse(p.t)] = p.plan;
-        for (const p of a.plan || []) m[Date.parse(p.t)] = isAir ? (p.el_kw ?? p.heat_kw) : p.heat_kw;
-        return { s, m, unit: isAir ? 'kW el' : 'kW varme', none: !(a.plan || []).length, mx: Math.max(isAir ? 0.1 : 1, ...Object.values(m).filter((x) => x != null)) };
+        const pre = {};
+        for (const p of a.plan || []) { m[Date.parse(p.t)] = isAir ? (p.el_kw ?? p.heat_kw) : p.heat_kw; if (p.preload) pre[Date.parse(p.t)] = p.preload; }
+        return { s, m, pre, unit: isAir ? 'kW el' : 'kW varme', none: !(a.plan || []).length, mx: Math.max(isAir ? 0.1 : 1, ...Object.values(m).filter((x) => x != null)) };
       });
       const d0 = new Date(); d0.setHours(0, 0, 0, 0); const nowH = new Date(); nowH.setMinutes(0, 0, 0); const nk = nowH.getTime();
       const cells = (day, fn) => { let o = ''; for (let i = 0; i < 24; i++) { const t = new Date(day); t.setHours(i); const k = t.getTime(); o += fn(k, i, (k < nk ? 'p' : '') + (k === nk ? ' n' : '')); } return o; };
@@ -649,11 +650,14 @@
         for (const x of HM) {
           if (x.none) { rows += `<div class="zl"><span class="mut sm">↳ ${esc(x.s.name)}</span><span class="mut sm">ingen plan endnu</span></div>`; continue; }
           rows += `<div class="zl"><span class="mut sm">↳ ${esc(x.s.name)}</span><div class="zr v">${cells(day, (k, i, cl) => {
-            const v = x.m[k];
-            return `<i class="${cl}" style="background:${v ? OR : 'var(--divider-color)'};${v ? `opacity:${(0.35 + (0.65 * v) / x.mx).toFixed(2)}` : ''}" title="${hh(i)}:00 · ${v ? fmt(v) + ' ' + x.unit : 'ingen varme'}"></i>`;
+            const v = x.m[k]; const pv = x.pre[k];
+            const bg = pv ? `repeating-linear-gradient(135deg,${PU} 0 4px,${OR} 4px 8px)` : v ? OR : 'var(--divider-color)';
+            return `<i class="${cl}" style="background:${bg};${v ? `opacity:${(0.35 + (0.65 * v) / x.mx).toFixed(2)}` : ''}" title="${hh(i)}:00 · ${v ? fmt(v) + ' ' + x.unit : 'ingen varme'}${pv ? ` · heraf ${fmt(pv)} forvarmning til rød` : ''}"></i>`;
           })}</div></div>`;
         }
       }
+      const pre = HM.map((x) => [x.s, this.preText(h, x.s)]).filter(([, t]) => t);
+      if (pre.length) rows += `<div class="zl"><span></span><span class="sm"><span class="sw" style="background:repeating-linear-gradient(135deg,${PU} 0 4px,${OR} 4px 8px)"></span>${pre.map(([x, t]) => `${esc(x.name)}: ${esc(t)}`).join(' · ')}</span></div>`;
       rows += `<div class="zl"><span></span><div class="zt">${[0, 6, 12, 18, 24].map((x) => `<span style="left:${(x / 24) * 100}%">${hh(x)}</span>`).join('')}</div></div>`;
       const pa = pa0;
       return rows + `<details id="vmzd"><summary>planens begrundelse ▾</summary><div class="sm" style="margin-top:4px">${esc(pa.reason || '')}<br>`
@@ -848,13 +852,21 @@
       g += this.legend(300, Math.max(740, H - 90), 4, air.length) + TX(300, Math.max(806, H - 30), 'Tryk på en værdi for detaljer og historik', 'm');
       return { w: 1500, h: H, g };
     }
+    preText(h, s, short) {
+      const w = at(h, s.plan).preload_window; if (!w || !w.fra) return '';
+      const u = s.kind === 'hydronic' ? 'kWh varme' : 'kWh el'; const k = (t) => hh(new Date(t).getHours());
+      const now = Date.now(); const on = Date.parse(w.fra) <= now && now < Date.parse(w.til);
+      const t = `${on ? 'forvarmer nu' : 'forvarmer'} kl. ${k(w.fra)}–${k(w.til)}` + (w.blokering_fra ? ` til rød kl. ${k(w.blokering_fra)}–${k(w.blokering_til)}` : '');
+      return short ? t : `${t} (${fmt(w.kwh)} ${u})`;
+    }
     airPlan(h, s) {
       const ps = st(h, s.plan); if (!ps) return 'plan: –';
       const pa = ps.attributes || {}; const k = ps.state;
       let t = `plan: ${PS[k] || k}`;
       if (k === 'heat') t += ` ${fmt(pa.el_kw ?? pa.heat_kw)} kW el` + (pa.next_off ? ` · stop ${when(pa.next_off)}` : '');
       else if (pa.next_on) t += ` · start ${when(pa.next_on)}`;
-      return t;
+      const pt = this.preText(h, s, true);
+      return pt ? `${t} · ${pt}` : t;
     }
     tallSvg(h, vm, main, air, D) {
       const c = this._c, p = this.pills(h, D, main); let g = '';

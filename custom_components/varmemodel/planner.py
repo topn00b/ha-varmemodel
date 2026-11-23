@@ -70,6 +70,7 @@ class Plan:
     cost_kr: float = 0.0
     reason: str = ""
     warnings: list[str] = field(default_factory=list)
+    preload: dict[str, Any] | None = None  # første forvarmning: fra/til, blokeringen den dækker og mængden
 
 
 STEP = 0.25  # kWh pr. portion
@@ -82,6 +83,41 @@ def flow_for(m: SourceModel, p: float, target: float) -> float:
     """Fremløbsmålet for p kW varme: rummål + p ÷ gulvets afgivelse, begrænset og rundet til 0,5 °C."""
     f = target + (p / m.emission_kw_k if m.emission_kw_k > 0 else 0.0)
     return round(2 * max(FLOW_MIN, min(FLOW_MAX, f))) / 2
+
+
+def _next_block(hours: list[PlanHour]) -> list[int | None]:
+    """For hver time: indeks på første blokerede time efter den (None hvis ingen)."""
+    nb: list[int | None] = [None] * len(hours)
+    nxt = None
+    for i in range(len(hours) - 1, -1, -1):
+        nb[i] = nxt
+        if hours[i].blocked:
+            nxt = i
+    return nb
+
+
+def _preload_window(hours: list[PlanHour], pq: list[float], label: Callable[[int], str]) -> tuple[dict[str, Any] | None, str | None]:
+    """Første sammenhængende forvarmning (timer med varme lagt for at dække en senere blokering)."""
+    idx = [i for i, x in enumerate(pq) if x > 1e-9]
+    if not idx:
+        return None, None
+    a = idx[0]
+    b = a
+    while b + 1 < len(pq) and (pq[b + 1] > 1e-9 or (not hours[b + 1].blocked and b + 2 < len(pq) and pq[b + 2] > 1e-9)):
+        b += 1
+    k = b + 1
+    while k < len(hours) and not hours[k].blocked:
+        k += 1
+    e = k
+    while e + 1 < len(hours) and hours[e + 1].blocked:
+        e += 1
+    w = {"from": hours[a].ts, "to": hours[b].ts + 3600, "block_from": hours[k].ts if k < len(hours) else None,
+         "block_to": hours[e].ts + 3600 if k < len(hours) else None, "kwh": round(sum(pq[a:b + 1]), 2)}
+    clk = lambda ts: label(ts).split("kl. ")[-1]  # noqa: E731
+    txt = f"forvarmer {label(w['from'])}–{clk(w['to'])}"
+    if w["block_from"] is not None:
+        txt += f" til blokeringen {clk(w['block_from'])}–{clk(w['block_to'])}"
+    return w, txt
 
 
 def _cop(m: SourceModel, t_out: float, p: float, target: float) -> float:
@@ -211,6 +247,8 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
     #    (mindre går tabt, og gulvets forsinkede varme når ind i blokeringen).
     skip: set[tuple[str, int]] = set()
     extra: dict[str, float] = {}
+    nb = _next_block(hours)
+    pq = [0.0] * n  # forvarmning: varme lagt i time j for at holde et rum gennem en senere blokering
     cap = 10.0 + sum(d for d, h in zip(demand, hours) if h.blocked)
     for _ in range(1500):
         sim = simulate_rooms(rooms, hours, q, past_q)
@@ -227,9 +265,13 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
         if extra.get(r.name, 0.0) >= cap:
             skip.update((r.name, k) for k in range(i_bad, n))
             continue
+        before = q[:]
         added = add_cheapest([j for j in reversed(free) if j <= i_bad], STEP)
         if added:
             extra[r.name] = extra.get(r.name, 0.0) + added
+            j = next(k for k in range(n) if q[k] != before[k])
+            if nb[j] is not None and nb[j] <= i_bad:
+                pq[j] += added
         else:
             skip.add((r.name, i_bad))
 
@@ -269,27 +311,18 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
         el = p / cop if cop else 0.0
         plan.hours.append({"ts": h.ts, "heat_kw": p, "flow": flow, "shift": shift,
                            "price": round(h.price, 3), "t_out": round(h.t_out, 1), "blocked": h.blocked,
-                           "cop": round(cop, 2) if cop else None, "cost": round(el * h.price, 2)})
+                           "cop": round(cop, 2) if cop else None, "cost": round(el * h.price, 2),
+                           "preload": round(min(pq[i], p), 2)})
         plan.heat_kwh += p
         plan.el_kwh += el
         plan.cost_kr += el * h.price
     plan.heat_kwh, plan.el_kwh, plan.cost_kr = round(plan.heat_kwh, 1), round(plan.el_kwh, 1), round(plan.cost_kr, 1)
     on = sum(1 for x in plan.hours if x["heat_kw"] > 0)
-    # Næste blokering på mindst 3 timer: hvor meget der forvarmes til
+    # Forvarmning: hvornår der varmes op til en senere blokering (de timer, rummene ellers ville komme under kravet)
     notes: list[str] = []
-    i = 0
-    while preload > 0 and i < n:
-        if not hours[i].blocked:
-            i += 1
-            continue
-        j = i
-        while j + 1 < n and hours[j + 1].blocked:
-            j += 1
-        if j - i + 1 >= 3:
-            end = lab(hours[j].ts + 3600)
-            notes.append(f"forvarmer til blokeringen {lab(hours[i].ts)}–{end.split('kl. ')[-1]} (+{pre[j]:.2f} °C sidst i den)")
-            break
-        i = j + 1
+    plan.preload, txt = _preload_window(hours, [min(a, b) for a, b in zip(pq, q)], lab)
+    if txt:
+        notes.append(txt)
     plan.reason = (f"{on} timer, {plan.heat_kwh} kWh varme for ca. {plan.cost_kr} kr" + "".join(" – " + x for x in notes)
                    + (" – " + "; ".join(plan.warnings) if plan.warnings else ""))
     return plan
@@ -330,6 +363,8 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
 
     skip: set[tuple[str, int]] = set()
     full: set[int] = set()
+    nb = _next_block(hours)
+    pq = [0.0] * n  # forvarmning: el lagt i time j for at holde et rum gennem en senere blokering
     sim = simulate_rooms(rooms, hours, q, past_q)
     for _ in range(800):
         worst: tuple[int, PlanRoom] | None = None
@@ -354,6 +389,8 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
                 full.add(j)
                 continue
             sim, added = sim2, True
+            if nb[j] is not None and nb[j] <= i_bad:
+                pq[j] += a
             break
         if not added:
             skip.add((r.name, i_bad))
@@ -377,13 +414,16 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
             setpoint = sp if sp is not None else round(2 * (max((need(r, i) for r in planned), default=21.0) + 1.0)) / 2
         plan.hours.append({"ts": h.ts, "heat_kw": e, "el_kw": e, "flow": None, "shift": None, "setpoint": setpoint,
                            "price": round(h.price, 3), "t_out": round(h.t_out, 1), "blocked": h.blocked, "cop": None,
-                           "cost": round(e * h.price, 2)})
+                           "cost": round(e * h.price, 2), "preload": round(min(pq[i], e), 2)})
         plan.el_kwh += e
         plan.cost_kr += e * h.price
     plan.el_kwh = round(plan.el_kwh, 1)
     plan.heat_kwh = plan.el_kwh  # luft-luft: varmen måles ikke – tallene er el
     plan.cost_kr = round(plan.cost_kr, 1)
     on = sum(1 for x in plan.hours if x["heat_kw"] > 0)
+    plan.preload, txt = _preload_window(hours, [min(a, b) for a, b in zip(pq, q)], lab)
+    if txt:
+        notes.insert(0, txt)
     plan.reason = (f"{on} timer, {plan.el_kwh} kWh el for ca. {plan.cost_kr} kr" + "".join(" – " + x for x in notes)
                    + (" – " + "; ".join(plan.warnings) if plan.warnings else ""))
     return plan
