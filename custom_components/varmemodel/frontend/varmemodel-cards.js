@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.8.4';
+  const VERSION = '0.8.5';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -221,6 +221,65 @@
   };
   const pts = (x) => (x.points || (x.rect ? [[x.rect[0], x.rect[1]], [x.rect[0] + x.rect[2], x.rect[1]], [x.rect[0] + x.rect[2], x.rect[1] + x.rect[3]], [x.rect[0], x.rect[1] + x.rect[3]]] : []));
   const mid = (p) => [p.reduce((a, q) => a + q[0], 0) / (p.length || 1), p.reduce((a, q) => a + q[1], 0) / (p.length || 1)];
+
+  // Én etage som heatmap (cm-koordinater). o.unit: varmepumpens tilstand nu ('heat' | 'idle' | 'defrost' | 'off'),
+  // så luftpilene strømmer, når den varmer. o.detail: gulv (klik = gulv-hjælperen) og forudsigelse i hvert rum.
+  function floorSvg(h, vm, f, k, o = {}) {
+    const W = f.width || 700, H = f.height || 500;
+    const op = f.image ? (f.room_opacity ?? 0.6) : 1;
+    let g = f.image ? `<image href="${esc(f.image)}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="none" opacity="${f.image_opacity ?? 1}"/>` : '';
+    const labels = [];
+    for (const rr of f.rooms || []) {
+      const p = pts(rr); if (!p.length) continue;
+      const poly = p.map((q) => q.join(',')).join(' ');
+      const r = vm.rooms.find((x) => x.name === (rr.room || rr.name));
+      if (!r) { g += `<polygon points="${poly}" fill="#f1f1f1" stroke="#555" stroke-width="4"/>`; const [cx, cy] = mid(p); labels.push(`<text x="${cx}" y="${cy}" class="pn" text-anchor="middle">${esc(rr.label || rr.name || '')}</text>`); continue; }
+      const d = room(h, vm, r); const a = d.a;
+      const t = k === 0 ? d.t : (d.fc && d.fc.length >= k ? d.fc[k - 1] : null);
+      const col = TCOL(t, num(a.gulv), num(a.loft));
+      g += `<polygon points="${poly}" fill="${col}" fill-opacity="${op}" stroke="#444" stroke-width="4" data-e="${esc(d.tE || r.model)}"/>`;
+      if (rr.sensor) g += `<circle cx="${rr.sensor[0]}" cy="${rr.sensor[1]}" r="10" fill="#d9534f" stroke="#fff" stroke-width="3"><title>føler</title></circle>`;
+      if (rr.room) continue;  // del af et andet rum: kun farven
+      const [cx, cy] = rr.label_at || mid(p);
+      const est = k === 0 && d.est;
+      let l = `<text x="${cx}" y="${cy - 8}" class="pn" text-anchor="middle" data-e="${esc(d.tE || r.model)}">${esc(rr.label || r.name)}</text>`
+        + `<text x="${cx}" y="${cy + 30}" class="pt" text-anchor="middle" data-e="${esc(d.tE || r.model)}">${t === null ? '–' : `${est ? '≈' : ''}${fmt(t)} °C`}</text>`;
+      if (o.detail && !rr.compact) {
+        const gE = a.min_entitet || r.model; const gv = a.min_entitet ? sv(h, a.min_entitet) : num(a.gulv);
+        if (a.i_plan !== false && gv !== null) l += `<text x="${cx}" y="${cy + 62}" class="ps gl" text-anchor="middle" data-e="${esc(gE)}">gulv ${fmt(gv)} ✎</text>`;
+        if (d.fc && d.fc.length > 5) l += `<text x="${cx}" y="${cy + 92}" class="ps" text-anchor="middle">3 t ${fmt(d.fc[2])} · 6 t ${fmt(d.fc[5])}</text>`;
+      } else {
+        const lim = [num(a.gulv) !== null ? `gulv ${fmt(a.gulv)}` : '', num(a.loft) !== null ? `loft ${fmt(a.loft)}` : ''].filter(Boolean).join(' · ');
+        if (lim && !rr.compact) l += `<text x="${cx}" y="${cy + 58}" class="ps" text-anchor="middle">${lim}</text>`;
+      }
+      labels.push(l);
+    }
+    for (const dd of f.doors || []) g += `<line x1="${dd[0]}" y1="${dd[1]}" x2="${dd[2]}" y2="${dd[3]}" stroke="#fff" stroke-width="9"/>`;
+    const UC = { heat: OR, defrost: BL, idle: '#8a9198', off: '#8a9198' };
+    for (const u of f.units || []) {
+      const w = u.w || 90, hh2 = u.h || 26;
+      const live = o.unit && u.entity && o.unitEntity === u.entity ? o.unit : null;
+      const fill = live ? UC[live] || '#5b9bd5' : '#5b9bd5';
+      g += `<rect x="${u.x - w / 2}" y="${u.y - hh2 / 2}" width="${w}" height="${hh2}" rx="4" fill="${fill}" stroke="#2c6aa0" stroke-width="2"${u.entity ? ` data-e="${esc(u.entity)}"` : ''}/>`
+        + `<text x="${u.x}" y="${u.y + 6}" class="pu" text-anchor="middle"${u.entity ? ` data-e="${esc(u.entity)}"` : ''}>${esc(u.name || '')}</text>`;
+      const sc = live === 'heat' ? OR : live === 'defrost' ? BL : live ? '#9aa0a6' : '#2c6aa0';
+      for (const path of u.paths || (u.to ? [u.to] : [])) {
+        if (path.length) g += `<polyline points="${[[u.x, u.y], ...path].map((q) => q.join(',')).join(' ')}" fill="none" stroke="${sc}" stroke-width="5" stroke-dasharray="14,8" class="${live === 'heat' ? 'flow' : ''}" marker-end="url(#vmpil)"/>`;
+      }
+    }
+    return `<svg viewBox="-10 -10 ${W + 20} ${H + 20}" class="psvg">`
+      + '<defs><marker id="vmpil" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/></marker></defs>'
+      + `${g}${labels.join('')}</svg>`;
+  }
+  const PCSS = `.pl{display:flex;flex-wrap:wrap;gap:14px}.pf{flex:1 1 320px;min-width:280px}.psvg{width:100%;height:auto;display:block}
+        .pn{font-size:34px;fill:#222}.pt{font-size:40px;font-weight:700;fill:#111}.ps{font-size:22px;fill:#333}.pu{font-size:18px;fill:#fff}
+        .gl{fill:#1c5fa8;cursor:pointer;text-decoration:underline dotted}.psvg [data-e]{cursor:pointer}
+        .flow{animation:vmflow 1.1s linear infinite}@keyframes vmflow{to{stroke-dashoffset:-44}}
+        .pill{display:inline-block;padding:2px 10px;border-radius:12px;border:1px solid var(--divider-color,#ccc);cursor:pointer;margin-right:4px}
+        .pill.on{background:var(--primary-color,#03a9f4);color:#fff;border-color:transparent}
+        .sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin:0 4px 0 10px;vertical-align:-1px}`;
+  const PLEG = '<span class="sw" style="background:#7fb2e5"></span>under gulvet <span class="sw" style="background:#b9dcf2"></span>tæt på <span class="sw" style="background:#a8dbb5"></span>godt <span class="sw" style="background:#f6d98b"></span>tæt på loftet <span class="sw" style="background:#ef9a8f"></span>over loftet';
+
   class PlanCard extends Base {
     static getStubConfig() { return { floors: [{ name: 'Stueplan', width: 700, height: 500, rooms: [{ name: 'Stue', rect: [0, 0, 400, 300] }] }] }; }
     _setK(k) { this._k = +k || 0; this._draw(); }
@@ -240,41 +299,7 @@
         }
       }
       o += '<div class="pl">';
-      for (const f of c.floors || []) {
-        const W = f.width || 700, H = f.height || 500;
-        const op = f.image ? (f.room_opacity ?? 0.6) : 1;
-        let g = f.image ? `<image href="${esc(f.image)}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="none" opacity="${f.image_opacity ?? 1}"/>` : '';
-        for (const rr of f.rooms || []) {
-          const p = pts(rr); if (!p.length) continue;
-          const poly = p.map((q) => q.join(',')).join(' ');
-          const r = vm.rooms.find((x) => x.name === (rr.room || rr.name));
-          if (!r) { g += `<polygon points="${poly}" fill="#f1f1f1" stroke="#555" stroke-width="4"/>`; const [cx, cy] = mid(p); g += `<text x="${cx}" y="${cy}" class="pn" text-anchor="middle">${esc(rr.label || rr.name || '')}</text>`; continue; }
-          const d = room(h, vm, r); const a = d.a;
-          const t = k === 0 ? d.t : (d.fc && d.fc.length >= k ? d.fc[k - 1] : null);
-          const col = TCOL(t, num(a.gulv), num(a.loft));
-          g += `<polygon points="${poly}" fill="${col}" fill-opacity="${op}" stroke="#444" stroke-width="4" data-e="${esc(d.tE || r.model)}"/>`;
-          if (rr.sensor) g += `<circle cx="${rr.sensor[0]}" cy="${rr.sensor[1]}" r="10" fill="#d9534f" stroke="#fff" stroke-width="3"><title>føler</title></circle>`;
-          if (rr.room) continue;  // del af et andet rum: kun farven
-          const [cx, cy] = rr.label_at || mid(p);
-          const est = k === 0 && d.est;
-          g += `<text x="${cx}" y="${cy - 8}" class="pn" text-anchor="middle" data-e="${esc(d.tE || r.model)}">${esc(rr.label || r.name)}</text>`
-            + `<text x="${cx}" y="${cy + 30}" class="pt" text-anchor="middle" data-e="${esc(d.tE || r.model)}">${t === null ? '–' : `${est ? '≈' : ''}${fmt(t)} °C`}</text>`;
-          const lim = [num(a.gulv) !== null ? `gulv ${fmt(a.gulv)}` : '', num(a.loft) !== null ? `loft ${fmt(a.loft)}` : ''].filter(Boolean).join(' · ');
-          if (lim && !rr.compact) g += `<text x="${cx}" y="${cy + 58}" class="ps" text-anchor="middle">${lim}</text>`;
-        }
-        for (const dd of f.doors || []) g += `<line x1="${dd[0]}" y1="${dd[1]}" x2="${dd[2]}" y2="${dd[3]}" stroke="#fff" stroke-width="9"/>`;
-        for (const u of f.units || []) {
-          const w = u.w || 90, hh = u.h || 26;
-          g += `<rect x="${u.x - w / 2}" y="${u.y - hh / 2}" width="${w}" height="${hh}" rx="4" fill="#5b9bd5" stroke="#2c6aa0" stroke-width="2"${u.entity ? ` data-e="${esc(u.entity)}"` : ''}/>`
-            + `<text x="${u.x}" y="${u.y + 6}" class="pu" text-anchor="middle"${u.entity ? ` data-e="${esc(u.entity)}"` : ''}>${esc(u.name || '')}</text>`;
-          for (const path of u.paths || (u.to ? [u.to] : [])) {
-            if (path.length) g += `<polyline points="${[[u.x, u.y], ...path].map((q) => q.join(',')).join(' ')}" fill="none" stroke="#2c6aa0" stroke-width="5" stroke-dasharray="14,8" marker-end="url(#vmpil)"/>`;
-          }
-        }
-        o += `<div class="pf"><div class="h2">${esc(f.name || '')}</div><svg viewBox="-10 -10 ${W + 20} ${H + 20}" class="psvg">`
-          + '<defs><marker id="vmpil" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#2c6aa0"/></marker></defs>'
-          + `${g}</svg></div>`;
-      }
+      for (const f of c.floors || []) o += `<div class="pf"><div class="h2">${esc(f.name || '')}</div>${floorSvg(h, vm, f, k)}</div>`;
       o += '</div>';
       o += `<div class="sm mut" style="margin-top:6px"><span class="sw" style="background:#7fb2e5"></span>under gulvet <span class="sw" style="background:#b9dcf2"></span>tæt på <span class="sw" style="background:#a8dbb5"></span>godt <span class="sw" style="background:#f6d98b"></span>tæt på loftet <span class="sw" style="background:#ef9a8f"></span>over loftet${k ? ' · forudsigelse' : ''}</div>`;
       // Valgfri varmekilde: planen time for time og den anbefalede styring (anlæg pr. varmepumpe)
@@ -288,13 +313,9 @@
       return o;
     }
     get css() {
-      return `.pl{display:flex;flex-wrap:wrap;gap:14px}.pf{flex:1 1 320px;min-width:280px}.psvg{width:100%;height:auto;display:block}
-        .pn{font-size:34px;fill:#222}.pt{font-size:40px;font-weight:700;fill:#111}.ps{font-size:22px;fill:#444}.pu{font-size:18px;fill:#fff}
+      return PCSS + `
         .tg{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-bottom:8px}
         .tile{border-radius:10px;padding:8px 10px;cursor:pointer;color:#111}.tv{font-size:20px;font-weight:700}.tsm{font-size:11px;color:#333}
-        .pill{display:inline-block;padding:2px 10px;border-radius:12px;border:1px solid var(--divider-color,#ccc);cursor:pointer;margin-right:4px}
-        .pill.on{background:var(--primary-color,#03a9f4);color:#fff;border-color:transparent}
-        .sw{display:inline-block;width:12px;height:12px;border-radius:3px;margin:0 4px 0 10px;vertical-align:-1px}
         .tl{display:flex;gap:2px;height:52px;align-items:flex-end}.tc{flex:1;position:relative;height:100%;background:var(--secondary-background-color,#f4f4f4);border-radius:3px;display:flex;flex-direction:column;justify-content:flex-end}
         .tc.rd{box-shadow:inset 0 0 0 2px #d6453d}.tb{background:#5b9bd5;border-radius:3px 3px 0 0}.tt{font-size:9px;text-align:center;color:var(--secondary-text-color,#666)}`;
     }
@@ -550,7 +571,18 @@
     static getStubConfig() { return { buffer: false, bypass: false }; }
     constructor() {
       super();
-      this.css = ACSS;
+      this.css = ACSS + PCSS + `
+  .pv{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}.pvl{flex:1 1 300px;max-width:460px;display:flex;flex-direction:column;gap:8px;min-width:0}
+  .pvr{flex:2 1 420px;min-width:0}@container (max-width:700px){.pvr{order:-1}}
+  .pvh{font-weight:600;margin-bottom:4px}.pvs{font-size:15px;display:flex;align-items:center;gap:6px}.dot{width:12px;height:12px;border-radius:50%;display:inline-block}
+  svg.kw{width:100%;height:auto;display:block}svg.kw text{font-size:10px;fill:var(--secondary-text-color);text-anchor:middle}
+  .dbs{display:flex;gap:6px;align-items:flex-end;margin-top:8px}.db{flex:1;display:flex;flex-direction:column;align-items:center;font-size:11px}
+  .db i{display:block;width:70%;background:#8fc9ef;border-radius:3px 3px 0 0;min-height:1px}
+  .trs{display:flex;flex-direction:column;gap:2px;cursor:pointer}.tr{display:grid;grid-template-columns:22px minmax(90px,1fr) 1fr auto;gap:6px;align-items:center;font-size:12px;padding:1px 4px;border-radius:5px}
+  .tr.on{background:var(--primary-color);color:#fff}.tr.on .mut{color:#fff}.tn{font-weight:700;text-align:right}
+  .tbar{height:8px;background:var(--divider-color);border-radius:4px;overflow:hidden}.tbar i{display:block;height:100%;background:${OR}}.tr.on .tbar i{background:#fff}
+  .tw{white-space:nowrap;text-align:right}
+  :host{container-type:inline-size}`;
       this._ro = new ResizeObserver(() => { const w = this.clientWidth; if (w && (w < 700) !== this._tall) { this._tall = w < 700; this._draw(); } });
     }
     connectedCallback() { this._ro.observe(this); }
@@ -561,11 +593,12 @@
       if (this._c.source) {
         const sources = vm.sources.filter((s) => s.name === this._c.source);
         if (!sources.length) return `<div class="mut">Varmekilden »${esc(this._c.source)}« findes ikke</div>`;
-        vm = { ...vm, sources, rooms: sources.flatMap((s) => s.rooms), plan: sources[0].kind === 'hydronic' ? sources[0].plan : null };
+        vm = { ...vm, sources, rooms: sources.flatMap((s) => s.rooms), plan: sources[0].plan };
       }
       const main = vm.sources.find((s) => s.kind === 'hydronic') || null;
       const air = vm.sources.filter((s) => s.kind !== 'hydronic');
       const D = this.data(h, vm, main);
+      if (!main && air.length === 1 && this._c.floor) return this.band(h, vm, main, D) + this.airView(h, vm, air[0]);
       return this.band(h, vm, main, D) + this.svg(h, vm, main, air, D);
     }
     data(h, vm, main) {
@@ -803,19 +836,20 @@
       const c = this._c, p = this.pills(h, D, main); let g = '';
       const P = (x, y, w, v, ht = 36) => (v ? PILL(x, y, w, ht, v[0], v[1], v[2] || {}) : '');
       const cols = [{ n: 'ude nu', e: D.outdoor }, ...(c.extra || []).slice(0, 2).map((x) => ({ n: x.name, e: x.entity }))];
-      g += BOX(20, 20, 260, 100, cols.length > 1 ? 'Ude og andre steder' : 'Ude');
+      g += BOX(20, 20, 260, 116, cols.length > 1 ? 'Ude og andre steder' : 'Ude');
       cols.forEach((x, i) => { const cx = Math.round(20 + (260 * (i + 0.5)) / cols.length); g += TX(cx, 64, x.n, 'm c') + PILL(cx, 92, 230 / cols.length, 32, `${fmt(sv(h, x.e))} °C`, x.e); });
       if (main) {
         const sc = this.sc(main.name);
         g += BOX(20, 140, 260, 420, main.name, sc.model || 'varmepumpe');
         g += P(150, 211, 236, p.status, 30) + TX(150, 241, p.plan, 'm c', D.differs ? ` style="fill:${YE};font-weight:700"` : '');
         g += P(150, 260, 236, p.ud) + P(150, 345, 236, p.cop) + P(150, 430, 236, p.flow);
+        // Øverste række ved siden af »Ude«: varmt vand og energi i dag (jævner skærmen ud på bred skærm)
         if (D.f.dhw || p.tank) {
-          g += BOX(20, 580, 260, 120, 'Varmt vand') + TX(90, 628, 'beholder', 'm c') + TX(215, 628, 'laver nu', 'm c');
-          g += (p.tank ? P(90, 656, 110, p.tank) : TX(90, 662, '–', 'c')) + P(215, 656, 130, p.vv) + PATH('M150 560 V580', D.dhw ? 'hot' : 'idle');
+          g += BOX(300, 20, 260, 116, 'Varmt vand') + TX(370, 64, 'beholder', 'm c') + TX(495, 64, 'laver nu', 'm c');
+          g += (p.tank ? P(370, 92, 110, p.tank) : TX(370, 98, '–', 'c')) + P(495, 92, 130, p.vv) + PATH('M430 136 V160 H284', D.dhw ? 'hot' : 'idle', true);
         }
-        g += BOX(20, 716, 260, 116, 'Energi i dag') + TX(66, 764, 'kWh varme', 'm c') + TX(150, 764, 'kWh el', 'm c') + TX(234, 764, 'COP', 'm c');
-        g += P(66, 788, 78, p.vdag, 28) + P(150, 788, 78, p.edag, 28) + P(234, 788, 74, p.copd, 28) + TX(150, 822, p.igaar, 'm c');
+        g += BOX(580, 20, 300, 116, 'Energi i dag') + TX(636, 64, 'kWh varme', 'm c') + TX(730, 64, 'kWh el', 'm c') + TX(824, 64, 'COP', 'm c');
+        g += P(636, 88, 88, p.vdag, 28) + P(730, 88, 88, p.edag, 28) + P(824, 88, 80, p.copd, 28) + TX(730, 124, p.igaar, 'm c');
         // kredsløb: fremløb øverst, retur nederst; buffer, kortslutning og pumpe efter opsætningen
         const bp = !!c.bypass, bf = !!c.buffer;
         g += PATH('M280 260 H928', 'hot', true) + PATH('M930 470 H284', 'cold', true);
@@ -876,9 +910,89 @@
         g += PILL(1000, by + 76, 184, 34, ctx, sc.climate) + PILL(1000, by + 120, 184, 34, `el ${fmt(sc.el_power ? kW(h, sc.el_power) * 1000 : null, 0)} W`, sc.el_power) + TX(1000, by + 156, this.airPlan(h, s), 'm c');
         if (rows.length) { const ys = rows.map((r) => r.y); g += PATH(`M1100 ${by + 40} H1125 V${Math.max(...ys)}`, 'air'); for (const yy of ys) g += PATH(`M1125 ${yy} H1148`, 'air', true); }
       }
-      const H = Math.max(840, y + 10);
-      g += this.legend(300, Math.max(740, H - 90), 4, air.length) + TX(300, Math.max(806, H - 30), 'Tryk på en værdi for detaljer og historik', 'm');
+      const H = Math.max(main ? 680 : 840, y + 10);
+      g += this.legend(300, Math.max(main ? 590 : 740, H - 90), 4, air.length) + TX(300, Math.max(main ? 650 : 806, H - 30), 'Tryk på en værdi for detaljer og historik', 'm');
       return { w: 1500, h: H, g };
+    }
+    _setK(k) { this._k = +k || 0; this._draw(); }
+    // Timeforbruget (kWh el) fra statistikken – hentes højst hvert 10. minut
+    kwh(h, eid) {
+      const c = this._kw && this._kw.eid === eid ? this._kw : null;
+      if (eid && !this._kwBusy && (!c || Date.now() - c.t > 600e3)) {
+        this._kwBusy = true;
+        const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - 7);
+        h.callWS({ type: 'recorder/statistics_during_period', start_time: start.toISOString(), statistic_ids: [eid], period: 'hour', types: ['change'], units: { energy: 'kWh' } })
+          .then((r) => { this._kw = { eid, t: Date.now(), d: (r[eid] || []).map((x) => ({ t: typeof x.start === 'number' ? x.start : Date.parse(x.start), v: x.change })).filter((x) => x.v !== null && x.v >= 0) }; })
+          .catch(() => { this._kw = { eid, t: Date.now(), d: [] }; })
+          .finally(() => { this._kwBusy = false; this._draw(); });
+      }
+      return c ? c.d : null;
+    }
+    // Luft-luft på sin etage: varmepumpen, kWh el over tid og trinene til venstre – etagen som heatmap til højre
+    airView(h, vm, s) {
+      const c = this._c, sc = this.sc(s.name), k = this._k || 0;
+      const cl = sc.climate ? st(h, sc.climate) : null; const pa = at(h, s.plan);
+      const elW = sc.el_power ? kW(h, sc.el_power) : null;
+      const unit = !cl || cl.state === 'off' ? 'off' : (sc.defrost && isOn(h, sc.defrost)) ? 'defrost' : elW !== null && elW * 1000 >= (sc.running_w ?? 150) ? 'heat' : 'idle';
+      const UT = { heat: 'varmer', idle: 'pause', defrost: '❄ afrimer', off: 'slukket' };
+      // varmepumpen
+      let L = `<div class="b pvb"><div class="pvh">${esc(s.name)}<span class="mut sm"> · ${esc(sc.model || 'luft-luft')}</span></div>`
+        + `<div class="pvs"><span class="dot" style="background:${unit === 'heat' ? OR : unit === 'defrost' ? BL : '#9aa0a6'}"></span><span class="v" data-e="${esc(sc.climate || '')}">${UT[unit]}`
+        + `${cl && cl.attributes.temperature != null ? ` · setpunkt ${fmt(num(cl.attributes.temperature))} °C` : ''}${cl && cl.attributes.fan_mode ? ` · blæser ${esc(cl.attributes.fan_mode)}` : ''}</span></div>`
+        + `<div class="sm" style="margin:2px 0 6px">${esc(this.airPlan(h, s))}</div>`;
+      const stats = (c.stats || []).map((x) => {
+        const v = x.attribute ? at(h, x.entity)[x.attribute] : (st(h, x.entity) || {}).state;
+        const nv = num(v); const txt = v === undefined || v === null ? '–' : nv !== null && x.digits !== undefined ? fmt(nv, x.digits) : String(v);
+        return `<div>${esc(x.name || x.entity)}</div><div><span class="v" data-e="${esc(x.entity)}">${esc(txt)}${x.unit ? ' ' + esc(x.unit) : ''}</span></div>`;
+      }).join('');
+      if (stats) L += `<div class="grid">${stats}</div>`;
+      L += '</div>';
+      // kWh el over tid: sidste 24 timer (farvet efter pris) og planen de næste 12 timer, dagene under
+      const eid = sensorsOf(h, s).electricity_energy; const rows = this.kwh(h, eid);
+      const P = {}; for (const x of pa.history || []) P[Date.parse(x.t)] = x; for (const x of pa.plan || []) P[Date.parse(x.t)] = { ...P[Date.parse(x.t)], ...x };
+      const prs = Object.values(P).map((x) => x.price).filter((x) => x != null).sort((a, b) => a - b);
+      const q1 = prs[Math.floor(prs.length / 3)], q2 = prs[Math.floor((2 * prs.length) / 3)];
+      const pc = (x) => (!x ? '#9aa0a6' : x.blocked ? RE : x.price <= q1 ? GR : x.price <= q2 ? YE : OR);
+      const nowH = new Date(); nowH.setMinutes(0, 0, 0); const nk = nowH.getTime();
+      const got = {}; for (const r of rows || []) got[r.t] = r.v;
+      const slots = []; for (let i = -23; i <= 12; i++) { const t = nk + i * 3600e3; slots.push({ t, past: i <= 0, v: i <= 0 ? got[t] ?? null : (P[t] ? (P[t].el_kw ?? P[t].heat_kw ?? 0) : null), p: P[t] }); }
+      const mx = Math.max(0.3, ...slots.map((x) => x.v || 0));
+      const W = 420, HB = 90, bw = W / slots.length;
+      let svg = `<svg viewBox="0 0 ${W} ${HB + 20}" class="kw">`;
+      slots.forEach((x, i) => {
+        if (x.v === null) return; const ht = Math.max(1, (HB * x.v) / mx); const col = pc(x.p);
+        svg += `<rect x="${(i * bw + 1).toFixed(1)}" y="${(HB - ht).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${ht.toFixed(1)}" rx="1.5" fill="${x.past ? col : 'none'}" stroke="${col}" stroke-width="${x.past ? 0 : 1.5}"${x.past ? '' : ' stroke-dasharray="3 2"'}><title>${hh(new Date(x.t).getHours())}:00 · ${fmt(x.v, 2)} kWh el${x.past ? '' : ' (plan)'}${x.p && x.p.price != null ? ` · ${fmt(x.p.price, 2)} kr/kWh el` : ''}</title></rect>`;
+      });
+      svg += `<line x1="${(24 * bw).toFixed(1)}" y1="0" x2="${(24 * bw).toFixed(1)}" y2="${HB}" stroke="var(--primary-text-color)" stroke-width="1" stroke-dasharray="2 2"/>`;
+      for (const i of [0, 6, 12, 18, 24, 30]) svg += `<text x="${(i * bw).toFixed(1)}" y="${HB + 14}">${hh(new Date(nk + (i - 23) * 3600e3).getHours())}</text>`;
+      svg += '</svg>';
+      const d0 = new Date(); d0.setHours(0, 0, 0, 0); const t0 = d0.getTime();
+      const today = rows ? rows.filter((r) => r.t >= t0).reduce((a, r) => a + r.v, 0) : null;
+      const days = []; for (let i = 6; i >= 0; i--) { const a = t0 - i * 864e5; days.push({ a, v: rows ? rows.filter((r) => r.t >= a && r.t < a + 864e5).reduce((x, r) => x + r.v, 0) : null }); }
+      const dm = Math.max(0.5, ...days.map((x) => x.v || 0));
+      const dbar = days.map((x, i) => `<div class="db"><i style="height:${Math.round((48 * (x.v || 0)) / dm)}px${i === 6 ? ';background:' + OR : ''}"></i><span>${fmt(x.v, 1)}</span><span class="mut">${i === 6 ? 'i dag' : new Date(x.a).toLocaleDateString('da-DK', { weekday: 'short' }).replace('.', '')}</span></div>`).join('');
+      L += `<div class="b"><div class="pvh">kWh el<span class="mut sm"> · pr. time, 24 t tilbage og planen 12 t frem</span></div>${rows ? svg : '<div class="mut sm">henter …</div>'}`
+        + `<div class="sm"><span class="sw" style="background:${GR}"></span>billig <span class="sw" style="background:${YE}"></span>middel <span class="sw" style="background:${OR}"></span>dyr <span class="sw" style="background:${RE}"></span>rød · stiplet = plan</div>`
+        + `<div class="sm" style="margin-top:6px">I dag <b>${fmt(today, 1)} kWh el</b> · i går ${M(h, s.e('el_yesterday'), 1, 'kWh el')} · snit 7 døgn ${M(h, s.e('el_week'), 1, 'kWh el')}</div>`
+        + `<div class="dbs">${dbar}</div></div>`;
+      // trinene: hvad hvert trin gør og hvad det lærte trin bruger
+      const sp = c.steps;
+      if (sp && sp.entity) {
+        const cur = sv(h, sp.entity); const lw = sp.learned ? at(h, sp.learned)[sp.learned_attribute || 'w'] || {} : {};
+        const labels = sp.labels || []; const n = Math.max(labels.length, ...Object.keys(lw).map((x) => +x + 1), cur !== null ? cur + 1 : 0);
+        const wmx = Math.max(100, ...Object.values(lw).map(Number));
+        let tr = '';
+        for (let i = n - 1; i >= 0; i--) {
+          const w = num(lw[String(i)]);
+          tr += `<div class="tr${i === cur ? ' on' : ''}"><span class="tn">${i}</span><span class="tl2">${esc(labels[i] || '')}</span>`
+            + `<span class="tbar"><i style="width:${w !== null ? Math.round((100 * w) / wmx) : 0}%"></i></span><span class="tw">${w !== null ? `${fmt(w, 0)} W · ${fmt(w / 1000, 2)} kWh el/t` : '<span class="mut">ikke lært</span>'}</span></div>`;
+        }
+        L += `<div class="b"><div class="pvh">${esc(sp.title || 'Trin')}<span class="mut sm"> · nu ${cur !== null ? fmt(cur, 0) : '–'} · lært forbrug</span></div><div class="trs" data-e="${esc(sp.learned || sp.entity)}">${tr}</div></div>`;
+      }
+      const R = `<div class="sm" style="margin-bottom:6px">${(c.hours || [0, 3, 6, 12]).map((x) => `<span class="pill${x === k ? ' on' : ''}" data-k="${x}">${x === 0 ? 'nu' : `om ${x} t`}</span>`).join(' ')}</div>`
+        + floorSvg(h, vm, c.floor, k, { detail: true, unit, unitEntity: sc.climate })
+        + `<div class="sm mut" style="margin-top:6px">${PLEG} · rød prik = føler · ✎ ret gulvet</div>`;
+      return `<div class="pv"><div class="pvl">${L}</div><div class="pvr">${R}</div></div>`;
     }
     preText(h, s, short) {
       const w = at(h, s.plan).preload_window; if (!w || !w.fra) return '';

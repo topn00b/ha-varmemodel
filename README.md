@@ -237,6 +237,27 @@ sources:
 
 Med `source: <varmekildens navn>` viser kortet kun den varmekilde: dens rum, plan, tidslinje og afvigelser. Så kan anlægget deles op i én visning pr. varmepumpe eller etage. En luft-luft-kilde tegnes med varmepumpen til venstre og rummene ved siden af.
 
+**Luft-luft med plantegning:** med `source` sat til en luft-luft-kilde og `floor` (samme format som én etage i plantegningskortet) tegnes etagen som heatmap med varmepumpen ovenpå. Luftpilene strømmer, mens den varmer (grå i pause, blå ved afrimning). Hvert rum viser temperatur, gulv (tryk for at rette) og forudsigelsen om 3 og 6 timer. Til venstre står varmepumpen med valgfrie `stats`, kWh el pr. time (24 timer tilbage farvet efter pris, planen 12 timer frem stiplet) og pr. døgn, og valgfrit `steps`: hvad hvert trin gør og dets lærte forbrug.
+
+```yaml
+type: custom:varmemodel-anlaeg-card
+source: Air to air
+floor: {name: 1st floor, width: 700, height: 500, rooms: [...], units: [...]}
+stats:
+  - {name: Control, entity: input_select.control}
+  - {name: Defrosts today, entity: sensor.defrosts_today}
+steps:
+  entity: input_number.step          # trin nu
+  learned: sensor.watt_per_step      # lært forbrug pr. trin i en attribut
+  learned_attribute: w               # {"0": 180, "1": 260, ...} i W
+  labels: [quiet 20 °C, Low 20 °C, Mid 20 °C, High 20 °C]
+sources:
+  Air to air:
+    climate: climate.air_to_air
+    el_power: sensor.air_to_air_power
+    defrost: binary_sensor.air_to_air_defrost   # valgfri
+```
+
 Live COP vises kun i stabil drift (kompressoren har kørt i 10 min., ingen afrimning eller varmt vand) og sammenlignes med den forventede fra *COP i stabil drift*. Er den mere end 0,5 under i 30 min., markeres det.
 
 **Plantegningskortet** virker uden opsætning: så vises rummene som farvede felter pr. varmekilde. Med en plantegning tegner det rummene efter din tegning og farver dem efter temperaturen i forhold til rummets gulv og loft: blå under gulvet, lyseblå tæt på, grøn godt, gul tæt på loftet og rød over. Knapperne viser forudsigelsen om 3, 6 og 12 timer, og et tryk på et rum åbner føleren. Koordinaterne er i cm og kan tages fra en salgstegning. Med `source` vises varmekildens plan time for time og den anbefalede styring under tegningen. Det gør kortet til et anlægskort for netop den varmepumpe.
