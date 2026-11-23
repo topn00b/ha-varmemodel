@@ -31,11 +31,12 @@ def test_blocked_turns_off_at_once() -> None:
     assert not c.on and c.blocked_on == 0 and "blokeret" in c.reason
 
 
-def test_flow_held_one_hour() -> None:
+def test_flow_held_a_quarter() -> None:
+    """Fremløbet må justeres hvert kvarter (≥ 1 K) – det er tænd/sluk, der skånes."""
     c = step(Command(), 0, "d", True, 2, False)
-    c = step(c, 30 * M, "d", True, 4, False)
-    assert c.flow == 2 and "1 time" in c.reason
-    c = step(c, 61 * M, "d", True, 4, False)
+    c = step(c, 10 * M, "d", True, 4, False)
+    assert c.flow == 2 and "kvarter" in c.reason
+    c = step(c, 16 * M, "d", True, 4, False)
     assert c.flow == 4 and c.writes == 2
 
 

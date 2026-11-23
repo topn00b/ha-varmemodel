@@ -521,7 +521,7 @@ class CommandSensor(SourceEntity, SensorEntity):
             "reason": c.get("reason"),
             "since": _ts_local(since) if since and since > 0 else None,
             "writes_today": c.get("writes", 0), "switches_today": c.get("flips", 0), "heat_in_blocked_today": c.get("blocked_on", 0),
-            "within_limits": c.get("writes", 0) <= 20 and c.get("flips", 0) <= 8 and c.get("blocked_on", 0) == 0,
+            "within_limits": c.get("flips", 0) <= 8 and c.get("blocked_on", 0) == 0,
         }
 
 

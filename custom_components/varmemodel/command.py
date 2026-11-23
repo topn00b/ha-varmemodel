@@ -4,7 +4,7 @@ Reglerne:
 - aldrig varme i blokerede timer (slukker straks)
 - mindst 60 min. tændt og 30 min. slukket
 - højst én ændring pr. 15 min.
-- fremløbsmålet ændres kun, når det er holdt mindst 1 time, og forskellen er mindst 1 K
+- fremløbsmålet ændres højst hvert kvarter og kun ved mindst 1 K forskel (tænd/sluk er det, der skånes)
 
 Varmemodel styrer ikke selv noget: sensoren viser, hvad en automation bør sende, og tæller
 pr. døgn, hvor mange skrivninger og tænd/sluk-skift det giver.
@@ -18,7 +18,7 @@ from typing import Any
 MIN_ON = 3600
 MIN_OFF = 1800
 MIN_GAP = 900
-FLOW_HOLD = 3600
+FLOW_HOLD = 900  # fremløbet må justeres hvert kvarter (≥ 1 K); tænd/sluk er det, der skånes
 DEADBAND = 1
 
 
@@ -80,7 +80,7 @@ def step(c: Command, now: float, day: str, want_on: bool, want_flow: int | None,
             n.writes += 1
             reason = "nyt fremløb"
         else:
-            reason = "holder fremløbet mindst 1 time" if now - n.since_flow < FLOW_HOLD else f"højst én ændring pr. {min_gap / 60:.0f} min."
+            reason = "holder fremløbet mindst et kvarter" if now - n.since_flow < FLOW_HOLD else f"højst én ændring pr. {min_gap / 60:.0f} min."
     if n.on and blocked:
         n.blocked_on += 1
     n.reason = reason

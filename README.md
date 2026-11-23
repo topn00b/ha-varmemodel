@@ -122,7 +122,7 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 
 **Varmemodel styrer varmepumpen (vandbåren, 0.13.0):** vælg også *Tænd/sluk* (varmepumpens climate-entitet) i opsætningen. Så får kilden kontakten *Varmemodel styrer varmepumpen*: Varmemodel tænder (varme) og slukker efter den anbefalede styring (mindst 60 min. tændt, 30 min. slukket, højst én ændring pr. 15 min., slukker straks i blokerede timer, højst 10 skift pr. døgn) og skriver fremløbet. Termostater, varmt vand og cirkulation styres fortsat af egne automationer; slå din egen tænd/sluk-automation fra, mens kontakten er til, og lad en vagt slå kontakten fra og din automation til ved fejl.
 
-**Varmemodel styrer fremløbet (vandbåren, 0.12.0):** vælg *Fremløbsmål* (fx varmepumpens climate-entitet) i varmekildens opsætning. Så får kilden kontakten *Varmemodel styrer fremløb*. Når den er til, skriver Varmemodel planens fremløbsmål – kun når varmepumpen står i varme-tilstand, aldrig i blokerede timer, kun ved en ændring på mindst 1 °C og højst 20 gange pr. døgn. Tænd/sluk og termostater styres stadig af din egen automation (trin P1 i en gradvis overtagelse). Uden planlagt varme lige nu bruges planens næste fremløb, så en varmepumpe, der startes af anden styring, kører lavt.
+**Varmemodel styrer fremløbet (vandbåren, 0.12.0):** vælg *Fremløbsmål* (fx varmepumpens climate-entitet) i varmekildens opsætning. Så får kilden kontakten *Varmemodel styrer fremløb*. Når den er til, skriver Varmemodel planens fremløbsmål – kun når varmepumpen står i varme-tilstand, aldrig i blokerede timer, kun ved en ændring på mindst 1 °C og højst hvert kvarter (loft 96 pr. døgn som sikring). Tænd/sluk og termostater styres stadig af din egen automation (trin P1 i en gradvis overtagelse). Uden planlagt varme lige nu bruges planens næste fremløb, så en varmepumpe, der startes af anden styring, kører lavt.
 
 **Energitiltag pr. etage (0.11.1):** skriv varmekildens navn, et rums navn eller »1. sal« i kalender-begivenhedens titel eller beskrivelse, så måles tiltaget på den etage. Vandbåren kilde: etagens varmetab (W/K) fra den målte varme. Luft-luft: etagens el pr. grad (W el/K) – varmen måles ikke, men ændringen i % viser, om tiltaget virker. Uden etage måles på den vandbårne kilde.
 
@@ -147,7 +147,7 @@ Reglerne:
 - højst én ændring pr. 15 min.
 - fremløbsmålet holdes mindst 1 time og ændres med mindst 1 °C
 
-Attributterne tæller pr. døgn skrivninger, tænd/sluk-skift og varme i blokerede timer. *within_limits* er sand, når der er højst 20 skrivninger, højst 8 skift og ingen varme i blokerede timer.
+Attributterne tæller pr. døgn skrivninger, tænd/sluk-skift og varme i blokerede timer. *within_limits* er sand, når der er højst 8 tænd/sluk-skift og ingen varme i blokerede timer (justering af fremløbet skåner ikke noget).
 
 **Nødplan:** mangler elprisen helt, planlægges med flad pris, så rummene stadig holdes over komfortgulvet. Det står i begrundelsen, og *inputs_ok* er falsk.
 

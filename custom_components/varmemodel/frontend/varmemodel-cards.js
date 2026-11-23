@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.14.0';
+  const VERSION = '0.14.1';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -784,7 +784,7 @@
       return rows + `<details id="vmzd"><summary>planens begrundelse ▾</summary><div class="sm" style="margin-top:4px">${esc(pa.reason || '')}<br>`
         + (hyd[0] ? `Behov ${fmt(pa.demand_kwh, 0)} kWh varme · plan ${fmt(pa.heat_kwh, 0)} kWh varme · ${fmt(pa.el_kwh, 0)} kWh el` : `Plan ${fmt(pa.el_kwh, 0)} kWh el`) + ` · ca. ${fmt(pa.cost_kr, 0)} kr over ${pa.horizon_h ?? '–'} timer<br>`
         + `Rum må svinge ${fmt(pa.comfort_offset)} °C over gulvet · må gå ${fmt(pa.red_allowance)} °C under gulvet i røde timer · maks. pause ${pa.max_pause ?? '–'} timer<br>`
-        + (() => { if (!hyd[0]) return ''; const ca = at(h, hyd[0].e('command')); return ca.reason !== undefined ? `Anbefalet styring: ${esc(ca.reason)} · i dag ${ca.writes_today ?? 0} skrivninger (højst 20) og ${ca.switches_today ?? 0} tænd/sluk (højst 8)<br>` : ''; })()
+        + (() => { if (!hyd[0]) return ''; const ca = at(h, hyd[0].e('command')); return ca.reason !== undefined ? `Anbefalet styring: ${esc(ca.reason)} · i dag ${ca.writes_today ?? 0} justeringer af fremløbet og ${ca.switches_today ?? 0} tænd/sluk (højst 8)<br>` : ''; })()
         + `Frisk plan i dag: ${fmt(pa.fresh_pct_today, 0)} % af kvartererne</div></details>`;
     }
     alerts(h, vm, D) {
@@ -805,7 +805,7 @@
         if ((a.rooms_held || []).length) w.push(['⚠️', `${s.name}: bruger sidst kendte temperatur for ${a.rooms_held.join(', ')} (føleren svarer ikke)`]);
         for (const [r, e] of Object.entries(a.rooms_estimated || {})) w.push(['❗', `Mangler data: ${r} har ikke målt siden ${whenM(e['sidste_måling'])} (${e.minutter} min.) – planen bruger forudsigelsen ≈${fmt(e['forudsagt'])} °C. Tjek føleren.`]);
         if ((a.rooms_skipped || []).length) w.push(['❗', `${s.name}: ${a.rooms_skipped.join(', ')} er ikke med i planen (føler eller rummodel mangler)`]);
-        const ca = at(h, s.e('command')); if (ca.within_limits === false) w.push(['⚠️', `${s.name}: styringen har i dag ${ca.writes_today} skrivninger og ${ca.switches_today} tænd/sluk (grænse 20 og 8)`]);
+        const ca = at(h, s.e('command')); if (ca.within_limits === false) w.push(['⚠️', `${s.name}: styringen har i dag ${ca.switches_today} tænd/sluk (grænse 8)`]);
         // Retningen afgør forklaringen: koldere end ventet = varme der slipper ud; varmere = varme der kommer udefra
         for (const [r, k] of Object.entries(a.rooms_check || {})) {
           if (!k.flag) continue;
