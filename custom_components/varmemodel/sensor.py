@@ -517,6 +517,11 @@ class CommandSensor(SourceEntity, SensorEntity):
         return {
             # Vandbåren: fremløbsmålet. Luft-luft: setpunkt.
             "flow_setpoint": c.get("flow") if self.src.kind == SOURCE_HYDRONIC else None,
+            # Blød start: det fremløb, der faktisk er skrevet nu (planens mål nås med +2 °C pr. kvarter)
+            "soft_start_flow": (self.coordinator.air.get(f"hydro:{self.src.sid}") or {}).get("soft_now")
+            if self.src.kind == SOURCE_HYDRONIC else None,
+            # Søg laveste fremløb: mål, plan, status, grund, rummenes margen/tendens, lært pr. ude-bånd og log
+            "flow_search": self.coordinator.flow_search(self.src) if self.src.kind == SOURCE_HYDRONIC else None,
             "setpoint": c.get("setpoint"), "fan_mode": c.get("fan_mode"), "preset": c.get("preset"), "step": c.get("step"),
             "reason": c.get("reason"),
             "since": _ts_local(since) if since and since > 0 else None,

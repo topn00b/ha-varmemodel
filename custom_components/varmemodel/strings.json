@@ -18,6 +18,8 @@
           "measures_calendar": "Calendar with energy measures",
           "plant_room": "Plant room temperature",
           "plant_room_loss": "Plant room heat loss (W/K)",
+          "block_now_entity": "Block right now",
+          "block_now_states": "Blocking states",
           "ground_temp": "Ground temperature"
         },
         "data_description": {
@@ -28,6 +30,8 @@
           "measures_calendar": "Each event is a measure (e.g. sealing). Heat loss is computed before and after its date.",
           "plant_room": "An unheated room (basement/utility room) warmed only by losses from the heating installation. Its loss to the ground is waste heat counted by the heat meter, so it is subtracted before the house heat loss is fitted, and the plan adds it to the demand.",
           "plant_room_loss": "Fixed heat loss of that room to the ground and outside (U·A of walls, floor and door). Kept fixed because it cannot be separated from the house heat loss with little data; a free fit is shown as diagnostics.",
+          "block_now_entity": "Entity that blocks heating right now on top of the hourly schedule – e.g. a price status that is red when the quarter-hour price is above your cap. Heat pumps are stopped/not started while it is in one of the states below.",
+          "block_now_states": "Comma separated, e.g. “red, on”.",
           "ground_temp": "Typical ground temperature at basement depth (about 8–10 °C in Northern Europe)."
         }
       }
@@ -54,6 +58,8 @@
           "measures_calendar": "Calendar with energy measures",
           "plant_room": "Plant room temperature",
           "plant_room_loss": "Plant room heat loss (W/K)",
+          "block_now_entity": "Block right now",
+          "block_now_states": "Blocking states",
           "ground_temp": "Ground temperature"
         },
         "data_description": {
@@ -64,6 +70,8 @@
           "measures_calendar": "Each event is a measure (e.g. sealing). Heat loss is computed before and after its date.",
           "plant_room": "An unheated room (basement/utility room) warmed only by losses from the heating installation. Its loss to the ground is waste heat counted by the heat meter, so it is subtracted before the house heat loss is fitted, and the plan adds it to the demand.",
           "plant_room_loss": "Fixed heat loss of that room to the ground and outside (U·A of walls, floor and door). Kept fixed because it cannot be separated from the house heat loss with little data; a free fit is shown as diagnostics.",
+          "block_now_entity": "Entity that blocks heating right now on top of the hourly schedule – e.g. a price status that is red when the quarter-hour price is above your cap. Heat pumps are stopped/not started while it is in one of the states below.",
+          "block_now_states": "Comma separated, e.g. “red, on”.",
           "ground_temp": "Typical ground temperature at basement depth (about 8–10 °C in Northern Europe)."
         }
       }
@@ -208,7 +216,15 @@
         "state": {
           "fra": "off",
           "til": "on",
-          "test": "test (every other start)"
+          "test": "test (every other start)",
+          "lavest": "seek lowest flow"
+        }
+      },
+      "air_start": {
+        "name": "Start-up",
+        "state": {
+          "rolig": "calm (30–60 min longer)",
+          "hurtig": "fast"
         }
       }
     },

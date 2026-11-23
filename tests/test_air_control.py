@@ -124,3 +124,13 @@ def test_ventilation_effect_compares_same_steps() -> None:
         eff = eff_update(eff, "Low 20|vent fra", 0.10, 0.1)
     assert VarmemodelCoordinator._vent_effect(eff) == 20
     assert VarmemodelCoordinator._vent_effect({}) is None
+
+
+def test_choose_step_calm_up_every() -> None:
+    """Rolig opstart: højst ét trin op pr. halve time."""
+    from custom_components.varmemodel.air_control import choose_step
+
+    i, ch, _ds, why = choose_step(3, 8, {"A": -0.2}, False, 10_000.0, 10_000.0 - 1000, None, up_every=1800)
+    assert i == 3 and "halve time" in why
+    i, ch, _ds, why = choose_step(3, 8, {"A": -0.2}, False, 10_000.0, 10_000.0 - 1900, None, up_every=1800)
+    assert i == 4

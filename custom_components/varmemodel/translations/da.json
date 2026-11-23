@@ -18,6 +18,8 @@
           "measures_calendar": "Kalender med energitiltag",
           "plant_room": "Varmecentralens rumtemperatur",
           "plant_room_loss": "Varmecentralens varmetab (W/K)",
+          "block_now_entity": "Blokering lige nu",
+          "block_now_states": "Blokerende tilstande",
           "ground_temp": "Jordtemperatur"
         },
         "data_description": {
@@ -28,6 +30,8 @@
           "measures_calendar": "Hver begivenhed er et tiltag (fx tætning). Varmetabet regnes før og efter datoen.",
           "plant_room": "Et uopvarmet rum (kælder/teknikrum), der kun varmes af tab fra varmeinstallationen. Rummets tab til jorden er spildvarme, som varmemåleren tæller med. Det trækkes fra, før husets varmetab fittes, og planen lægger det til behovet.",
           "plant_room_loss": "Rummets faste varmetab til jord og ude (U·A for vægge, gulv og dør). Holdes fast, fordi det ikke kan skilles fra husets varmetab med få data; et frit fit vises som diagnose.",
+          "block_now_entity": "Entitet, der blokerer varme lige nu ud over timeplanen – fx en prisstatus, der er rød, når kvarterets pris er over dit loft. Varmepumperne slukkes/startes ikke, mens den står i en af tilstandene nedenfor.",
+          "block_now_states": "Kommasepareret, fx »rød, on«.",
           "ground_temp": "Typisk jordtemperatur i kælderdybde (ca. 8–10 °C i Danmark)."
         }
       }
@@ -54,6 +58,8 @@
           "measures_calendar": "Kalender med energitiltag",
           "plant_room": "Varmecentralens rumtemperatur",
           "plant_room_loss": "Varmecentralens varmetab (W/K)",
+          "block_now_entity": "Blokering lige nu",
+          "block_now_states": "Blokerende tilstande",
           "ground_temp": "Jordtemperatur"
         },
         "data_description": {
@@ -64,6 +70,8 @@
           "measures_calendar": "Hver begivenhed er et tiltag (fx tætning). Varmetabet regnes før og efter datoen.",
           "plant_room": "Et uopvarmet rum (kælder/teknikrum), der kun varmes af tab fra varmeinstallationen. Rummets tab til jorden er spildvarme, som varmemåleren tæller med. Det trækkes fra, før husets varmetab fittes, og planen lægger det til behovet.",
           "plant_room_loss": "Rummets faste varmetab til jord og ude (U·A for vægge, gulv og dør). Holdes fast, fordi det ikke kan skilles fra husets varmetab med få data; et frit fit vises som diagnose.",
+          "block_now_entity": "Entitet, der blokerer varme lige nu ud over timeplanen – fx en prisstatus, der er rød, når kvarterets pris er over dit loft. Varmepumperne slukkes/startes ikke, mens den står i en af tilstandene nedenfor.",
+          "block_now_states": "Kommasepareret, fx »rød, on«.",
           "ground_temp": "Typisk jordtemperatur i kælderdybde (ca. 8–10 °C i Danmark)."
         }
       }
@@ -204,11 +212,19 @@
         "name": "Lameller side"
       },
       "soft_start": {
-        "name": "Blød start",
+        "name": "Fremløb efter start",
         "state": {
           "fra": "fra",
           "til": "til",
-          "test": "test (hver anden start)"
+          "test": "test (hver anden start)",
+          "lavest": "søg laveste fremløb"
+        }
+      },
+      "air_start": {
+        "name": "Opstart",
+        "state": {
+          "rolig": "rolig (30–60 min. længere)",
+          "hurtig": "hurtig"
         }
       }
     },

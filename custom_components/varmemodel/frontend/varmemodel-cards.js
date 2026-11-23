@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.14.4';
+  const VERSION = '0.15.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -254,7 +254,8 @@
 
   // Indstillinger for en Varmemodel-enhed som rigtige kontroller (dropdown, tal, tid, kontakt), grupperet
   const SET_GROUPS = [
-    ['Styring', ['air_control', 'air_boost']],
+    ['Styring', ['air_control', 'air_boost', 'air_start', 'hydro_control', 'flow_control']],
+    ['Fremløb', ['soft_start']],
     ['Støj: maks. blæser', ['air_fan_day', 'air_fan_night', 'air_night_start', 'air_night_end']],
     ['Lameller', ['air_swing_v', 'air_swing_h']],
   ];
@@ -262,7 +263,11 @@
   const SET_NAMES = {
     air_control: 'Varmemodel styrer', air_boost: 'Jeg fryser', flow_control: 'Varmemodel styrer fremløb', hydro_control: 'Varmemodel styrer varmepumpen', air_fan_day: 'Maks. blæser dag', air_fan_night: 'Maks. blæser nat',
     air_night_start: 'Nat begynder', air_night_end: 'Nat slutter', air_swing_v: 'Lameller op/ned', air_swing_h: 'Lameller side',
+    air_start: 'Opstart', soft_start: 'Fremløb efter start',
   };
+  // Valgenes navne på kortet (værdien, der gemmes, er uændret)
+  const OPT_NAMES = { fra: 'fra (planens fremløb)', til: 'blød start', test: 'test: hver anden blød', lavest: 'søg laveste fremløb',
+    rolig: 'rolig (30–60 min. længere)', hurtig: 'hurtig' };
   function settingsPanel(h, src, title = 'Indstillinger') {
     let o = '';
     for (const [g, keys] of SET_GROUPS) {
@@ -270,7 +275,7 @@
         const eid = src.e(k); const s0 = st(h, eid); if (!s0) return '';
         const a = s0.attributes || {}; const dom = eid.split('.')[0]; const name = SET_NAMES[k] || String(a.friendly_name || k).replace(src.name, '').trim();
         let ctl = '';
-        if (dom === 'select') ctl = `<select data-svc="select.select_option" data-eid="${esc(eid)}">${(a.options || []).map((x) => `<option${x === s0.state ? ' selected' : ''}>${esc(x)}</option>`).join('')}</select>`;
+        if (dom === 'select') ctl = `<select data-svc="select.select_option" data-eid="${esc(eid)}">${(a.options || []).map((x) => `<option value="${esc(x)}"${x === s0.state ? ' selected' : ''}>${esc(OPT_NAMES[x] || x)}</option>`).join('')}</select>`;
         else if (dom === 'number') ctl = `<input type="number" data-svc="number.set_value" data-eid="${esc(eid)}" value="${esc(s0.state)}" min="${a.min}" max="${a.max}" step="${a.step}"><span class="mut sm"> ${esc(a.unit_of_measurement || '')}</span>`;
         else if (dom === 'time') ctl = `<input type="time" data-svc="time.set_value" data-eid="${esc(eid)}" value="${esc(String(s0.state).slice(0, 5))}">`;
         else if (dom === 'switch') ctl = `<button class="tg2${s0.state === 'on' ? ' on' : ''}" data-act="${esc(eid)}">${s0.state === 'on' ? 'til' : 'fra'}</button>`;
@@ -569,7 +574,7 @@
         o += row('Periode', `${pa.horizon_h ?? '–'} timer · ca. ${fmt(pa.cost_kr, 0)} kr`);
         o += row('Jeg fryser', pa.boost ? `+${fmt(pa.boost_delta)} °C til ${when(pa.boost_until)}` : 'fra');
         const ce = s.e('command'); const ca = at(h, ce);
-        if (ce) o += row('Anbefalet styring', `<span class="v" data-e="${esc(ce)}">${(st(h, ce) || {}).state === 'heat' ? 'varme' : 'slukket'}${ca.flow_setpoint != null ? ` · fremløb ${fmt(ca.flow_setpoint, 0)} °C` : ''}</span> <span class="mut sm">${esc(ca.reason || '')}</span>`);
+        if (ce) o += row('Anbefalet styring', `<span class="v" data-e="${esc(ce)}">${(st(h, ce) || {}).state === 'heat' ? 'varme' : 'slukket'}${ca.soft_start_flow != null && ca.flow_setpoint != null ? ` · blød start ${fmt(ca.soft_start_flow, 0)} → ${fmt(ca.flow_setpoint, 0)} °C (+2 °C pr. kvarter)` : ca.flow_setpoint != null ? ` · fremløb ${fmt(ca.flow_setpoint, 0)} °C` : ''}</span> <span class="mut sm">${esc(ca.reason || '')}</span>`);
         if (ce) o += row('I dag', `${ca.writes_today ?? 0} skrivninger · ${ca.switches_today ?? 0} tænd/sluk ${ca.within_limits === false ? '<span class="amber">over grænsen</span>' : '<span class="green">inden for grænsen</span>'}`);
         o += row('Frisk plan i dag', `${fmt(pa.fresh_pct_today, 0)} % af kvartererne`);
         o += '</div>';
@@ -651,6 +656,7 @@
   .sr input[type=number]{width:70px}
   .tg2{font:inherit;font-size:13px;font-weight:600;border-radius:12px;padding:3px 14px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer}
   .tg2.on{background:${OR};border-color:${OR};color:#fff}
+  .ax{font-size:11px;fill:var(--secondary-text-color,#999)}
   .pv2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:8px;margin-top:10px;align-items:start}
   .bento{display:grid;gap:8px}
   .bt{position:relative;border-radius:12px;padding:10px 12px;background:color-mix(in srgb,var(--c) 16%,var(--card-background-color));border:1px solid color-mix(in srgb,var(--c) 45%,transparent);border-left:5px solid var(--c);min-height:118px;display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -683,7 +689,7 @@
       const air = vm.sources.filter((s) => s.kind !== 'hydronic');
       const D = this.data(h, vm, main);
       if (!main && air.length === 1) return this.band(h, vm, main, D) + this.airView(h, vm, air[0]);
-      return this.band(h, vm, main, D) + this.svg(h, vm, main, air, D);
+      return this.band(h, vm, main, D) + this.svg(h, vm, main, air, D) + this.flowPanel(h, main);
     }
     data(h, vm, main) {
       const D = { outdoor: (at(h, vm.status)['følere'] || {}).ude || null, f: {}, cfg: {}, pa: {}, pst: 'unknown' };
@@ -839,7 +845,14 @@
       p.status = [s0, cfg.climate || f.compressor, { bg }];
       p.plan = `plan: ${PS[D.pst] || D.pst}${D.pst === 'heat' && pa.flow != null ? ` · fremløb ${fmt(pa.flow, 1)} °C` : ''}`;
       p.ind = [`ind ${fmt(D.ret)} °C`, f.return_temp];
-      p.ud = [`ud ${fmt(D.flow)} °C${D.pst === 'heat' && pa.flow != null ? ' · mål ' + fmt(pa.flow) : ''}`, f.flow_temp];
+      // Målet, der faktisk står i varmepumpen (fremløbsmålet), ikke planens – under blød start: »mål 26 → 35«
+      const tgE = f.flow_target, tg = tgE ? (tgE.startsWith('climate.') ? at(h, tgE).temperature : sv(h, tgE)) : null;
+      const soft = at(h, main.e('command')).soft_start_flow;
+      const running = !(D.clim && D.clim.state === 'off');
+      const fsx = at(h, main.e('command')).flow_search;
+      const mål = tg != null && running ? (fsx && fsx.aktiv ? `${fmt(tg, 0)} (søger lavest)` : soft != null && pa.flow != null ? `${fmt(tg, 0)} → ${fmt(pa.flow, 0)}` : fmt(tg, 0))
+        : (D.pst === 'heat' && pa.flow != null ? fmt(pa.flow) : null);
+      p.ud = [`ud ${fmt(D.flow)} °C${mål != null ? ' · mål ' + mål : ''}`, tgE || f.flow_temp];
       p.cop = [D.steady ? `${fmt(D.hpk)} kW · COP ${fmt(D.live)} / ${fmt(D.exp)}` : `${fmt(D.hpk)} kW · COP –`, cfg.heat_power || f.heat_energy, { bg: D.lowMin >= 30 ? YE : null }];
       const fr = sv(h, cfg.flow_rate);
       p.flow = [`${fr === null ? '–' : fmt(fr)} L/min · ΔT ${D.flow !== null && D.ret !== null ? fmt(D.flow - D.ret) : '–'} K`, cfg.flow_rate || f.flow_temp];
@@ -1202,6 +1215,52 @@
         + `<div class="sm mut bleg" style="margin-top:8px"><span class="grad"></span><span>under gulvet</span><span>godt</span><span>loftet</span> · kurve: 12 t målt, stiplet = forudsigelse · ✎ ret gulvet</div>`;
       // Venstre: varmepumpen, ventilationen og indstillingerne. Højre: etagen og under den kWh og stigen side om side
       return `<div class="pv"><div class="pvl">${L}</div><div class="pvr">${R}<div class="pv2">${K}${S}</div></div></div>`;
+    }
+    // Søg laveste fremløb: målet nu mod planen, hvorfor, rummenes margen og tendens, lært pr. udetemperatur og 24 t-graf
+    flowPanel(h, main) {
+      if (!main) return '';
+      const set = settingsPanel(h, main, 'Indstillinger');
+      const ca = at(h, main.e('command')); const fs = ca.flow_search;
+      if (!fs) return set ? `<div class="pv2">${set}</div>` : '';
+      const SC = { holder: ['holder', null], hæver: ['hæver', '#e0702a'], sænker: ['sænker', '#3b8ad8'], løfter: ['løfter (blød start)', '#e0a02a'], start: ['starter', '#e0a02a'] };
+      const [stxt, scol] = SC[fs.status] || [fs.status || '–', null];
+      const chip = `<span class="pill" style="${scol ? `background:${scol};color:#fff;border-color:${scol}` : ''}">${esc(stxt)}</span>`;
+      const nx = fs.næste_ændring ? new Date(fs.næste_ændring) : null;
+      const hhmm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      // Graf: de seneste 24 timer – målet (fuld) og planens fremløb (stiplet)
+      const log = (fs.log || []).map((x) => ({ t: x[0] * 1000, v: x[1], p: x[2], w: x[3] }));
+      const now = Date.now(), t0 = now - 24 * 3600 * 1000;
+      const W = 600, H = 150, L = 34, R = 8, T = 10, B = 22;
+      const vals = log.flatMap((x) => [x.v, x.p]).concat([fs.mål, fs.plan]).filter((x) => x !== null && x !== undefined);
+      const lo = Math.floor(Math.min(20, ...vals) / 2) * 2, hi = Math.ceil(Math.max(36, ...vals) / 2) * 2;
+      const X = (t) => L + ((Math.max(t, t0) - t0) / (now - t0)) * (W - L - R), Y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+      const stepPath = (key, cur) => { const pts = log.filter((x) => x[key] !== null && x[key] !== undefined && x.t >= t0 - 86400000);
+        if (!pts.length && cur == null) return ''; let d = ''; let last = null;
+        for (const x of pts) { const xx = X(x.t), yy = Y(x[key]); d += last === null ? `M${xx},${yy}` : `H${xx}V${yy}`; last = yy; }
+        if (cur != null) { const yy = Y(cur); d += last === null ? `M${X(t0)},${yy}H${X(now)}` : `H${X(now)}V${yy}`; } else d += `H${X(now)}`;
+        return d; };
+      let g = '';
+      for (let v = lo; v <= hi; v += 2) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--divider-color,#888)" stroke-width="0.5"/>`
+        + (v % 4 === 0 ? `<text x="${L - 4}" y="${Y(v) + 4}" text-anchor="end" class="ax">${v}</text>` : '');
+      for (let k = 0; k <= 24; k += 6) { const t = t0 + k * 3600000; g += `<text x="${X(t)}" y="${H - 6}" text-anchor="middle" class="ax">${hhmm(new Date(t))}</text>`; }
+      g += `<path d="${stepPath('p', fs.plan)}" fill="none" stroke="var(--secondary-text-color,#999)" stroke-width="1.5" stroke-dasharray="5 4"/>`;
+      g += `<path d="${stepPath('v', fs.mål)}" fill="none" stroke="${OR}" stroke-width="2.5"/>`;
+      for (const x of log.filter((z) => z.t >= t0)) g += `<circle cx="${X(x.t)}" cy="${Y(x.v)}" r="3" fill="${OR}"><title>${esc(hhmm(new Date(x.t)))}: ${fmt(x.v, 0)} °C – ${esc(x.w || '')}</title></circle>`;
+      const chart = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="Fremløbsmål og planens fremløb de seneste 24 timer">${g}</svg>`
+        + `<div class="sm mut"><span style="color:${OR}">━</span> mål i varmepumpen · <span>╌</span> planens fremløb · prik = ændring (hold musen over for grunden)</div>`;
+      // Rummene: margen over gulvet, målt tendens og om 3 timer
+      const rows = (fs.rum || []).map((r) => { const c3 = r.om_3t < 0.1 ? '#e0702a' : (r.om_3t >= 0.5 ? '#2e9d5b' : null);
+        return `<tr><td>${esc(r.navn)}</td><td class="n">${r.margen >= 0 ? '+' : ''}${fmt(r.margen, 1)}</td><td class="n">${r.tendens >= 0 ? '+' : ''}${fmt(r.tendens, 2)}</td>`
+          + `<td class="n"${c3 ? ` style="color:${c3};font-weight:600"` : ''}>${r.om_3t >= 0 ? '+' : ''}${fmt(r.om_3t, 1)}</td></tr>`; }).join('');
+      const tbl = rows ? `<div class="wrap"><table><tr><th>Rum</th><th class="n">Over gulvet °C</th><th class="n">Tendens °C/t</th><th class="n">Om 3 t</th></tr>${rows}</table></div>` : '<div class="sm mut">Rummene læses ved næste planlægning.</div>';
+      const lært = Object.entries(fs.lært || {}).sort((a, b) => +a[0] - +b[0]).map(([k, v]) => `${String(+k).replace('-', '−')}…${String(+k + 5).replace('-', '−')} °C ude: <b>${fmt(v, 0)} °C</b>`).join(' · ');
+      const box = `<div class="b"><div class="pvh">Søg laveste fremløb ${chip}</div>`
+        + `<div class="pvs" style="margin:4px 0">Mål nu <b>${fmt(fs.mål, 0)} °C</b><span class="mut sm"> · planens fremløb ${fmt(fs.plan, 0)} °C${fs.mål != null && fs.plan != null && fs.plan > fs.mål ? ` · ${fmt(fs.plan - fs.mål, 0)} °C lavere` : ''}</span></div>`
+        + `<div class="sm">${esc(fs.grund || '')}${nx ? ` · næste mulige ændring kl. ${hhmm(nx)}` : ''}</div>`
+        + chart + tbl
+        + `<div class="sm" style="margin-top:6px">Lært laveste fremløb: ${lært || '<span class="mut">endnu intet (læres, når målet har holdt alle rum over gulvet i 3 timer)</span>'}</div>`
+        + `<div class="sm mut" style="margin-top:4px">+1 °C pr. time, når et rum er på vej under gulvet inden for 3 timer · +2 °C pr. halve time, når et rum er under gulvet og ikke på vej op · −1 °C hver anden time, når alle rum er mindst 0,5 °C over gulvet og stabile · aldrig over planens fremløb</div></div>`;
+      return `<div class="pv2">${box}${set}</div>`;
     }
     airPlan(h, s) {
       const ps = st(h, s.plan); if (!ps) return 'plan: –';

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from functools import partial
 import logging
 from math import cos, radians, sin
+import asyncio
 import time
 from statistics import median
 from typing import Any
@@ -17,7 +18,7 @@ from homeassistant.components.recorder.statistics import statistics_during_perio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
-from homeassistant.helpers.event import async_call_later, async_track_time_change
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -63,6 +64,9 @@ from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
 from .planner import FLOW_LOW_OPEN_S, PlanHour, PlanRoom, SourceModel, estimate_room, flow_boost_step, make_air_plan, make_plan, simulate_rooms
 from .const import (
     AIR_BOOST,
+    AIR_SOFT_UP_EVERY,
+    AIR_SOFT_URGENT,
+    AIR_START_OPTIONS,
     AIR_SWITCH,
     AIR_TIMES,
     CONF_ASSIST,
@@ -120,6 +124,15 @@ from .const import (
     CONF_PRICE_ATTR,
     CONF_BLOCK_ENTITY,
     CONF_BLOCK_CODES,
+    CONF_BLOCK_NOW_ENTITY,
+    CONF_BLOCK_NOW_STATES,
+    DEFAULT_BLOCK_NOW_STATES,
+    LOW_DOWN_HOLD,
+    LOW_DOWN_MARGIN,
+    LOW_LEARN_HOLD,
+    LOW_RESERVE,
+    LOW_UP_HOLD,
+    LOW_URGENT_HOLD,
     CONF_MAX_PAUSE,
     CONF_COMFORT_OFFSET,
     CONF_BOOST_ENTITY,
@@ -242,6 +255,7 @@ class VarmemodelCoordinator:
         self.device_ids: dict[str | None, str] = {}  # underpunkt (None = huset) -> enheds-id i HA
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[CALLBACK_TYPE] = []
+        self._replan_lock = asyncio.Lock()  # én planlægning ad gangen (planlagt og »blokering lige nu«)
         self._build_sources()
 
     # ------------------------------------------------------------ konfiguration
@@ -336,6 +350,9 @@ class VarmemodelCoordinator:
             async_track_time_change(self.hass, self._on_night, hour=CALIBRATION_HOUR, minute=CALIBRATION_MINUTE, second=0)
         )
         self._unsubs.append(async_track_time_change(self.hass, self._on_replan, minute=[2, 17, 32, 47], second=0))
+        if beid := self._id(CONF_BLOCK_NOW_ENTITY):
+            # Blokering lige nu (fx prisloft pr. kvarter): planlæg straks, når den skifter, så varmepumperne følger med
+            self._unsubs.append(async_track_state_change_event(self.hass, [beid], self._on_block_now))
         self._unsubs.append(async_call_later(self.hass, 45, self._on_replan))
         self._unsubs.append(async_call_later(self.hass, 90, self._on_today))
         self._unsubs.append(async_track_time_change(self.hass, self._on_today, minute=[5, 20, 35, 50], second=0))
@@ -1179,9 +1196,25 @@ class VarmemodelCoordinator:
         return out
 
     # ------------------------------------------------------------ planlægning
+    def live_blocked(self) -> bool:
+        """Blokeret lige nu af »Blokering lige nu«-entiteten (fx et prisloft pr. kvarter), ud over timeplanens blokeringer."""
+        eid = self._id(CONF_BLOCK_NOW_ENTITY)
+        st = self.hass.states.get(eid) if eid else None
+        if st is None:
+            return False
+        states = {x.strip().lower() for x in str(self.conf.get(CONF_BLOCK_NOW_STATES) or DEFAULT_BLOCK_NOW_STATES).split(",") if x.strip()}
+        return str(st.state).strip().lower() in states
+
+    async def _on_block_now(self, event: Any) -> None:
+        new, old = event.data.get("new_state"), event.data.get("old_state")
+        if new is None or (old is not None and old.state == new.state):
+            return
+        await self._on_replan(dt_util.now())
+
     async def _on_replan(self, _now: datetime) -> None:
         try:
-            await self.async_replan()
+            async with self._replan_lock:
+                await self.async_replan()
         except Exception as err:  # noqa: BLE001 – planen må aldrig vælte integrationen
             _LOGGER.exception("Planlægning fejlede")
             self.plan_meta = {"updated": time.time(), "inputs_ok": False, "missing": [f"fejl: {err}"]}
@@ -1238,6 +1271,8 @@ class VarmemodelCoordinator:
             return [UNCHANGED, *(a.get("swing_modes") or [])]
         if key == "air_swing_h":
             return [UNCHANGED, *(a.get("swing_horizontal_modes") or [])]
+        if key == "air_start":
+            return list(AIR_START_OPTIONS)
         return []
 
     def air_setting(self, s: SourceState, key: str) -> Any:
@@ -1250,6 +1285,8 @@ class VarmemodelCoordinator:
         for k, dflt in AIR_TIMES:
             if k == key:
                 return dflt
+        if key == "air_start":
+            return AIR_START_OPTIONS[0]
         fans = self.air_options(s, "air_fan_day")
         if key == "air_fan_day":
             return fans[-1]
@@ -1327,8 +1364,22 @@ class VarmemodelCoordinator:
             if start is None:
                 start = tgt
             prev = a.get("step") if a.get("on") else None
-            i, changed, down_since, reason = choose_step(prev, len(ladder), margins, down_ok,
-                                                         now, float(a.get("changed", 0.0)), a.get("down_since"), start, tgt)
+            n_steps, up_every = len(ladder), None
+            if self.air_setting(s, "air_start") == "rolig":
+                # Rolig opstart: højst ét trin pr. halve time og loft ét trin over det effektive trin (planens varme for
+                # mindst el) – øverste trin kun, når et rum er mindst AIR_SOFT_URGENT under selve gulvet (uden forvarmning)
+                urgent = any(r.t_now - r.t_min < -AIR_SOFT_URGENT for r in meas)
+                if not urgent:
+                    cap = (tgt + 1) if tgt is not None else max(1, round(len(ladder) * 0.6)) - 1
+                    n_steps = max(1, min(len(ladder), cap + 1))
+                    if start is not None:
+                        start = min(start, n_steps - 1)
+                up_every = AIR_SOFT_UP_EVERY
+            i, changed, down_since, reason = choose_step(prev, n_steps, margins, down_ok,
+                                                         now, float(a.get("changed", 0.0)), a.get("down_since"), start, tgt,
+                                                         **({"up_every": up_every} if up_every else {}))
+            if n_steps < len(ladder) and i is not None and i >= n_steps - 1 and "under gulvet" in reason:
+                reason += f" – rolig opstart: højst trin {n_steps - 1} (det effektive trin + 1)"
         else:
             i, changed, down_since = a.get("step"), float(a.get("changed", 0.0)), None
             reason = "blokeret – slukket" if blocked else "planen varmer ikke nu"
@@ -1407,7 +1458,7 @@ class VarmemodelCoordinator:
                     ratios.append(on / off)
         return round((sum(ratios) / len(ratios) - 1) * 100) if ratios else None
 
-    async def _flow_apply(self, s: SourceState, hours: list[dict[str, Any]], blocked: bool) -> None:
+    async def _flow_apply(self, s: SourceState, hours: list[dict[str, Any]], blocked: bool, pre_start: bool = False) -> None:
         """Skriv planens fremløbsmål til varmepumpen (P1: Varmemodel styrer kun fremløbet; tænd/sluk og termostater
         styres stadig andetsteds). Kun når varmepumpen står i varme-tilstand, aldrig i blokerede timer, kun ved en
         ændring på mindst 1 °C og højst FLOW_MAX_WRITES gange pr. døgn. Uden planlagt varme nu bruges næste planlagte
@@ -1417,8 +1468,8 @@ class VarmemodelCoordinator:
         if st is None or st.state in ("unavailable", "unknown") or blocked:
             return
         dom = eid.split(".", 1)[0]
-        if dom == "climate" and st.state != "heat":
-            return  # fremløbsmålet virker kun i varme-tilstand (auto følger varmepumpens egen kurve)
+        if dom == "climate" and st.state != "heat" and not pre_start:
+            return  # fremløbsmålet virker kun i varme-tilstand (auto følger varmepumpens egen kurve); før en blød start skrives det dog
         want = next((x["flow"] for x in hours if x.get("flow") is not None and not x.get("blocked")), None)
         cmd = self.commands.get(s.sid) or {}
         if cmd.get("flow") is not None:
@@ -1428,7 +1479,10 @@ class VarmemodelCoordinator:
         # Blød start: lige efter tænding løftes målet gradvist (retur + 4 °C, mindst 20 °C, +SOFT_STEP_K pr. kvarter),
         # så kompressoren ikke går til fuld effekt mod et koldt gulv (bedre COP, færre afrimninger i kulde)
         hs = self.air.setdefault(f"hydro:{s.sid}", {})
-        if hs.get("soft") and hs.get("start_t"):
+        if self.settings.get(f"{s.sid}.{SOFT_START}", "test") == "lavest" and (pre_start or st.state == "heat" or dom != "climate"):
+            want = await self._low_flow(s, hs, want, pre_start)
+            hs["soft"] = True
+        elif hs.get("soft") and hs.get("start_t"):
             if hs.get("ramp0") is None:
                 ret = self._state_num(s.eid(CONF_RETURN))
                 hs["ramp0"] = max((ret + SOFT_OVER_RETURN_K) if ret is not None else want - 3 * SOFT_STEP_K, SOFT_FLOOR)
@@ -1437,11 +1491,15 @@ class VarmemodelCoordinator:
                 want = ramp
             else:
                 hs["soft"] = False  # blød start færdig: planens fremløb
+        if not hs.get("soft"):
+            hs["soft_now"] = None
         a = st.attributes
         lo, hi = _num(a.get("min_temp", a.get("min"))), _num(a.get("max_temp", a.get("max")))
         # Entitetens trin (fx hele grader – nogle varmepumper runder ellers et halvt fremløbsmål ned); uden trin: hele grader
         stp = _num(a.get("target_temp_step", a.get("step"))) or 1.0
         want = float(min(max(round(want / stp) * stp, lo if lo is not None else 20.0), hi if hi is not None else 45.0))
+        if hs.get("soft"):
+            hs["soft_now"] = want  # det fremløb, blød start kører med nu (vises på kortet)
         cur = _num(a.get("temperature")) if dom == "climate" else _num(st.state)
         f = self.air.setdefault(f"flow:{s.sid}", {})
         day = dt_util.now().date().isoformat()
@@ -1481,28 +1539,155 @@ class VarmemodelCoordinator:
         if h["flips"] >= HYDRO_MAX_FLIPS and not (blocked and is_on):
             _LOGGER.warning("%s: over %s tænd/sluk i dag – Varmemodel holder pause", s.name, HYDRO_MAX_FLIPS)
             return
+        soft, mode = False, None
+        if want_on:
+            # Ny start: blød eller almindelig (test: hver anden) – vurderes efter SOFT_EVAL_S. Ved blød start skrives det lave
+            # fremløbsmål FØR tænding, så varmepumpen ikke de første minutter går mod et gammelt mål
+            mode = self.settings.get(f"{s.sid}.{SOFT_START}", "test")
+            soft = mode in ("til", "lavest") or (mode == "test" and not h.get("last_soft", False))
+            h.update(start_t=time.time(), soft=soft, ramp0=None, soft_now=None, low=None, low_t=None)
+            if soft and s.conf.get(CONF_FLOW_TARGET):
+                try:
+                    await self._flow_apply(s, hours, False, pre_start=True)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug("Blød start: kunne ikke skrive fremløbet før tænding", exc_info=True)
         try:
             await self.hass.services.async_call("climate", "set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat" if want_on else "off"},
                                                 blocking=True)
             h["flips"] += 1
             h["last"] = {"t": time.time(), "on": want_on}
             if want_on:
-                # Ny start: blød eller almindelig (test: hver anden) – vurderes efter SOFT_EVAL_S
-                mode = self.settings.get(f"{s.sid}.{SOFT_START}", "test")
-                soft = mode == "til" or (mode == "test" and not h.get("last_soft", False))
-                h.update(start_t=time.time(), soft=soft, ramp0=None, last_soft=soft if mode == "test" else h.get("last_soft", False))
-                h.setdefault("starts", []).append({"t": round(time.time()), "soft": soft, "t_out": self._state_num(self._id(CONF_OUTDOOR))})
+                if mode == "test":
+                    h["last_soft"] = soft
+                h.setdefault("starts", []).append({"t": round(time.time()), "soft": soft, "lavest": mode == "lavest",
+                                                   "t_out": self._state_num(self._id(CONF_OUTDOOR))})
                 h["starts"] = h["starts"][-80:]
             else:
-                h["start_t"], h["soft"] = None, False
+                h["start_t"], h["soft"], h["soft_now"], h["low"] = None, False, None, None
         except Exception:  # noqa: BLE001
             _LOGGER.exception("%s: kunne ikke %s varmepumpen", s.name, "tænde" if want_on else "slukke")
+            if want_on:
+                h["start_t"], h["soft"], h["soft_now"] = None, False, None
             return
         if want_on and s.conf.get(CONF_FLOW_TARGET):
             # Varmepumpen går i varme-tilstand om lidt: skriv planens fremløb, så den ikke kører på et gammelt mål
             async def _later(_now: Any) -> None:
                 await self._flow_apply(s, hours, False)
             async_call_later(self.hass, 120, _later)
+
+    def _low_rooms_sync(self, s: SourceState) -> list[dict[str, Any]]:
+        """Kildens rum i planen: margen over gulvet nu og målt tendens (°C/t) de seneste 2 timer."""
+        rooms = []
+        for r in self.rooms_cfg:
+            if self.room_source(r) is not s or not r["in_plan"]:
+                continue
+            t_min = self._state_num(r["min_entity"]) if r["min_entity"] else (_num(r["min"]) if r["min"] is not None else None)
+            t = self._state_num(r["key"])
+            if t_min is None or t is None:
+                continue
+            rooms.append({"navn": r["name"] or r["key"], "e": r["key"], "t": t, "gulv": t_min, "margen": round(t - t_min, 2)})
+        if not rooms:
+            return rooms
+        end = dt_util.utcnow()
+        start = end - timedelta(hours=2)
+        res = history.get_significant_states(self.hass, start, end, [x["e"] for x in rooms], include_start_time_state=True,
+                                             significant_changes_only=False, no_attributes=True)
+        for x in rooms:
+            pts = [(max(z.last_updated, start).timestamp(), v) for z in res.get(x["e"], []) if (v := _num(z.state)) is not None]
+            if len(pts) >= 2 and pts[-1][0] - pts[0][0] >= 3600:
+                # Mindste kvadraters hældning (følerens 0,1-trin udjævnes), inkl. værdien nu
+                pts.append((end.timestamp(), x["t"]))
+                n = len(pts)
+                mt = sum(p[0] for p in pts) / n
+                mv = sum(p[1] for p in pts) / n
+                den = sum((p[0] - mt) ** 2 for p in pts)
+                x["tendens"] = round(sum((p[0] - mt) * (p[1] - mv) for p in pts) / den * 3600, 3) if den > 0 else 0.0
+            else:
+                x["tendens"] = 0.0
+            x["om_3t"] = round(x["margen"] + 3 * x["tendens"], 2)
+        return rooms
+
+    async def _low_flow(self, s: SourceState, hs: dict[str, Any], plan: float, pre_start: bool = False) -> float:
+        """Søg laveste fremløb: start ved retur + 4 °C (mindst 20 °C) og ændr målet stille og roligt efter rummene –
+        +2 K/30 min., når et rum er under gulvet og ikke på vej op; +1 K/t, når et rum er på vej under gulvet inden for
+        3 timer; −1 K hver 2. time, når alle rum er mindst 0,5 °C over gulvet og stabile. Aldrig over planens fremløb."""
+        now = time.time()
+        t_out = self._state_num(self._id(CONF_OUTDOOR))
+        bk = band(t_out) or "?"
+        learned = (hs.get("low_learned") or {}).get(bk)
+        if hs.get("low") is None or pre_start:
+            ret = self._state_num(s.eid(CONF_RETURN))
+            v = max((ret + SOFT_OVER_RETURN_K) if ret is not None else plan - 3 * SOFT_STEP_K, SOFT_FLOOR)
+            hs.update(low=float(round(v)), low_t=now, low_hold_since=now, start_t=hs.get("start_t") or now,
+                      low_status="start", low_why=f"start: retur + {SOFT_OVER_RETURN_K:.0f} °C"
+                      + (f" (lært laveste ved {_band_txt(bk)} ude: {learned:.0f} °C – løftes 2 °C pr. kvarter derop)" if learned else ""))
+            self._low_log(hs, now, hs["low"], plan, hs["low_why"])
+            return min(plan, hs["low"])
+        try:
+            rooms = await get_instance(self.hass).async_add_executor_job(self._low_rooms_sync, s)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Søg laveste fremløb: rummene kunne ikke læses", exc_info=True)
+            rooms = []
+        hs["low_rooms"] = rooms
+        since = now - (hs.get("low_t") or 0)
+        low, step, why, status = hs["low"], 0.0, None, "holder"
+        cold = [x for x in rooms if x["margen"] < 0 and x["tendens"] < 0.05]
+        going = sorted((x for x in rooms if x["om_3t"] < LOW_RESERVE), key=lambda x: x["om_3t"])
+        if learned and low < learned - 1 and hs.get("low_status") in ("start", "løfter") and not going and not cold:
+            if since >= 900:
+                step, why, status = 2.0, f"blød start mod lært laveste {learned:.0f} °C", "løfter"
+            else:
+                status = "løfter"
+        elif cold:
+            x = min(cold, key=lambda r: r["margen"])
+            status = "hæver"
+            if since >= LOW_URGENT_HOLD:
+                step, why = 2.0, f"{x['navn']} er {abs(x['margen']):.1f} °C under gulvet og ikke på vej op"
+        elif going:
+            x = going[0]
+            status = "hæver"
+            if since >= LOW_UP_HOLD:
+                step, why = 1.0, f"{x['navn']} er på vej under gulvet (om 3 t ca. {x['om_3t']:+.1f} °C)"
+        elif rooms and all(x["margen"] >= LOW_DOWN_MARGIN and x["tendens"] >= -0.02 for x in rooms):
+            status = "sænker"
+            if since >= LOW_DOWN_HOLD:
+                step, why = -1.0, f"alle rum mindst {LOW_DOWN_MARGIN:.1f} °C over gulvet og stabile"
+        new = min(max(low + step, SOFT_FLOOR), plan)
+        if step and new != low:
+            hs.update(low=new, low_t=now, low_why=why, low_hold_since=now)  # det nye mål skal holde 3 t, før det læres
+            self._low_log(hs, now, new, plan, why)
+        hs["low_status"] = status
+        # Lært: målet har holdt alle rum over gulvet i 3 timer uden at hæve – laveste fungerende fremløb i dette ude-bånd
+        if rooms and all(x["margen"] >= 0 for x in rooms) and now - (hs.get("low_hold_since") or now) >= LOW_LEARN_HOLD:
+            lr = hs.setdefault("low_learned", {})
+            if lr.get(bk) is None or hs["low"] < lr[bk] or now - hs.get("low_learned_t", 0) > 6 * 3600:
+                lr[bk] = hs["low"]
+                hs["low_learned_t"] = now
+        return min(plan, hs["low"])
+
+    @staticmethod
+    def _low_log(hs: dict[str, Any], t: float, v: float, plan: float, why: str | None) -> None:
+        hs.setdefault("low_log", []).append([round(t), v, plan, why])
+        hs["low_log"] = hs["low_log"][-96:]
+
+    def flow_search(self, s: SourceState) -> dict[str, Any] | None:
+        """Visning af »søg laveste fremløb«: mål nu, planens fremløb, status, grund, rummene, lært og loggen."""
+        hs = self.air.get(f"hydro:{s.sid}") or {}
+        if self.settings.get(f"{s.sid}.{SOFT_START}", "test") != "lavest":
+            return None
+        cmd = self.commands.get(s.sid) or {}
+        holds = {"hæver": LOW_UP_HOLD, "sænker": LOW_DOWN_HOLD, "løfter": 900}
+        nxt = (hs.get("low_t") or 0) + holds.get(hs.get("low_status") or "", 0)
+        cold = any(x["margen"] < 0 and x["tendens"] < 0.05 for x in hs.get("low_rooms") or [])
+        if hs.get("low_status") == "hæver" and cold:
+            nxt = (hs.get("low_t") or 0) + LOW_URGENT_HOLD
+        return {
+            "aktiv": hs.get("low") is not None and bool(hs.get("start_t")),
+            "mål": hs.get("low"), "plan": cmd.get("flow"), "status": hs.get("low_status"), "grund": hs.get("low_why"),
+            "næste_ændring": _ts_local_iso(nxt) if hs.get("low_status") in holds and nxt > time.time() else None,
+            "rum": [{k: x.get(k) for k in ("navn", "t", "gulv", "margen", "tendens", "om_3t")} for x in hs.get("low_rooms") or []],
+            "lært": hs.get("low_learned") or {}, "log": (hs.get("low_log") or [])[-48:],
+        }
 
     def _soft_eval_sync(self, s: SourceState, starts: list[dict[str, Any]]) -> None:
         """Vurdér færdige starte: varme, el og afrimninger de første 90 min. (5-minutters statistik og afrimningens historik)."""
@@ -1517,7 +1702,10 @@ class VarmemodelCoordinator:
             n = 0
             if df:
                 res = history.get_significant_states(self.hass, a, b, [df], include_start_time_state=False, significant_changes_only=False)
-                n = sum(1 for z in res.get(df, []) if z.state == "on")
+                prev = None
+                for z in res.get(df, []):  # tæl skift til »on« (rækker med samme tilstand er attributændringer)
+                    n += z.state == "on" and prev != "on"
+                    prev = z.state
             x.update(q=round(q, 2), e=round(e, 3), cop=round(q / e, 2) if e > 0.05 else None, afrim=n)
 
     def soft_summary(self, s: SourceState) -> dict[str, Any]:
@@ -1716,7 +1904,7 @@ class VarmemodelCoordinator:
         # Anbefalet styring: luft-luft reagerer hurtigt – mindst 30 min. tændt, 15 min. slukket, højst én ændring pr. 15 min.
         cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
         cmd = step(Command.load(self.commands.get(s.sid)), now, dt_util.now().date().isoformat(),
-                   bool(cur and cur["heat_kw"] > 0), None, bool(cur and cur["blocked"]), min_on=1800, min_off=900, min_gap=900)
+                   bool(cur and cur["heat_kw"] > 0), None, (bool(cur and cur["blocked"]) or self.live_blocked()), min_on=1800, min_off=900, min_gap=900)
         d = cmd.dump()
         # Setpunkt når styringen står på »tændt« – også når den holder sine 30 min., mens planens time er 0
         caps = [r.t_max for r in show if r.t_max is not None]
@@ -1733,7 +1921,7 @@ class VarmemodelCoordinator:
                     bf = await self.hass.async_add_executor_job(self._air_backfill_sync, clim, peid, now - 3 * 86400, now)
                     a["w"] = {**{k: round(median(v)) for k, v in bf.items() if len(v) >= 3}, **(a.get("w") or {})}
                     a["bf"] = True
-                d.update(self._air_step(s, clim, p, show, cmd.on, bool(cur and cur["blocked"]), now, p_w))
+                d.update(self._air_step(s, clim, p, show, cmd.on, (bool(cur and cur["blocked"]) or self.live_blocked()), now, p_w))
             except Exception:  # noqa: BLE001 – stigen må aldrig vælte planen
                 _LOGGER.exception("Luft-luft-stigen fejlede")
         self.commands[s.sid] = d
@@ -1961,7 +2149,7 @@ class VarmemodelCoordinator:
             cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
             cmd = step(Command.load(self.commands.get(sid)), now, dt_util.now().date().isoformat(),
                        bool(cur and cur["heat_kw"] > 0), (round(cur["flow"]) if cur and cur.get("flow") is not None else None),
-                       bool(cur and cur["blocked"]))
+                       (bool(cur and cur["blocked"]) or self.live_blocked()))
             self.commands[sid] = cmd.dump()
             full = bool(s.conf.get(CONF_ONOFF_TARGET) and self.settings.get(f"{sid}.{HYDRO_SWITCH}"))
             hst = self.air.get(f"hydro:{sid}") or {}
@@ -1971,9 +2159,9 @@ class VarmemodelCoordinator:
                 except Exception:  # noqa: BLE001
                     _LOGGER.debug("Vurdering af blød start fejlede", exc_info=True)
             if full:
-                await self._hydro_apply(s, cmd.on, bool(cur and cur["blocked"]), p.hours)
+                await self._hydro_apply(s, cmd.on, (bool(cur and cur["blocked"]) or self.live_blocked()), p.hours)
             if s.conf.get(CONF_FLOW_TARGET) and (full or self.settings.get(f"{sid}.{FLOW_SWITCH}")):
-                await self._flow_apply(s, p.hours, bool(cur and cur["blocked"]))
+                await self._flow_apply(s, p.hours, (bool(cur and cur["blocked"]) or self.live_blocked()))
         self.plans = plans
         self._flag_missing(now, out_flag)
         if len(hours) < 6:
@@ -1997,6 +2185,15 @@ def _clock(ts: int) -> str:
     d = dt_util.as_local(dt_util.utc_from_timestamp(ts))
     days = (d.date() - dt_util.now().date()).days
     return {0: "", 1: "i morgen ", 2: "i overmorgen "}.get(days, d.strftime("%d/%m ")) + d.strftime("kl. %H")
+
+
+def _band_txt(bk: str) -> str:
+    """Ude-båndets nøgle som tekst, fx »−5…0 °C«."""
+    try:
+        lo = int(bk)
+    except (TypeError, ValueError):
+        return "ukendt ude"
+    return f"{lo}…{lo + 5} °C".replace("-", "−")
 
 
 def _ts_local_iso(ts: float) -> str:

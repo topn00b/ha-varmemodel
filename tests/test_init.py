@@ -775,3 +775,94 @@ async def test_soft_start_ramps_flow_target(ha: HomeAssistant) -> None:
     ha.states.async_set("climate.vp_flow", "heat", {"temperature": 26, "min_temp": 20, "max_temp": 45})
     await c._flow_apply(s, hours, False)
     assert calls[-1] == 30.0
+
+
+@pytest.mark.parametrize("expected_lingering_timers", [True])
+async def test_soft_start_writes_low_flow_before_switching_on(ha: HomeAssistant) -> None:
+    """Blød start: det lave fremløbsmål skrives FØR varmepumpen tændes (ellers kører den minutter mod et gammelt mål)."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "-2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.retur", "21.5", {"state_class": "measurement"})
+    ha.states.async_set("climate.vp_flow", "off", {"temperature": 33, "min_temp": 20, "max_temp": 45})
+    ha.states.async_set("climate.vp", "off", {})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub({**HYD, "flow_target": "climate.vp_flow", "onoff_target": "climate.vp",
+                                               "return_temp": "sensor.retur"}, "source")])
+    e.add_to_hass(ha)
+    order: list = []
+    ha.services.async_register("climate", "set_temperature", lambda call: order.append(("flow", call.data["temperature"])))
+    ha.services.async_register("climate", "set_hvac_mode", lambda call: order.append(("mode", call.data["hvac_mode"])))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    s = next(iter(c.sources.values()))
+    c.settings[f"{s.sid}.soft_start"] = "til"
+    c.commands[s.sid] = {"flow": 35}
+    order.clear()
+    await c._hydro_apply(s, True, False, [{"flow": 35.0, "blocked": False}])
+    assert order[:2] == [("flow", 26.0), ("mode", "heat")]  # retur 21,5 + 4 → 26 (trin 1), før tænding
+    assert c.air[f"hydro:{s.sid}"]["soft_now"] == 26.0
+
+
+async def _lv_entry(ha: HomeAssistant, extra_house: dict | None = None):
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "-2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.retur", "21.5", {"state_class": "measurement"})
+    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 33, "min_temp": 20, "max_temp": 45})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris", **(extra_house or {})},
+                        subentries_data=[_sub({**HYD, "flow_target": "climate.vp_flow", "return_temp": "sensor.retur"}, "source")])
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    return c, next(iter(c.sources.values()))
+
+
+async def test_live_block_entity(ha: HomeAssistant) -> None:
+    """»Blokering lige nu«: fx prisstatus rød, når kvarterets pris er over loftet."""
+    ha.states.async_set("sensor.prisstatus", "gul")
+    c, _s = await _lv_entry(ha, {"block_now_entity": "sensor.prisstatus", "block_now_states": "rød, on"})
+    assert c.live_blocked() is False
+    ha.states.async_set("sensor.prisstatus", "rød")
+    assert c.live_blocked() is True
+
+
+async def test_low_flow_search_rules(ha: HomeAssistant) -> None:
+    """Søg laveste fremløb: start ved retur + 4, hold, +1 K/t på vej under gulvet, +2 K/30 min. under gulvet,
+    −1 K hver 2. time med god margen – aldrig over planens fremløb."""
+    c, s = await _lv_entry(ha)
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    hs = c.air.setdefault(f"hydro:{s.sid}", {})
+    rooms: list = []
+    c._low_rooms_sync = lambda _s: [dict(x) for x in rooms]  # noqa: SLF001
+    assert await c._low_flow(s, hs, 35.0) == 26.0  # retur 21,5 + 4 → 26 (afrundet)
+    rooms[:] = [{"navn": "Gang", "margen": 0.2, "tendens": 0.0, "om_3t": 0.2}]
+    assert await c._low_flow(s, hs, 35.0) == 26.0 and hs["low_status"] == "holder"
+    rooms[:] = [{"navn": "Gang", "margen": 0.2, "tendens": -0.05, "om_3t": 0.05}]
+    assert await c._low_flow(s, hs, 35.0) == 26.0 and hs["low_status"] == "hæver"  # venter en time
+    hs["low_t"] -= 3600
+    assert await c._low_flow(s, hs, 35.0) == 27.0 and "Gang" in hs["low_why"]
+    rooms[:] = [{"navn": "Gang", "margen": -0.2, "tendens": 0.0, "om_3t": -0.2}]
+    hs["low_t"] -= 1800
+    assert await c._low_flow(s, hs, 35.0) == 29.0  # under gulvet og ikke på vej op: +2
+    rooms[:] = [{"navn": "Gang", "margen": -0.1, "tendens": 0.08, "om_3t": 0.14}]
+    hs["low_t"] -= 1800
+    assert await c._low_flow(s, hs, 35.0) == 29.0  # på vej op: hold
+    rooms[:] = [{"navn": "Gang", "margen": 0.6, "tendens": 0.0, "om_3t": 0.6}, {"navn": "Stue", "margen": 0.9, "tendens": 0.01, "om_3t": 0.93}]
+    hs["low_t"] -= 7200
+    assert await c._low_flow(s, hs, 35.0) == 28.0 and hs["low_status"] == "sænker"
+    assert await c._low_flow(s, hs, 27.0) == 27.0  # aldrig over planens fremløb
+    v = c.flow_search(s)
+    assert v["mål"] == 28.0 and v["status"] == "sænker" and v["log"]

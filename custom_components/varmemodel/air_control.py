@@ -100,7 +100,7 @@ def target_step(ladder_w: list[float | None], target_w: float | None) -> int | N
 
 def choose_step(cur: int | None, n: int, margins: dict[str, float], down_ok: bool, now: float,
                 changed: float, down_since: float | None, start: int | None = None,
-                target: int | None = None) -> tuple[int, float, float | None, str]:
+                target: int | None = None, up_every: int = UP_EVERY) -> tuple[int, float, float | None, str]:
     """Næste trin. ``margins``: rum → målt − (gulv + forvarmning). ``down_ok``: alle rum over gulv + usikkerhed.
     ``target``: trinnet der dækker planens el-mål (None = ukendt). Giver (trin, ændret, ned-siden, grund)."""
     top = max(0, n - 1)
@@ -114,11 +114,11 @@ def choose_step(cur: int | None, n: int, margins: dict[str, float], down_ok: boo
     if margins[low] < 0:
         if cur >= top:
             return cur, changed, None, f"{low} er under gulvet – øverste trin"
-        if now - changed >= UP_EVERY:
+        if now - changed >= up_every:
             return cur + 1, now, None, f"{low} er {abs(margins[low]):.1f} °C under gulvet – et trin op"
-        return cur, changed, None, f"{low} er under gulvet – venter (højst ét trin pr. kvarter)"
+        return cur, changed, None, f"{low} er under gulvet – venter (højst ét trin pr. {'kvarter' if up_every <= 900 else 'halve time'})"
     if target is not None and target > cur:
-        if now - changed >= UP_EVERY:
+        if now - changed >= up_every:
             return cur + 1, now, None, f"mod planens el-mål (trin {target}) – et trin op"
         return cur, changed, None, f"mod planens el-mål (trin {target}) – venter"
     if down_ok and (target is None or target < cur):
