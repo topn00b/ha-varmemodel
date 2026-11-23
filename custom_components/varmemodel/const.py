@@ -132,8 +132,8 @@ CONF_ASSIST_SPEED = "assist_fan_speed"  # valgfri: dens hastighed (0 = står)
 AIR_SELECTS = ("air_fan_day", "air_fan_night", "air_swing_v", "air_swing_h", "air_start")
 AIR_START_OPTIONS = ("rolig", "hurtig")  # rolig: ét trin pr. halve time og loft ved det effektive trin (30–60 min. længere opvarmning)
 AIR_SOFT_UP_EVERY = 1800  # rolig opstart: højst ét trin op pr. halve time
-AIR_SOFT_EFF = 0.85  # rolig opstart: loft ved det højeste trin, hvis virkning (°C pr. kWh el) er mindst så stor en del af det bedste
-AIR_SOFT_SHARE = 0.7  # rolig opstart uden lært virkning: loft ved denne andel af stigen
+AIR_SOFT_SHARE = 0.5  # rolig opstart: start højst midt på stigen (fx trin 6 af 0–11)
+AIR_SOFT_MIN_RISE = 0.2  # rolig opstart: et rum under gulvet, der stiger mindst så meget (°C/t) på trinnet, får ikke et trin mere
 AIR_TIMES = (("air_night_start", "22:00"), ("air_night_end", "07:00"))
 AIR_SWITCH = "air_control"
 AIR_BOOST = "air_boost"

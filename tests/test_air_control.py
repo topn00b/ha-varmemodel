@@ -136,11 +136,11 @@ def test_choose_step_calm_up_every() -> None:
     assert i == 4
 
 
-def test_air_soft_cap_efficient_steps() -> None:
-    """Rolig opstart: loft ved det højeste trin med mindst 85 % af den bedste virkning – ellers 70 % af stigen."""
-    from custom_components.varmemodel.coordinator import VarmemodelCoordinator as C
+def test_choose_step_calm_holds_when_room_rises() -> None:
+    """Rolig opstart: et rum under gulvet, der stiger nok på trinnet, får ikke et trin mere; ellers ét op pr. halve time."""
+    from custom_components.varmemodel.air_control import choose_step
 
-    lw = [300, 450, 600, 800, 1000, 1300]
-    le = [2.0, 2.1, 1.9, 1.8, 1.5, 1.2]  # bedst 2,1 → 85 % = 1,785 → trin 3
-    assert C._air_soft_cap(lw, le, 6) == 3
-    assert C._air_soft_cap([None] * 12, [None] * 12, 12) == 8  # round(11 × 0,7)
+    i, _c, _d, why = choose_step(6, 12, {"A": -1.0}, False, 10_000.0, 10_000.0 - 1900, None, up_every=1800, rising={"A": 0.3}, min_rise=0.2)
+    assert i == 6 and "stiger" in why and "holder" in why
+    i, _c, _d, why = choose_step(6, 12, {"A": -1.0}, False, 10_000.0, 10_000.0 - 1900, None, up_every=1800, rising={"A": 0.05}, min_rise=0.2)
+    assert i == 7 and "stiger kun" in why
