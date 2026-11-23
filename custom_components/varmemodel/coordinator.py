@@ -65,7 +65,8 @@ from .planner import FLOW_LOW_OPEN_S, PlanHour, PlanRoom, SourceModel, estimate_
 from .const import (
     AIR_BOOST,
     AIR_SOFT_UP_EVERY,
-    AIR_SOFT_URGENT,
+    AIR_SOFT_EFF,
+    AIR_SOFT_SHARE,
     AIR_START_OPTIONS,
     AIR_SWITCH,
     AIR_TIMES,
@@ -1294,6 +1295,16 @@ class VarmemodelCoordinator:
             return fans[-2] if len(fans) > 1 else fans[-1]
         return UNCHANGED
 
+    @staticmethod
+    def _air_soft_cap(lw: list[float | None], le: list[float | None], n: int) -> int:
+        """Rolig opstarts loft: det højeste trin, hvis lærte virkning (°C pr. kWh el) er mindst AIR_SOFT_EFF af den bedste;
+        uden mindst to lærte trin AIR_SOFT_SHARE af stigen."""
+        known = [(i, e) for i, e in enumerate(le) if e is not None and e > 0 and i < len(lw) and lw[i] is not None]
+        if len(known) >= 2:
+            best = max(e for _, e in known)
+            return max(i for i, e in known if e >= AIR_SOFT_EFF * best)
+        return max(1, min(n - 1, round((n - 1) * AIR_SOFT_SHARE)))
+
     def air_boost_active(self, s: SourceState) -> bool:
         """»Jeg fryser« for kilden: slået til for under »jeg fryser gælder højst« timer siden."""
         since = float(self.settings.get(f"{s.sid}.{AIR_BOOST}") or 0)
@@ -1366,20 +1377,19 @@ class VarmemodelCoordinator:
             prev = a.get("step") if a.get("on") else None
             n_steps, up_every = len(ladder), None
             if self.air_setting(s, "air_start") == "rolig":
-                # Rolig opstart: højst ét trin pr. halve time og loft ét trin over det effektive trin (planens varme for
-                # mindst el) – øverste trin kun, når et rum er mindst AIR_SOFT_URGENT under selve gulvet (uden forvarmning)
-                urgent = any(r.t_now - r.t_min < -AIR_SOFT_URGENT for r in meas)
-                if not urgent:
-                    cap = (tgt + 1) if tgt is not None else max(1, round(len(ladder) * 0.6)) - 1
-                    n_steps = max(1, min(len(ladder), cap + 1))
-                    if start is not None:
-                        start = min(start, n_steps - 1)
+                # Rolig opstart: højst ét trin pr. halve time og aldrig over de effektive trin – også når et rum er under
+                # gulvet (så tager det 30–60 min. længere). Kun »Jeg fryser« bruger øverste trin.
+                scap = self._air_soft_cap(lw, le, len(ladder))
+                n_steps = scap + 1
+                a["soft_cap_w"] = lw[scap] if scap < len(lw) else None  # planens loft for el pr. time (næste plan)
+                if start is not None:
+                    start = min(start, scap)
                 up_every = AIR_SOFT_UP_EVERY
             i, changed, down_since, reason = choose_step(prev, n_steps, margins, down_ok,
                                                          now, float(a.get("changed", 0.0)), a.get("down_since"), start, tgt,
                                                          **({"up_every": up_every} if up_every else {}))
-            if n_steps < len(ladder) and i is not None and i >= n_steps - 1 and "under gulvet" in reason:
-                reason += f" – rolig opstart: højst trin {n_steps - 1} (det effektive trin + 1)"
+            if n_steps < len(ladder) and i is not None and i >= n_steps - 1:
+                reason += f" – rolig opstart: højst trin {n_steps - 1} (de effektive trin)"
         else:
             i, changed, down_since = a.get("step"), float(a.get("changed", 0.0)), None
             reason = "blokeret – slukket" if blocked else "planen varmer ikke nu"
@@ -1879,6 +1889,11 @@ class VarmemodelCoordinator:
             e_max = max(e_min + 0.2, vals[min(len(vals) - 1, int(len(vals) * 0.95))])
         else:
             e_min, e_max = 0.3, 1.0
+        # Rolig opstart: planen må højst regne med loft-trinnets lærte forbrug pr. time (så den lægger flere timer med
+        # lavere effekt i stedet for at regne med de øverste trin – og forudsigelserne passer med det, stigen kører)
+        cap_w = (self.air.get(s.sid) or {}).get("soft_cap_w")
+        if self.air_setting(s, "air_start") == "rolig" and cap_w:
+            e_max = max(e_min + 0.05, min(e_max, cap_w / 1000))
         try:
             rq, _ = await get_instance(self.hass).async_add_executor_job(self._recent_sync, s, h0 - 12 * 3600, h0)
         except Exception:  # noqa: BLE001

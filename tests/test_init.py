@@ -770,11 +770,11 @@ async def test_soft_start_ramps_flow_target(ha: HomeAssistant) -> None:
     hours = [{"flow": 34.0, "blocked": False}]
     c.commands[s.sid] = {"flow": 34}
     await c._flow_apply(s, hours, False)
-    assert calls == [26.0]  # retur 22 + 4
+    assert calls == [25.0]  # retur 22 + 3
     hs["start_t"] = time.time() - 1800  # to kvarterer inde
-    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 26, "min_temp": 20, "max_temp": 45})
+    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 25, "min_temp": 20, "max_temp": 45})
     await c._flow_apply(s, hours, False)
-    assert calls[-1] == 30.0
+    assert calls[-1] == 29.0
 
 
 @pytest.mark.parametrize("expected_lingering_timers", [True])
@@ -806,8 +806,8 @@ async def test_soft_start_writes_low_flow_before_switching_on(ha: HomeAssistant)
     c.commands[s.sid] = {"flow": 35}
     order.clear()
     await c._hydro_apply(s, True, False, [{"flow": 35.0, "blocked": False}])
-    assert order[:2] == [("flow", 26.0), ("mode", "heat")]  # retur 21,5 + 4 → 26 (trin 1), før tænding
-    assert c.air[f"hydro:{s.sid}"]["soft_now"] == 26.0
+    assert order[:2] == [("flow", 24.0), ("mode", "heat")]  # retur 21,5 + 3 → 24 (afrundet til lige), før tænding
+    assert c.air[f"hydro:{s.sid}"]["soft_now"] == 24.0
 
 
 async def _lv_entry(ha: HomeAssistant, extra_house: dict | None = None):
@@ -847,11 +847,12 @@ async def test_low_flow_search_rules(ha: HomeAssistant) -> None:
     hs = c.air.setdefault(f"hydro:{s.sid}", {})
     rooms: list = []
     c._low_rooms_sync = lambda _s: [dict(x) for x in rooms]  # noqa: SLF001
-    assert await c._low_flow(s, hs, 35.0) == 26.0  # retur 21,5 + 4 → 26 (afrundet)
+    assert await c._low_flow(s, hs, 35.0) == 24.0  # retur 21,5 + 3 → 24 (afrundet)
     rooms[:] = [{"navn": "Gang", "margen": 0.2, "tendens": 0.0, "om_3t": 0.2}]
-    assert await c._low_flow(s, hs, 35.0) == 26.0 and hs["low_status"] == "holder"
+    assert await c._low_flow(s, hs, 35.0) == 24.0 and hs["low_status"] == "holder"
     rooms[:] = [{"navn": "Gang", "margen": 0.2, "tendens": -0.05, "om_3t": 0.05}]
-    assert await c._low_flow(s, hs, 35.0) == 26.0 and hs["low_status"] == "hæver"  # venter en time
+    assert await c._low_flow(s, hs, 35.0) == 24.0 and hs["low_status"] == "hæver"  # venter en time
+    hs["low"] = 26.0
     hs["low_t"] -= 3600
     assert await c._low_flow(s, hs, 35.0) == 27.0 and "Gang" in hs["low_why"]
     rooms[:] = [{"navn": "Gang", "margen": -0.2, "tendens": 0.0, "om_3t": -0.2}]

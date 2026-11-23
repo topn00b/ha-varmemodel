@@ -134,3 +134,13 @@ def test_choose_step_calm_up_every() -> None:
     assert i == 3 and "halve time" in why
     i, ch, _ds, why = choose_step(3, 8, {"A": -0.2}, False, 10_000.0, 10_000.0 - 1900, None, up_every=1800)
     assert i == 4
+
+
+def test_air_soft_cap_efficient_steps() -> None:
+    """Rolig opstart: loft ved det højeste trin med mindst 85 % af den bedste virkning – ellers 70 % af stigen."""
+    from custom_components.varmemodel.coordinator import VarmemodelCoordinator as C
+
+    lw = [300, 450, 600, 800, 1000, 1300]
+    le = [2.0, 2.1, 1.9, 1.8, 1.5, 1.2]  # bedst 2,1 → 85 % = 1,785 → trin 3
+    assert C._air_soft_cap(lw, le, 6) == 3
+    assert C._air_soft_cap([None] * 12, [None] * 12, 12) == 8  # round(11 × 0,7)
