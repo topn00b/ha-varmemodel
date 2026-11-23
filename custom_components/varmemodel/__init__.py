@@ -8,7 +8,7 @@ from pathlib import Path
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers import config_validation as cv, device_registry as dr, entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -114,6 +114,14 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+def _remove_retired(hass: HomeAssistant, entry: VarmemodelConfigEntry) -> None:
+    """Fjern entiteter, som integrationen ikke længere laver (0.7.0: timemodellen for COP)."""
+    reg = er.async_get(hass)
+    for e in er.async_entries_for_config_entry(reg, entry.entry_id):
+        if e.domain == "sensor" and e.unique_id.endswith("_cop"):
+            reg.async_remove(e.entity_id)
+
+
 def _ensure_devices(hass: HomeAssistant, entry: VarmemodelConfigEntry, coordinator: VarmemodelCoordinator) -> None:
     """Enhedstræet huset → varmekilde → rummene den varmer, bygget med enheds-id'er (via_device_id).
 
@@ -145,6 +153,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry) -
     await coordinator.async_start()
     entry.runtime_data = coordinator
     _ensure_devices(hass, entry, coordinator)
+    _remove_retired(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     return True

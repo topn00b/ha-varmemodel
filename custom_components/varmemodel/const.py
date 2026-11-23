@@ -34,7 +34,6 @@ MODE_FROZEN = "frozen"
 # Rækkefølge og enheder for kalibreringstallene (nøgle → enhed)
 FIT_KEYS: dict[str, str | None] = {
     "heat_loss": "W/K",
-    "cop": None,
     "cop_steady": None,
     "cop_loss": "%",
     "emission": "kW/K",

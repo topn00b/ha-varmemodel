@@ -308,65 +308,6 @@ def _plant_free_fit(x: list[float], y: list[float], tp: list[float], ground: flo
 
 
 # ---------------------------------------------------------------- COP
-def fit_cop(hours: list[Hour], min_n: int = 30) -> Fit:
-    """COP = a + b·ude + c·fremløb, inkl. afrimning (afrimningstimer tælles med).
-
-    Fremløbsleddet c kan kun bestemmes, hvis fremløbet har varieret
-    uafhængigt af udetemperaturen. Er det for usikkert, bruges en standard
-    (−0,08 pr. grad) og c markeres som ``prior``.
-    """
-    s = [
-        h for h in hours
-        if h.q is not None and h.e is not None and h.t_out is not None
-        and h.q >= 1.0 and h.e >= 0.25 and _space_heating(h)
-        and COP_LIMITS[0] <= h.q / h.e <= COP_LIMITS[1]
-    ]
-    lo, hi = _range([h.t_out for h in s])
-    if len(s) < min_n:
-        return Fit(None, len(s), t_out_min=lo, t_out_max=hi, note="for få driftstimer")
-    y = [h.q / h.e for h in s]
-    with_flow = [h for h in s if h.t_flow is not None]
-    c_source = "prior"
-    beta = None
-    # Fremløbet skal have varieret uafhængigt af udetemperaturen (fx pga. kurve-
-    # forskydning), ellers kan c ikke skilles fra b. Mål: spredning på fremløbet
-    # efter at udetemperaturens andel er trukket fra.
-    indep = None
-    if len(with_flow) >= min_n:
-        fl = ols([[1.0, h.t_out] for h in with_flow], [h.t_flow for h in with_flow])
-        if fl:
-            (fa, fb), _ = fl
-            r = [h.t_flow - fa - fb * h.t_out for h in with_flow]
-            indep = sqrt(sum(v * v for v in r) / len(r))
-    if indep is not None and indep >= 1.0:
-        res = ols([[1.0, h.t_out, h.t_flow] for h in with_flow], [h.q / h.e for h in with_flow])
-        if res:
-            (a, b, c), (_, _, se_c) = res
-            if c < 0 and se_c < abs(c) / 2:
-                beta, c_source = (a, b, c), "fit"
-                s, y = with_flow, [h.q / h.e for h in with_flow]
-    if beta is None:
-        # c fra standard; tilpas a og b på (COP − c·fremløb)
-        c = PRIOR_COP_PER_K_FLOW
-        ref = [(h, h.q / h.e - c * (h.t_flow if h.t_flow is not None else 35.0)) for h in s]
-        res = ols([[1.0, h.t_out] for h, _ in ref], [v for _, v in ref])
-        if not res:
-            return Fit(None, len(s), t_out_min=lo, t_out_max=hi, note="kunne ikke tilpasses")
-        (a, b), _ = res
-        beta = (a, b, c)
-    a, b, c = beta
-    pred = [a + b * h.t_out + c * (h.t_flow if h.t_flow is not None else 35.0) for h in s]
-    r2, rmse = _r2_rmse(y, pred)
-    defrost_hours = sum(1 for h in s if (h.defrost or 0) > 0)
-    return Fit(
-        round(a + c * 35.0, 3), len(s), r2, rmse and round(rmse, 3), lo, hi, "fit",
-        {"a": round(a, 4), "b": round(b, 4), "c": round(c, 4), "c_source": c_source,
-         "flow_independent_k": None if indep is None else round(indep, 2),
-         "formula": "COP = a + b·ude + c·fremløb", "value_is": "COP ved 0 °C ude og 35 °C fremløb",
-         "hours_with_defrost": defrost_hours},
-    )
-
-
 # ---------------------------------------------------------------- gulvets afgivelse
 def fit_emission(hours: list[Hour], min_n: int = 20) -> Fit:
     """K = varme ÷ (fremløb − rum) i timer med ren rumopvarmning (kW pr. grad).
@@ -503,7 +444,6 @@ def calibrate(hours: list[Hour], plant_w_k: float = 0.0, ground: float = DEFAULT
     return {
         "wind_effect": wind,
         "heat_loss": fit_heat_loss(hours, plant_w_k=plant_w_k, ground=ground),
-        "cop": fit_cop(hours),
         "emission": fit_emission(hours),
         "max_power": pmax,
         "min_power": pmin,
@@ -611,6 +551,11 @@ def fit_cop_steady(slots: list[Slot], min_n: int = 100, min_runs: int = 20) -> F
         r2 = wls_cluster([[1.0, x.t_out, p] for x, p in zip(s, kw)], [v - c * x.t_flow for v, x in zip(y, s)], w, cl)
         if r2:
             (a, b, d), (_, sb, sd) = r2
+    # Niveau: fittet rammer gennemsnittet af COP-tallene, men el er varme ÷ COP, så det giver for lidt el.
+    # Skalér, så modellens el for portionernes varme = den målte el (energivægtet, samme som COP i dag).
+    m0 = [max(1.2, a + b * x.t_out + c * x.t_flow + d * p) for x, p in zip(s, kw)]
+    level = sum(x.q / m for x, m in zip(s, m0)) / sum(x.e for x in s)
+    a, b, c, d = a * level, b * level, c * level, d * level
     p_ref = 4.0
     pred = [a + b * x.t_out + c * x.t_flow + d * p for x, p in zip(s, kw)]
     r2v, rmse = _r2_rmse(y, pred)
@@ -619,7 +564,7 @@ def fit_cop_steady(slots: list[Slot], min_n: int = 100, min_runs: int = 20) -> F
         round(a + c * 35.0 + d * p_ref, 3), len(s), r2v, rmse and round(rmse, 3), lo, hi, "fit",
         {"a": round(a, 4), "b": round(b, 4), "c": round(c, 4), "d": round(d, 4), "c_source": c_source,
          "c_se_per_run": round(sc, 4), "c_ci95": [round(c - 1.96 * sc, 3), round(c + 1.96 * sc, 3)],
-         "d_se_per_run": round(sd, 4), "runs": len(runs),
+         "d_se_per_run": round(sd, 4), "runs": len(runs), "level_factor": round(level, 4),
          "per_k_flow_pct": round(-c / cop_ref * 100, 1), "per_kw_pct": round(-d / cop_ref * 100, 1),
          "formula": "COP = a + b·ude + c·fremløb + d·effekt(kW)",
          "value_is": "COP i stabil drift ved 0 °C ude, 35 °C fremløb og 4 kW",

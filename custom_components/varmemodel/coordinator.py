@@ -169,6 +169,9 @@ class SourceState:
         self.fits = d.get("fits", {})
         self.slots = d.get("slots", {})
         self.daily = d.get("daily", {})
+        # 0.7.0: timemodellen for COP er fjernet
+        self.accepted.pop("cop", None)
+        self.fits.pop("cop", None)
 
 
 class VarmemodelCoordinator:
@@ -296,6 +299,7 @@ class VarmemodelCoordinator:
         self._unsubs.append(async_track_time_change(self.hass, self._on_replan, minute=[2, 17, 32, 47], second=0))
         self._unsubs.append(async_call_later(self.hass, 45, self._on_replan))
         self._unsubs.append(async_call_later(self.hass, 90, self._on_today))
+        self._unsubs.append(async_track_time_change(self.hass, self._on_today, minute=[5, 20, 35, 50], second=0))
         last = self.runs[-1]["at"] if self.runs else 0
         if time.time() - last > 86400:
             self._unsubs.append(async_call_later(self.hass, 120, self._on_start_delay))
@@ -352,10 +356,9 @@ class VarmemodelCoordinator:
     async def _on_hour(self, _now: datetime) -> None:
         await self.async_collect()
         self.store.async_delay_save(self._data, 300)
-        await self._on_today(None)
 
     async def _on_today(self, _now: datetime | None) -> None:
-        """Dagens COP for hver vandbåren kilde (5-minutters portioner siden midnat)."""
+        """Dagens COP for hver vandbåren kilde (5-minutters portioner siden midnat), hvert kvarter."""
         for s in self.sources.values():
             if s.kind != SOURCE_HYDRONIC:
                 continue

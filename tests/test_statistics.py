@@ -70,8 +70,8 @@ async def test_calibration_from_recorder_statistics(ha: HomeAssistant) -> None:
     s = c.hydronic
     assert len(s.last_hours) >= len(hours) - 30
     assert abs(s.accepted["heat_loss"]["value"] - 3 * H_TRUE) < 15
-    assert abs(s.accepted["cop"]["value"] - (A + C * 35)) < 0.1
-    assert s.accepted["cop"]["extra"]["c_source"] == "fit"
+    # Timemodellen for COP er fjernet (0.7.0): kun stabil drift + ekstra el
+    assert "cop" not in s.accepted
     assert c.status in ("partial", "ok")
 
 

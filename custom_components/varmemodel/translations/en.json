@@ -78,9 +78,6 @@
       "heat_loss": {
         "name": "Heat loss"
       },
-      "cop": {
-        "name": "COP reference A0/W35 (incl. defrost)"
-      },
       "emission": {
         "name": "Floor emission"
       },

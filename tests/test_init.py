@@ -80,7 +80,7 @@ async def test_migrate_from_version_1(ha: HomeAssistant) -> None:
     reg = er.async_get(ha)
     old = reg.async_get_or_create("sensor", DOMAIN, f"{e.entry_id}_heat_loss", config_entry=e, suggested_object_id="luft_vand_heat_loss")
     h = str(int(time.time()) // 3600 * 3600 - 7200)
-    store_v1 = {"collected": {h: {"comp": 60.0, "ws": 3.0, "air": ["sensor.rum_1"]}}, "accepted": {"cop": {"value": 2.5}},
+    store_v1 = {"collected": {h: {"comp": 60.0, "ws": 3.0, "air": ["sensor.rum_1"]}}, "accepted": {"heat_loss": {"value": 2.5}},
                 "fits": {}, "runs": [{"at": time.time()}], "slots": {"1": [0.3, 0.1, 5.0, 33.0, 20.0]}, "daily": {}, "calib_version": 4}
     from homeassistant.helpers.storage import Store
 
@@ -99,7 +99,7 @@ async def test_migrate_from_version_1(ha: HomeAssistant) -> None:
     s = c.sources[src[0].subentry_id]
     assert s.collected[h] == {"comp": 60.0}
     assert c.collected[h] == {"ws": 3.0, "air": ["sensor.rum_1"]}
-    assert s.accepted["cop"]["value"] == 2.5 and "1" in s.slots
+    assert s.accepted["heat_loss"]["value"] == 2.5 and "1" in s.slots
 
 
 async def test_collect_with_weather_and_setpoint(ha: HomeAssistant) -> None:

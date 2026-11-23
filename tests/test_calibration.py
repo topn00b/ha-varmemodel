@@ -9,7 +9,6 @@ from custom_components.varmemodel.calibration import (
     Hour,
     calibrate,
     fit_cooling,
-    fit_cop,
     fit_curve,
     fit_heat_loss,
     guard,
@@ -67,32 +66,6 @@ def test_heat_loss_assumes_typical_indoor_when_missing() -> None:
     assert f.source == "fit" and f.extra["hours_with_assumed_indoor"] > 0
 
 
-def test_cop_recovers_flow_coefficient() -> None:
-    f = fit_cop(synth())
-    assert f.extra["c_source"] == "fit"
-    assert abs(f.extra["c"] - C) < 0.01
-    assert abs(f.extra["b"] - B) < 0.01
-    assert abs(f.value - (A + C * 35)) < 0.05
-
-
-def test_cop_uses_prior_when_flow_follows_curve() -> None:
-    hours = synth()
-    for h in hours:  # fremløb følger kun udetemperaturen → c kan ikke skilles fra b
-        h.t_flow = C0 + C1 * h.t_out
-        h.e = h.q / (A + B * h.t_out + C * h.t_flow) if h.q else h.e
-    f = fit_cop(hours)
-    assert f.extra["c_source"] == "prior"
-
-
-def test_cop_skips_hot_water_hours() -> None:
-    hours = synth()
-    for h in hours[::3]:
-        h.dhw = 30
-        h.e = h.q / 1.5 if h.q else h.e  # varmt vand: dårlig COP
-    f = fit_cop(hours)
-    assert abs(f.value - (A + C * 35)) < 0.1
-
-
 def test_curve_removes_offset() -> None:
     f = fit_curve(synth())
     assert abs(f.value - C0) < 0.1 and abs(f.extra["slope"] - C1) < 0.02
@@ -112,7 +85,7 @@ def test_cooling_time_constant() -> None:
 
 def test_calibrate_returns_all_keys() -> None:
     res = calibrate(synth())
-    assert set(res) == {"heat_loss", "cop", "emission", "max_power", "min_power", "curve", "defrost", "cooling", "wind_effect"}
+    assert set(res) == {"heat_loss", "emission", "max_power", "min_power", "curve", "defrost", "cooling", "wind_effect"}
     assert res["emission"].value is not None
 
 

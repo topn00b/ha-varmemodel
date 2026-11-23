@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.6.9';
+  const VERSION = '0.7.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -367,15 +367,17 @@
     }
     hyd(h, s) {
       const y = s.e('cop_yesterday'), ya = at(h, y), sd = s.e('cop_steady'), sa = at(h, sd), hl = s.e('heat_loss'), ha = at(h, hl);
+      const td = s.e('cop_today'), ta = at(h, td);
       const row = (k, v) => `<div>${k}</div><div class="n">${v}</div>`;
       let o = '<div class="h2">Effektivitet</div><div class="grid">';
+      o += row('COP i dag', `${V(h, td, 2)} <span class="mut sm">${fmt(num(ta.kwh_varme), 1)} kWh varme / ${fmt(num(ta.kwh_el), 1)} kWh el</span>`);
+      o += row('– uden varmt vand / stabil drift', `${A(h, td, ta.cop_uden_varmt_vand, 2)} / ${A(h, td, ta.cop_stabil_drift, 2)} <span class="mut sm">ekstra el ${fmt(num(ta.ekstra_el_opstart_afrimning_standby_pct), 1)} %</span>`);
       o += row('COP i går', `${V(h, y, 2)} <span class="mut sm">${fmt(ya.varme_kwh, 0)} kWh varme / ${fmt(ya.el_kwh, 1)} kWh el · ude ${fmt(ya.ude_snit)} °C</span>`);
-      o += row('– uden varmt vand / forventet', `${A(h, y, ya.cop_uden_varmt_vand, 2)} / ${A(h, sd, ya.forventet_stabil_cop, 2)} <span class="mut sm">(${sgn(num(ya.forskel_fra_stabil_pct))} %)</span>`);
+      o += row('– uden varmt vand / model', `${A(h, y, ya.cop_uden_varmt_vand, 2)} / ${A(h, sd, ya.forventet_stabil_cop, 2)} <span class="mut sm">(${sgn(num(ya.forskel_fra_stabil_pct))} %)</span>`);
       o += row('COP 7 døgn', V(h, s.e('cop_week'), 2));
-      o += row('Stabil drift (0 °C ude, 35 °C fremløb, 4 kW)', V(h, sd, 2));
-      o += row('Timemodel (0 °C ude, 35 °C fremløb)', V(h, s.e('cop'), 2));
+      o += row('Stabil drift, reference A0/W35 4 kW', V(h, sd, 2));
       o += row('Pr. grad lavere fremløb', A(h, sd, sa.per_k_flow_pct, 1, '% bedre COP'));
-      o += row('Tab fra opstart og afrimning', V(h, s.e('cop_loss'), 1, '%'));
+      o += row('Ekstra el ved opstart, afrimning og standby (10 dage)', V(h, s.e('cop_loss'), 1, '%'));
       o += row('Afrimninger pr. kompressortime', V(h, s.e('defrost'), 2));
       o += '</div>' + copBars(ya['seneste_14_døgn'] || [], y);
       o += '<div class="h2">Bygning</div><div class="grid">';
@@ -557,7 +559,6 @@
       const main = vm.sources.find((s) => s.kind === 'hydronic') || null;
       const air = vm.sources.filter((s) => s.kind !== 'hydronic');
       const D = this.data(h, vm, main);
-      this.today(h, D);
       return this.band(h, vm, main, D) + this.svg(h, vm, main, air, D);
     }
     data(h, vm, main) {
@@ -590,15 +591,6 @@
       Object.assign(D, { f, cfg, pa, pst, flow, ret, compOn, onMin, defr, dhw, shift, clim, hpk, ep, steady, live, exp, lowMin, differs, pumpOn, bal,
         A_: sv(h, cfg.a), B_: sv(h, cfg.b), C_: sv(h, cfg.c), D_: sv(h, cfg.d) });
       return D;
-    }
-    today(h, D) {
-      const ids = [D.f.heat_energy, D.f.electricity_energy].filter(Boolean);
-      if (!ids.length || (this._tT && Date.now() - this._tT < 300e3)) return;
-      this._tT = Date.now();
-      const d0 = new Date(); d0.setHours(0, 0, 0, 0);
-      h.callWS({ type: 'recorder/statistics_during_period', start_time: d0.toISOString(), period: 'day', statistic_ids: ids, types: ['change'] })
-        .then((r) => { this._today = {}; for (const id of ids) this._today[id] = (r[id] || []).reduce((s, x) => s + (x.change || 0), 0); this._draw(); })
-        .catch(() => {});
     }
     band(h, vm, main, D) {
       const c = this._c, pa = D.pa, pst = D.pst;
@@ -724,11 +716,11 @@
       p.flow = [`${fr === null ? '–' : fmt(fr)} L/min · ΔT ${D.flow !== null && D.ret !== null ? fmt(D.flow - D.ret) : '–'} K`, cfg.flow_rate || f.flow_temp];
       p.tank = cfg.tank ? [`${fmt(sv(h, cfg.tank))} °C`, cfg.tank] : null;
       p.vv = [D.dhw ? 'laver varmt vand' : 'nej', f.dhw];
-      const T = this._today || {}; const ht = T[f.heat_energy], et = T[f.electricity_energy];
-      p.vdag = [fmt(ht), f.heat_energy]; p.edag = [fmt(et), f.electricity_energy];
-      p.copd = [ht && et ? fmt(ht / et, 2) : '–', main.e('cop_today')];
-      const ya = at(h, main.e('cop_yesterday'));
-      p.igaar = `i går u. varmt vand ${fmt(ya.cop_uden_varmt_vand, 2)} · forventet ${fmt(ya.forventet_stabil_cop, 2)}`;
+      // Én kilde: Varmemodels »COP i dag« (5-minutters portioner siden midnat)
+      const ct = main.e('cop_today'), ca = at(h, ct);
+      p.vdag = [fmt(num(ca.kwh_varme)), ct]; p.edag = [fmt(num(ca.kwh_el)), ct];
+      p.copd = [fmt(sv(h, ct), 2), ct];
+      p.igaar = `i dag u. varmt vand ${fmt(num(ca.cop_uden_varmt_vand), 2)} · stabil drift ${fmt(num(ca.cop_stabil_drift), 2)}`;
       const P2 = (v, e) => (v === null ? null : [`${fmt(v)} °C`, e]);
       p.a = P2(D.A_, cfg.a); p.b = P2(D.B_, cfg.b); p.c = P2(D.C_, cfg.c); p.d = P2(D.D_, cfg.d);
       p.dthus = D.B_ !== null && D.C_ !== null ? [`ΔT hus ${fmt(D.B_ - D.C_)} K`, cfg.c, { cls: D.pumpOn === false ? 'usikker' : '' }]
