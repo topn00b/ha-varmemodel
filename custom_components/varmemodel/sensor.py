@@ -384,6 +384,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "boost_until": p.get("boost_until"), "boost_delta": p.get("boost_delta"), "red_allowance": p.get("red_allowance"), "preload": p.get("preload"),
             "preload_window": (lambda w: {"fra": _ts_local(w["from"]), "til": _ts_local(w["to"]), "blokering_fra": _ts_local(w["block_from"]),
                                           "blokering_til": _ts_local(w["block_to"]), "kwh": w["kwh"]} if w else None)(p.get("preload_window")),
+            "flow_boost": (lambda b: {"grader": b["k"], "rum": b["rooms"], "siden": _ts_local(b["t"])} if b else None)(p.get("flow_boost")),
             "max_pause": p.get("max_pause"), "comfort_offset": p.get("comfort_offset"),
             "history": [{"t": _ts_local(int(k)), "plan": v["p"], "price": v["pr"], "blocked": v["b"]}
                         for k, v in sorted((self.coordinator.plan_log.get(self.src.sid) or {}).items(), key=lambda kv: int(kv[0]))[-48:]],

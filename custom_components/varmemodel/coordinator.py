@@ -42,7 +42,7 @@ from .calibration import (
 )
 from .command import Command, step
 from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
-from .planner import PlanHour, PlanRoom, SourceModel, estimate_room, make_air_plan, make_plan, simulate_rooms
+from .planner import FLOW_LOW_OPEN_S, PlanHour, PlanRoom, SourceModel, estimate_room, flow_boost_step, make_air_plan, make_plan, simulate_rooms
 from .const import (
     BACKFILL_DAYS,
     CALIB_VERSION,
@@ -197,6 +197,8 @@ class VarmemodelCoordinator:
         self.commands: dict[str, dict[str, Any]] = {}  # anbefalet styring pr. vandbåren kilde
         self.plan_stats: dict[str, Any] = {}  # andel kvarterer med frisk plan i dag
         self.last_known: dict[str, list[float]] = {}  # føler -> [værdi, tidspunkt]: bro over korte udfald
+        self.valve_since: dict[str, float] = {}  # termostaten kalder på varme siden (rummets nøgle)
+        self.flow_boost: dict[str, dict[str, Any]] = {}  # fremløb for lavt: °C over grænsen pr. vandbåren kilde
         self.estimates: dict[str, dict[str, Any]] = {}  # rumføler væk i over 30 min. -> forudsagt temperatur nu
         self.missing_data: dict[str, Any] = {}  # datapunkter der har manglet i over 30 min. (»Mangler data«)
         self._started = time.time()
@@ -915,6 +917,19 @@ class VarmemodelCoordinator:
             t_max=_num(r.get("max")) if r.get("max") is not None else None,
         )
 
+    def _valve_open_since(self, r: dict[str, Any], now: float) -> float | None:
+        """Siden hvornår rummets termostat/telestat har kaldt på varme uafbrudt (None = lukket eller ukendt)."""
+        eid = r.get("valve")
+        st = self.hass.states.get(eid) if eid else None
+        if st is None or st.state in ("unknown", "unavailable"):
+            self.valve_since.pop(r["key"], None)
+            return None
+        is_open = st.attributes.get("hvac_action") == "heating" if eid.split(".", 1)[0] == "climate" else st.state in ("on", "open", "opening")
+        if not is_open:
+            self.valve_since.pop(r["key"], None)
+            return None
+        return self.valve_since.setdefault(r["key"], now)
+
     def _nb_value(self, eid: str | None) -> float | None:
         """Naboens temperatur: målt eller holdt, ellers forudsagt (et rum uden føler), ellers sidst kendte."""
         tn, _ = self._held_num(eid)
@@ -1276,6 +1291,7 @@ class VarmemodelCoordinator:
             show: list[PlanRoom] = []  # alle varmekildens rum: forudsiges og vises
             mins: list[float] = []
             skipped: list[str] = []
+            low: list[str] = []
             for r in self.rooms_cfg:
                 if self.room_source(r) is not s:
                     continue
@@ -1288,6 +1304,11 @@ class VarmemodelCoordinator:
                 if r["in_plan"] and t_min is not None:
                     rooms.append(pr)
                     mins.append(t_min)
+                    # Fremløb for lavt: termostaten har kaldt på varme i 2 timer, og rummet er stadig under gulvet
+                    since = self._valve_open_since(r, now)
+                    if since is not None and now - since >= FLOW_LOW_OPEN_S and not pr.held and pr.t_now < t_min:
+                        low.append(pr.name)
+            fb = self.flow_boost[sid] = flow_boost_step(self.flow_boost.get(sid), now, low)
             # Koldere end det, modellen er målt ved: forsigtig plan (+ indstillingens % varmetab, +0,2 °C margen i rummene)
             caution = self.setting(CONF_COLD_CAUTION)
             cold_lim = (a.get("heat_loss") or {}).get("t_out_min")
@@ -1307,7 +1328,7 @@ class VarmemodelCoordinator:
             p = await self.hass.async_add_executor_job(
                 partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), past_q=past_q, label=_clock,
                         boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE),
-                        preload=self.setting(CONF_PRELOAD), flow_margin=self.setting(CONF_FLOW_MARGIN)))
+                        preload=self.setting(CONF_PRELOAD), flow_margin=self.setting(CONF_FLOW_MARGIN) + fb["k"]))
             # Log: det planlagte for timen (første plan i timen) og rummenes forudsigelse – til »i går« og »!«
             log = self.plan_log.setdefault(sid, {})
             if p.hours and p.hours[0]["ts"] == h0 and str(h0) not in log:
@@ -1379,7 +1400,7 @@ class VarmemodelCoordinator:
                                               for e in [next((x for x in self.estimates.values() if x["name"] == r.name), None)] if e},
                           "boost": boost_on, "boost_until": boost_note,
                           "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE), "preload": self.setting(CONF_PRELOAD),
-                          "preload_window": p.preload, "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
+                          "preload_window": p.preload, "flow_boost": fb if fb["k"] or fb["rooms"] else None, "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
             # Anbefalet styring: planens ønske nu omsat efter reglerne, der skåner varmepumpen
             cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
             cmd = step(Command.load(self.commands.get(sid)), now, dt_util.now().date().isoformat(),

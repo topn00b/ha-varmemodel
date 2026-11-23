@@ -107,6 +107,27 @@ def _preload_window(hours: list[PlanHour], q: list[float], label: Callable[[int]
     return pq, w, f"opvarmer {label(w['from'])}–{clk(w['to'])} før blokeringen {clk(w['block_from'])}–{clk(w['block_to'])}"
 
 
+FLOW_BOOST_MAX = 5  # fremløb for lavt: højst så mange °C over grænsen
+FLOW_LOW_OPEN_S = 7200  # termostaten skal have kaldt på varme så længe, før fremløbet regnes for lavt
+
+
+def flow_boost_step(prev: dict[str, Any] | None, now: float, rooms_low: list[str]) -> dict[str, Any]:
+    """Fremløb for lavt: hæv fremløbsgrænsen 1 °C pr. time, så længe et rum er under sit gulv, mens
+    termostaten har kaldt på varme i mindst 2 timer; sænk den igen 1 °C pr. time, når ingen rum er det.
+
+    ``prev``/resultat: {"k": °C over grænsen, "t": sidste ændring, "rooms": rummene der kalder}.
+    """
+    k, t = int((prev or {}).get("k", 0)), float((prev or {}).get("t", 0.0))
+    if rooms_low:
+        if k == 0:
+            k, t = 1, now
+        elif now - t >= 3600 and k < FLOW_BOOST_MAX:
+            k, t = k + 1, now
+    elif k > 0 and now - t >= 3600:
+        k, t = k - 1, now
+    return {"k": k, "t": t, "rooms": sorted(rooms_low)}
+
+
 def _cop(m: SourceModel, t_out: float, p: float, target: float) -> float:
     a, b, c, d = m.cop
     return max(1.2, a + b * t_out + c * flow_for(m, p, target) + d * p)

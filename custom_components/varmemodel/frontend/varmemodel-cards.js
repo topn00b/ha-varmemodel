@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.8.0';
+  const VERSION = '0.8.1';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -672,6 +672,9 @@
         if (!up || now - up > 30 * 60e3) w.push(['❗', `${s.name}: planen er over 30 min. gammel`]);
         if (a.inputs_ok === false) w.push(['❗', `${s.name}: planen mangler ${(a.missing || []).join(', ')}`]);
         if (a.safety) w.push(['❗', `${s.name}: nødplan uden priser`]);
+        const fb = a.flow_boost;
+        if (fb && fb.rum && fb.rum.length) w.push(['⚠️', `Fremløb for lavt: ${fb.rum.join(', ')} har kaldt på varme i over 2 timer og er under gulvet – fremløbsgrænsen er hævet ${fmt(fb.grader, 0)} °C`]);
+        else if (fb && fb.grader > 0) w.push(['ℹ️', `${s.name}: fremløbsgrænsen er stadig hævet ${fmt(fb.grader, 0)} °C og sænkes 1 °C i timen`]);
         if ((a.rooms_held || []).length) w.push(['⚠️', `${s.name}: bruger sidst kendte temperatur for ${a.rooms_held.join(', ')} (føleren svarer ikke)`]);
         for (const [r, e] of Object.entries(a.rooms_estimated || {})) w.push(['❗', `Mangler data: ${r} har ikke målt siden ${whenM(e['sidste_måling'])} (${e.minutter} min.) – planen bruger forudsigelsen ≈${fmt(e['forudsagt'])} °C. Tjek føleren.`]);
         if ((a.rooms_skipped || []).length) w.push(['❗', `${s.name}: ${a.rooms_skipped.join(', ')} er ikke med i planen (føler eller rummodel mangler)`]);

@@ -110,6 +110,8 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 
 **Lavt og jævnt (standard):** fremløbet må højst ligge *Maks. fremløb over det lærte* over det fremløb, modellen har lært huset bruger ved timens udetemperatur (standard 0 °C). Det begrænser effekten pr. time, så varmen spredes over flere timer ved lavere effekt. Det giver lavere fremløb, højere COP, færre afrimninger og færre start/stop. Sæt den højere, hvis planen må koncentrere varmen mere i de billigste timer.
 
+**Fremløb for lavt (reserve):** har et rums termostat eller telestat kaldt på varme uafbrudt i 2 timer, og er rummet stadig under sit gulv, hæves fremløbsgrænsen 1 °C – og 1 °C mere for hver time, det fortsætter (højst +5 °C). Når ingen rum er det længere, sænkes grænsen igen 1 °C i timen. Kortet viser det som en advarsel, og *Plan nu* har det i attributten `flow_boost`.
+
 **Forvarmning før blokeringer:** gulvvarme, der skal være slukket i mange timer (fx dyr el), skal lades op før. I blokerede timer hæves rummenes krav med *Forvarm pr. 6 timers blokering* for hver 6 timer inde i blokeringen, dog højst 1 °C. Med standarden 0,3 °C skal rummene stå 0,2 °C højere sidst i en blokering på 4 timer og 0,35 °C højere sidst i en på 7 timer. Planen lægger derfor mere varme før lange blokeringer, mens *Komfort over min.* kan holdes lav resten af tiden. Begrundelsen viser, hvor meget der forvarmes til den næste blokering på mindst 3 timer. 0 slår det fra.
 
 **»Jeg fryser«** gælder fra den slås til, i højst det valgte antal timer og kun til næste blokerede periode begynder. Der varmes aldrig i blokerede timer.

@@ -262,3 +262,31 @@ def test_low_and_even_caps_flow_at_learned_flow() -> None:
     on = lambda p: sum(1 for x in p.hours if x["heat_kw"] > 0)
     assert max(x["flow"] or 0 for x in even.hours) <= 34.5 - 0.6 + 0.25
     assert on(even) > on(free) and abs(even.heat_kwh - free.heat_kwh) < 2.0
+
+
+def test_flow_boost_steps_up_and_down() -> None:
+    """Fremløb for lavt: +1 °C pr. time mens et rum kalder og er under gulvet, højst 5; derefter −1 °C pr. time."""
+    from custom_components.varmemodel.planner import FLOW_BOOST_MAX, flow_boost_step
+
+    b = flow_boost_step(None, 0, ["Rum A"])
+    assert b["k"] == 1 and b["rooms"] == ["Rum A"]
+    b = flow_boost_step(b, 1800, ["Rum A"])
+    assert b["k"] == 1  # højst én gang i timen
+    for i in range(1, 10):
+        b = flow_boost_step(b, i * 3600, ["Rum A"])
+    assert b["k"] == FLOW_BOOST_MAX
+    b = flow_boost_step(b, 10 * 3600, [])
+    assert b["k"] == FLOW_BOOST_MAX - 1 and not b["rooms"]
+    b = flow_boost_step(b, 10 * 3600 + 600, [])
+    assert b["k"] == FLOW_BOOST_MAX - 1
+
+
+def test_flow_boost_lifts_flow_limit() -> None:
+    """Et hævet fremløbsloft giver planen lov til højere fremløb, når rummene mangler varme."""
+    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, emission_kw_k=0.283, flow_c0=30.0, flow_slope=-0.6)
+    hs = hours(12, t_out=lambda i: 1.0)
+    cold = PlanRoom(name="Rum A", t_now=19.0, t_min=20.0, heat_now=0.08, heat_delayed=0.05, cool_per_hk=0.006, margin=0.2)
+    p0 = make_plan(hs, m, [cold], 20.0, flow_margin=0.0)
+    p3 = make_plan(hs, m, [cold], 20.0, flow_margin=3.0)
+    assert max(x["flow"] or 0 for x in p0.hours) <= 30.0 - 0.6 + 0.25
+    assert max(x["flow"] or 0 for x in p3.hours) > max(x["flow"] or 0 for x in p0.hours)
