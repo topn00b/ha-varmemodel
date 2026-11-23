@@ -962,8 +962,9 @@ class VarmemodelCoordinator:
             margin=margin, accuracy=acc, neighbours=nbs, held=held, estimated=est is not None,
             t_max=_num(r.get("max")) if r.get("max") is not None else None,
             # Termostat: målt andel af kildens varme (ventil-data) og lukketemperatur = gulv + bånd (kun vandbårne rum)
+            # Kun rum med en rigtig telestat/termostat kan lukke kredsen; »altid åben« får sin andel hele tiden
             share=self._room_share(r, s), t_close=(t_min + self.setting(CONF_COMFORT_OFFSET))
-            if s.kind == SOURCE_HYDRONIC and t_min > -50 and self._room_share(r, s) else None,
+            if s.kind == SOURCE_HYDRONIC and t_min > -50 and self._room_share(r, s) and r.get("valve") and not r.get("always_open") else None,
         )
 
     def _room_share(self, r: dict[str, Any], s: SourceState) -> float | None:
