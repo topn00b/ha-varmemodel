@@ -653,6 +653,53 @@ def fit_cop_loss(steady: Fit, five: dict[int, dict[str, float | None]], comp: li
     return Fit(round((1 - eff / st) * 100, 1), n, None, None, steady.t_out_min, steady.t_out_max, "fit",
                {"cop_effective": round(eff, 2), "cop_steady_same_heat": round(st, 2), "value_is": "% lavere COP end stabil drift"})
 
+def cop_today(five: dict[int, dict[str, float | None]], comp: list[tuple[float, float]],
+              defrost: list[tuple[float, float]], dhw: list[tuple[float, float]], steady: Fit | None) -> dict[str, Any] | None:
+    """Dagens COP fra 5-minutters portioner: samlet, uden varmt vand, stabil drift (ekspertmetoden:
+    fra 10 min efter start/afrimning til afrimning, varmt vand eller stop) og hvad tabet skyldes.
+
+    Alle energier er kWh: ``q`` = kWh varme, ``e`` = kWh el.
+    """
+    def hit(a: float, b: float, ivs: list[tuple[float, float]]) -> bool:
+        return any(x < b and y > a for x, y in ivs)
+
+    q = e = qv = ev = 0.0
+    for t, r in five.items():
+        qq, ee = r.get("q"), r.get("e")
+        if qq is None or ee is None:
+            continue
+        q += max(qq, 0.0)
+        e += max(ee, 0.0)
+        if hit(t, t + 300, dhw):
+            qv += max(qq, 0.0)
+            ev += max(ee, 0.0)
+    if e < 0.2:
+        return None
+    sl = steady_slots(five, comp, defrost, dhw)
+    qs, es = sum(x.q for x in sl), sum(x.e for x in sl)
+    cop = q / e
+    q_sh, e_sh = q - qv, e - ev
+    cop_sh = q_sh / e_sh if e_sh > 0.2 else None
+    cop_st = qs / es if es > 0.1 else None
+    exp = None
+    if steady is not None and steady.value is not None and sl:
+        a, b, c, d = (steady.extra.get(k, 0.0) for k in ("a", "b", "c", "d"))
+        exp = qs / sum(x.q / max(1.2, a + b * x.t_out + c * x.t_flow + d * x.q * 12) for x in sl)
+    return {
+        "heat_kwh": round(q, 2), "el_kwh": round(e, 2), "cop": round(cop, 2),
+        "dhw_heat_kwh": round(qv, 2), "dhw_el_kwh": round(ev, 2),
+        "cop_without_dhw": None if cop_sh is None else round(cop_sh, 2),
+        "cop_steady": None if cop_st is None else round(cop_st, 2),
+        "steady_minutes": len(sl) * 5,
+        # Tab ved opstart og afrimning: rumvarme over al driftstid mod stabil drift samme dag
+        "loss_start_defrost_pct": None if cop_sh is None or cop_st is None else round((1 - cop_sh / cop_st) * 100, 1),
+        # Varmt vands træk på dagens COP
+        "dhw_effect_pct": None if cop_sh is None else round((1 - cop / cop_sh) * 100, 1),
+        "expected_steady": None if exp is None else round(exp, 2),
+        "steady_vs_model_pct": None if exp is None or cop_st is None else round((cop_st / exp - 1) * 100, 1),
+    }
+
+
 # ---------------------------------------------------------------- COP pr. døgn
 def daily_cop(hours: list[Hour], day_of, steady: Fit | None, days: list[str]) -> dict[str, Any] | None:
     """Varme ÷ el for de givne døgn (lokal dato via ``day_of(ts)``).

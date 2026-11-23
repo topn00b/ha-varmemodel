@@ -27,6 +27,7 @@ from .calibration import (
     RoomHour,
     Slot,
     calibrate,
+    cop_today,
     daily_cop,
     daily_el,
     detect_airing,
@@ -152,6 +153,7 @@ class SourceState:
     fits: dict[str, dict[str, Any]] = field(default_factory=dict)
     slots: dict[str, list[float]] = field(default_factory=dict)
     daily: dict[str, Any] = field(default_factory=dict)
+    today: dict[str, Any] = field(default_factory=dict)  # dagens COP, regnes hver time
     last_hours: list[Hour] = field(default_factory=list)
     el_backup: dict[str, Any] = field(default_factory=dict)  # faktor og timer for den supplerende elmåler
 
@@ -293,6 +295,7 @@ class VarmemodelCoordinator:
         )
         self._unsubs.append(async_track_time_change(self.hass, self._on_replan, minute=[2, 17, 32, 47], second=0))
         self._unsubs.append(async_call_later(self.hass, 45, self._on_replan))
+        self._unsubs.append(async_call_later(self.hass, 90, self._on_today))
         last = self.runs[-1]["at"] if self.runs else 0
         if time.time() - last > 86400:
             self._unsubs.append(async_call_later(self.hass, 120, self._on_start_delay))
@@ -349,6 +352,47 @@ class VarmemodelCoordinator:
     async def _on_hour(self, _now: datetime) -> None:
         await self.async_collect()
         self.store.async_delay_save(self._data, 300)
+        await self._on_today(None)
+
+    async def _on_today(self, _now: datetime | None) -> None:
+        """Dagens COP for hver vandbåren kilde (5-minutters portioner siden midnat)."""
+        for s in self.sources.values():
+            if s.kind != SOURCE_HYDRONIC:
+                continue
+            try:
+                s.today = await get_instance(self.hass).async_add_executor_job(self._today_sync, s) or {}
+            except Exception:  # noqa: BLE001 – en diagnose må ikke vælte resten
+                _LOGGER.exception("COP i dag fejlede")
+        self._notify()
+
+    def _today_sync(self, s: SourceState) -> dict[str, Any] | None:
+        heat, el, flow, comp_id = s.eid(CONF_HEAT), s.eid(CONF_ELECTRICITY), s.eid(CONF_FLOW), s.eid(CONF_COMPRESSOR)
+        out = self._id(CONF_OUTDOOR)
+        if not (heat and el and out and flow and comp_id):
+            return None
+        end = dt_util.utcnow()
+        start = dt_util.as_utc(dt_util.start_of_local_day())
+        stats = statistics_during_period(self.hass, start, end, {heat, el, out, flow}, "5minute", {"energy": "kWh", "temperature": "°C"}, {"change", "mean"})
+        five: dict[int, dict[str, float | None]] = {}
+        for stat_id, key, fld in ((heat, "q", "change"), (el, "e", "change"), (out, "t_out", "mean"), (flow, "t_flow", "mean")):
+            for x in stats.get(stat_id, []):
+                five.setdefault(int(_ts(x["start"])), {})[key] = _num(x.get(fld))
+
+        def ivs(key: str) -> list[tuple[float, float]]:
+            eid = s.eid(key)
+            if not eid:
+                return []
+            res = history.get_significant_states(self.hass, start, end, [eid], include_start_time_state=True, significant_changes_only=False)
+            ch = [(x.last_changed.timestamp(), x.state == "on") for x in res.get(eid, []) if isinstance(x, State) and x.state not in ("unknown", "unavailable")]
+            return agg.intervals(ch, end.timestamp())
+
+        st = s.accepted.get("cop_steady") or {}
+        steady = Fit(st.get("value"), extra=st.get("extra") or {}) if st.get("value") is not None else None
+        d = cop_today(five, ivs(CONF_COMPRESSOR), ivs(CONF_DEFROST), ivs(CONF_DHW), steady)
+        if d is not None:
+            d["date"] = dt_util.now().date().isoformat()
+            d["updated"] = dt_util.now().isoformat(timespec="minutes")
+        return d
 
     def _plant_loss_w(self) -> float:
         """Varmecentralens tab nu (W) ud fra snittet de seneste 7 døgn."""
@@ -1214,6 +1258,8 @@ class VarmemodelCoordinator:
                 return float(x) if x is not None else default
 
             st_extra = (a.get("cop_steady") or {}).get("extra") or {}
+            # Planen regner med stabil COP; det målte tab ved opstart og afrimning (%, kun et tab – aldrig en gevinst) trækkes fra
+            lf = 1 - min(max(v("cop_loss", 0.0), 0.0), 30.0) / 100
             model = SourceModel(
                 heat_loss_w_k=v("heat_loss", 90.0),
                 # Varmecentralens tab til jorden lægges til husets behov som negativ gratis varme
@@ -1222,8 +1268,8 @@ class VarmemodelCoordinator:
                 # Til planlægning må høj effekt eller højt fremløb aldrig gøre COP bedre (fysik). Et positivt
                 # effektled i kalibreringen skyldes koldt gulv efter pauser (lav retur), ikke effekten selv.
                 # Er effektleddet positivt, holdes det fast ved 4 kW (kalibreringens referenceeffekt), så niveauet passer.
-                cop=(float(st_extra.get("a", 3.0)) + max(float(st_extra.get("d", 0.0)), 0.0) * 4.0, float(st_extra.get("b", 0.15)),
-                     min(float(st_extra.get("c", -0.04)), 0.0), min(float(st_extra.get("d", 0.0)), 0.0)),
+                cop=tuple(lf * x for x in (float(st_extra.get("a", 3.0)) + max(float(st_extra.get("d", 0.0)), 0.0) * 4.0, float(st_extra.get("b", 0.15)),
+                                           min(float(st_extra.get("c", -0.04)), 0.0), min(float(st_extra.get("d", 0.0)), 0.0))),
                 # Gulvets typiske afgivelse (median) – 25 %-fraktilen gav et urealistisk højt fremløb
                 emission_kw_k=float(((a.get("emission") or {}).get("extra") or {}).get("median") or v("emission", 0.25)),
                 curve_c0=v("curve", 34.0),

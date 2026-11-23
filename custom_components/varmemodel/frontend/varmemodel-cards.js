@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.6.7';
+  const VERSION = '0.6.8';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -726,7 +726,7 @@
       p.vv = [D.dhw ? 'laver varmt vand' : 'nej', f.dhw];
       const T = this._today || {}; const ht = T[f.heat_energy], et = T[f.electricity_energy];
       p.vdag = [fmt(ht), f.heat_energy]; p.edag = [fmt(et), f.electricity_energy];
-      p.copd = [ht && et ? fmt(ht / et, 2) : '–', main.e('cop_yesterday')];
+      p.copd = [ht && et ? fmt(ht / et, 2) : '–', main.e('cop_today')];
       const ya = at(h, main.e('cop_yesterday'));
       p.igaar = `i går u. varmt vand ${fmt(ya.cop_uden_varmt_vand, 2)} · forventet ${fmt(ya.forventet_stabil_cop, 2)}`;
       const P2 = (v, e) => (v === null ? null : [`${fmt(v)} °C`, e]);

@@ -79,7 +79,7 @@
         "name": "Varmetab"
       },
       "cop": {
-        "name": "Effektiv COP ved 0 °C og 35 °C fremløb"
+        "name": "COP-reference A0/W35 (inkl. afrimning)"
       },
       "emission": {
         "name": "Gulvets afgivelse"
@@ -111,7 +111,7 @@
         }
       },
       "cop_steady": {
-        "name": "COP i stabil drift ved 0 °C og 35 °C fremløb"
+        "name": "COP-reference A0/W35 4 kW (stabil drift)"
       },
       "cop_loss": {
         "name": "Tab ved opstart og afrimning"
@@ -176,6 +176,9 @@
           "heat": "Varme",
           "off": "Slukket"
         }
+      },
+      "cop_today": {
+        "name": "COP i dag"
       }
     },
     "button": {

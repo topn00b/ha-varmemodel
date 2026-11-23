@@ -79,7 +79,7 @@
         "name": "Heat loss"
       },
       "cop": {
-        "name": "Effective COP at 0 °C and 35 °C flow"
+        "name": "COP reference A0/W35 (incl. defrost)"
       },
       "emission": {
         "name": "Floor emission"
@@ -111,7 +111,7 @@
         }
       },
       "cop_steady": {
-        "name": "Steady-state COP at 0 °C and 35 °C flow"
+        "name": "COP reference A0/W35 4 kW (steady state)"
       },
       "cop_loss": {
         "name": "Loss from start-up and defrost"
@@ -176,6 +176,9 @@
           "heat": "Heat",
           "off": "Off"
         }
+      },
+      "cop_today": {
+        "name": "COP today"
       }
     },
     "button": {

@@ -321,3 +321,32 @@ def test_plant_room_loss_is_subtracted_before_house_fit() -> None:
     ex = split.extra
     assert ex["plant_room_w_k"] == 30 and ex["plant_room_loss_kwh_day"] > 9
     assert ex["plant_room_free_fit"]["usable"] is False
+
+
+def test_cop_today_breakdown():
+    """Dagens COP: samlet, uden varmt vand, stabil drift og tab ved opstart (ekspertmetoden)."""
+    from custom_components.varmemodel.calibration import cop_today
+
+    t0 = 1_700_000_100 // 300 * 300
+    five = {}
+    # 2 timers drift: første 10 min opstart (COP 2), derefter stabilt COP 3; sidste 30 min varmt vand (COP 2)
+    for i in range(24):
+        t = t0 + i * 300
+        if i < 2:
+            q, e = 0.2, 0.1
+        elif i >= 18:
+            q, e = 0.2, 0.1
+        else:
+            q, e = 0.3, 0.1
+        five[t] = {"q": q, "e": e, "t_out": 2.0, "t_flow": 33.0}
+    comp = [(t0, t0 + 24 * 300)]
+    dhw = [(t0 + 18 * 300, t0 + 24 * 300)]
+    d = cop_today(five, comp, [], dhw, None)
+    assert d is not None
+    assert d["cop_steady"] == 3.0
+    assert d["dhw_el_kwh"] == 0.6
+    # uden varmt vand: (2·0,2 + 16·0,3) / 1,8 = 2,89 → tab mod stabil ≈ 3,7 %
+    assert abs(d["cop_without_dhw"] - 2.89) < 0.01
+    assert 3 < d["loss_start_defrost_pct"] < 4.5
+    assert d["dhw_effect_pct"] > 0
+    assert cop_today({}, [], [], [], None) is None

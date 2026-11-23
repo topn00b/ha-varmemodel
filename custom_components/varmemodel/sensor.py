@@ -30,7 +30,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
         ents: list[SensorEntity] = []
         if s.kind == SOURCE_HYDRONIC:
             ents += [FitSensor(c, s, k) for k in FIT_KEYS]
-            ents += [DailyCopSensor(c, s, "yesterday"), DailyCopSensor(c, s, "week")]
+            ents += [DailyCopSensor(c, s, "yesterday"), DailyCopSensor(c, s, "week"), CopTodaySensor(c, s)]
             ents += [PlanNowSensor(c, s), CommandSensor(c, s), PlanValueSensor(c, s, "plan_flow", "flow", "°C", 1),
                      PlanValueSensor(c, s, "plan_shift", "shift", None, 0), PlanCostSensor(c, s)]
         else:
@@ -128,6 +128,40 @@ class DailyCopSensor(SourceEntity, SensorEntity):
                 for x in (self.src.daily or {}).get("days") or [] if x
             ]
         return attrs
+
+
+class CopTodaySensor(SourceEntity, SensorEntity):
+    """Dagens COP (kWh varme ÷ kWh el siden midnat) med opdeling: varmt vand, stabil drift og tab ved opstart/afrimning."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
+        super().__init__(coordinator, s, "cop_today")
+
+    @property
+    def _d(self) -> dict[str, Any]:
+        d = self.src.today or {}
+        return d if d.get("date") == dt_util.now().date().isoformat() else {}
+
+    @property
+    def native_value(self) -> float | None:
+        return self._d.get("cop")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        d = self._d
+        return {
+            "kwh_varme": d.get("heat_kwh"), "kwh_el": d.get("el_kwh"),
+            "varmt_vand_kwh_varme": d.get("dhw_heat_kwh"), "varmt_vand_kwh_el": d.get("dhw_el_kwh"),
+            "cop_uden_varmt_vand": d.get("cop_without_dhw"),
+            "cop_stabil_drift": d.get("cop_steady"), "minutter_stabil_drift": d.get("steady_minutes"),
+            "tab_opstart_afrimning_pct": d.get("loss_start_defrost_pct"),
+            "varmt_vand_traek_pct": d.get("dhw_effect_pct"),
+            "stabil_cop_ifølge_model": d.get("expected_steady"), "stabil_mod_model_pct": d.get("steady_vs_model_pct"),
+            "metode": "5-minutters portioner siden midnat; stabil drift = fra 10 min efter start/afrimning til afrimning, varmt vand eller stop",
+            "opdateret": d.get("updated"),
+        }
 
 
 class DailyElSensor(SourceEntity, SensorEntity):
