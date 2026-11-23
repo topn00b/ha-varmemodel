@@ -241,6 +241,9 @@
       },
       "flow_control": {
         "name": "Varmemodel controls flow"
+      },
+      "hydro_control": {
+        "name": "Varmemodel controls heat pump"
       }
     },
     "time": {
@@ -278,14 +281,16 @@
             "defrost": "Defrost",
             "dhw": "Domestic hot water",
             "electricity_backup": "Additional electricity meter (e.g. cloud)",
-            "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)"
+            "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)",
+            "onoff_target": "On/off target (climate Varmemodel switches to heat / off)"
           },
           "data_description": {
             "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
             "compressor": "Used for full running hours, starts and splitting heat between rooms.",
             "dhw": "Hours with hot water are excluded from space heating.",
             "electricity_backup": "Used for hours where the main meter has no data, e.g. before it was installed. Scaled automatically to the main meter using the hours where both have data.",
-            "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)"
+            "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)",
+            "onoff_target": "On/off target (climate Varmemodel switches to heat / off)"
           }
         },
         "air_air": {

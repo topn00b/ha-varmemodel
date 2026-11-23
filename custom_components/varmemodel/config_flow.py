@@ -22,6 +22,7 @@ from .const import (
     CONF_ASSIST,
     CONF_EL_POWER,
     CONF_FLOW_TARGET,
+    CONF_ONOFF_TARGET,
     CONF_ASSIST_SPEED,
     CONF_CLIMATE,
     CONF_COMPRESSOR,
@@ -121,6 +122,7 @@ HYDRONIC_SCHEMA = vol.Schema({
     vol.Optional(CONF_DEFROST): BINARY,
     vol.Optional(CONF_DHW): BINARY,
     vol.Optional(CONF_FLOW_TARGET): selector.EntitySelector(selector.EntitySelectorConfig(domain=["climate", "number", "input_number"])),
+    vol.Optional(CONF_ONOFF_TARGET): selector.EntitySelector(selector.EntitySelectorConfig(domain="climate")),
 })
 
 AIR_AIR_SCHEMA = vol.Schema({

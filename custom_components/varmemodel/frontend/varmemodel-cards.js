@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.12.2';
+  const VERSION = '0.13.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -260,7 +260,7 @@
   ];
   // Kortets egne navne (uafhængigt af HA's systemsprog)
   const SET_NAMES = {
-    air_control: 'Varmemodel styrer', air_boost: 'Jeg fryser', flow_control: 'Varmemodel styrer fremløb', air_fan_day: 'Maks. blæser dag', air_fan_night: 'Maks. blæser nat',
+    air_control: 'Varmemodel styrer', air_boost: 'Jeg fryser', flow_control: 'Varmemodel styrer fremløb', hydro_control: 'Varmemodel styrer varmepumpen', air_fan_day: 'Maks. blæser dag', air_fan_night: 'Maks. blæser nat',
     air_night_start: 'Nat begynder', air_night_end: 'Nat slutter', air_swing_v: 'Lameller op/ned', air_swing_h: 'Lameller side',
   };
   function settingsPanel(h, src, title = 'Indstillinger') {
@@ -725,7 +725,7 @@
       if (cs && cs.state !== 'unknown' && (cs.state === 'heat') !== (pst === 'heat')) plan += ` · styring: ${cs.state === 'heat' ? 'varme' : 'slukket'} (${cs.attributes.reason || ''})`;
       const bg = zc || 'var(--primary-color)';
       const zone = `<div class="b zb" style="background:${bg};border-color:${bg}"><div class="z">${z ? `${ico} ${esc(z.toUpperCase())} · ` : ''}${fmt(price, 2)} kr/kWh el</div>`
-        + `<div class="sub">Plan: ${esc(plan)}${this.dry(h, vm) ? ' (styrer ikke endnu)' : air0 && st(h, air0.e('air_control')) ? ' · Varmemodel styrer' : main && st(h, main.e('flow_control')) ? ' · Varmemodel styrer fremløbet' : ''}${flags.length ? ' · ' + esc(flags.join(' · ')) : ''}</div></div>`;
+        + `<div class="sub">Plan: ${esc(plan)}${this.dry(h, vm) ? ' (styrer ikke endnu)' : air0 && st(h, air0.e('air_control')) ? ' · Varmemodel styrer' : main && (st(h, main.e('hydro_control')) || {}).state === 'on' ? ' · Varmemodel styrer varmepumpen' : main && st(h, main.e('flow_control')) ? ' · Varmemodel styrer fremløbet' : ''}${flags.length ? ' · ' + esc(flags.join(' · ')) : ''}</div></div>`;
       const notes = (c.notes || []).map((n) => { const v = n.attribute ? at(h, n.entity)[n.attribute] : (st(h, n.entity) || {}).state; return v ? `<div>${esc(v)}</div>` : ''; }).join('');
       // Bred skærm med vandbåren kilde: knapperne står i diagrammets øverste række (se wideSvg)
       const svgActs = !!main && !(this._tall ?? ((this.clientWidth || 1000) < 700));
@@ -1018,7 +1018,8 @@
     dry(h, vm) {
       const air = vm.sources.length === 1 && vm.sources[0].kind !== 'hydronic' ? vm.sources[0] : null;
       const hyd = vm.sources.find((x) => x.kind === 'hydronic');
-      const sw = air ? st(h, air.e('air_control')) : hyd ? st(h, hyd.e('flow_control')) : null;
+      const hs = hyd ? (st(h, hyd.e('hydro_control')) || {}).state === 'on' : false;
+      const sw = air ? st(h, air.e('air_control')) : hyd ? (hs ? st(h, hyd.e('hydro_control')) : st(h, hyd.e('flow_control'))) : null;
       return sw ? sw.state !== 'on' : !!this._c.dry_run;
     }
     // Timeforbruget (kWh el) fra statistikken – hentes højst hvert 10. minut

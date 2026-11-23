@@ -70,6 +70,9 @@ from .const import (
     CONF_ASSIST_SPEED,
     CONF_CLIMATE,
     CONF_FLOW_TARGET,
+    CONF_ONOFF_TARGET,
+    HYDRO_MAX_FLIPS,
+    HYDRO_SWITCH,
     FLOW_MAX_WRITES,
     FLOW_SWITCH,
     UNCHANGED,
@@ -1431,6 +1434,47 @@ class VarmemodelCoordinator:
         except Exception:  # noqa: BLE001
             _LOGGER.exception("%s: kunne ikke skrive fremløbet", s.name)
 
+    async def _hydro_apply(self, s: SourceState, want_on: bool, blocked: bool, hours: list[dict[str, Any]]) -> None:
+        """Tænd (varme) og sluk den vandbårne varmepumpe efter den anbefalede styring (mindst 60 min. tændt, 30 min. slukket,
+        højst én ændring pr. 15 min. – reglerne i command.py). Blokeret: sluk straks. Højst HYDRO_MAX_FLIPS skift pr. døgn."""
+        eid = s.conf.get(CONF_ONOFF_TARGET)
+        st = self.hass.states.get(eid) if eid else None
+        if st is None or st.state in ("unavailable", "unknown"):
+            return
+        h = self.air.setdefault(f"hydro:{s.sid}", {})
+        day = dt_util.now().date().isoformat()
+        if h.get("day") != day:
+            h["day"], h["flips"] = day, 0
+        is_on = st.state != "off"
+        if blocked:
+            want_on = False
+        if want_on == is_on:
+            return
+        if h["flips"] >= HYDRO_MAX_FLIPS and not (blocked and is_on):
+            _LOGGER.warning("%s: over %s tænd/sluk i dag – Varmemodel holder pause", s.name, HYDRO_MAX_FLIPS)
+            return
+        try:
+            await self.hass.services.async_call("climate", "set_hvac_mode", {"entity_id": eid, "hvac_mode": "heat" if want_on else "off"},
+                                                blocking=True)
+            h["flips"] += 1
+            h["last"] = {"t": time.time(), "on": want_on}
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("%s: kunne ikke %s varmepumpen", s.name, "tænde" if want_on else "slukke")
+            return
+        if want_on and s.conf.get(CONF_FLOW_TARGET):
+            # Varmepumpen går i varme-tilstand om lidt: skriv planens fremløb, så den ikke kører på et gammelt mål
+            async def _later(_now: Any) -> None:
+                await self._flow_apply(s, hours, False)
+            async_call_later(self.hass, 120, _later)
+
+    def hydro_control(self, s: SourceState) -> bool:
+        return bool(self.settings.get(f"{s.sid}.{HYDRO_SWITCH}"))
+
+    async def async_set_hydro_control(self, s: SourceState, on: bool) -> None:
+        self.settings[f"{s.sid}.{HYDRO_SWITCH}"] = bool(on)
+        await self._save()
+        await self.async_replan()
+
     def flow_control(self, s: SourceState) -> bool:
         return bool(self.settings.get(f"{s.sid}.{FLOW_SWITCH}"))
 
@@ -1847,7 +1891,10 @@ class VarmemodelCoordinator:
                        bool(cur and cur["heat_kw"] > 0), (round(cur["flow"]) if cur and cur.get("flow") is not None else None),
                        bool(cur and cur["blocked"]))
             self.commands[sid] = cmd.dump()
-            if s.conf.get(CONF_FLOW_TARGET) and self.settings.get(f"{sid}.{FLOW_SWITCH}"):
+            full = bool(s.conf.get(CONF_ONOFF_TARGET) and self.settings.get(f"{sid}.{HYDRO_SWITCH}"))
+            if full:
+                await self._hydro_apply(s, cmd.on, bool(cur and cur["blocked"]), p.hours)
+            if s.conf.get(CONF_FLOW_TARGET) and (full or self.settings.get(f"{sid}.{FLOW_SWITCH}")):
                 await self._flow_apply(s, p.hours, bool(cur and cur["blocked"]))
         self.plans = plans
         self._flag_missing(now, out_flag)

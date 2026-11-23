@@ -712,3 +712,33 @@ async def test_flow_control_writes_plan_flow_only_in_heat_mode(ha: HomeAssistant
     await c.async_replan()
     await ha.async_block_till_done()
     assert len(calls) == 1  # uændret mål: ingen ny skrivning
+
+
+async def test_hydro_control_switches_heat_pump(ha: HomeAssistant) -> None:
+    """P2: »Varmemodel styrer varmepumpen« tænder varmepumpen (varme), når den anbefalede styring siger varme."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "-2.0", {"state_class": "measurement"})
+    ha.states.async_set("climate.vp_onoff", "off", {})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub({**HYD, "onoff_target": "climate.vp_onoff"}, "source")])
+    e.add_to_hass(ha)
+    calls: list = []
+    ha.services.async_register("climate", "set_hvac_mode", lambda call: calls.append(call.data["hvac_mode"]))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c._recent_sync = lambda s, a, b: ({}, {})
+    sw = next(s for s in ha.states.async_all("switch") if s.entity_id.endswith("heat_pump"))
+    await ha.services.async_call("switch", "turn_on", {"entity_id": sw.entity_id}, blocking=True)
+    await ha.async_block_till_done()
+    sid = next(iter(c.sources))
+    if c.commands[sid].get("on"):
+        assert calls == ["heat"]
+    else:
+        assert calls == []
