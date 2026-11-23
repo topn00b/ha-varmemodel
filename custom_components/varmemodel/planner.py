@@ -85,15 +85,18 @@ def flow_for(m: SourceModel, p: float, target: float) -> float:
     return round(2 * max(FLOW_MIN, min(FLOW_MAX, f))) / 2
 
 
-def _next_block(hours: list[PlanHour]) -> list[int | None]:
-    """For hver time: indeks på første blokerede time efter den (None hvis ingen)."""
-    nb: list[int | None] = [None] * len(hours)
-    nxt = None
-    for i in range(len(hours) - 1, -1, -1):
-        nb[i] = nxt
-        if hours[i].blocked:
-            nxt = i
-    return nb
+def _preload_q(hours: list[PlanHour], q: list[float], plan_fn: Callable[[list[PlanHour]], Plan]) -> list[float]:
+    """Forvarmning time for time: den varme, planen lægger ekstra før den første blokering, fordi blokeringen kommer.
+
+    Regnes som forskellen til samme plan uden blokeringer (samme priser og rum). Kun timerne før den første
+    blokering tæller; i timer efter en blokering er forskellen genopvarmning, ikke forvarmning.
+    """
+    first = next((i for i, h in enumerate(hours) if h.blocked), None)
+    if first is None or first == 0:
+        return [0.0] * len(hours)
+    free = [PlanHour(ts=h.ts, price=h.price, t_out=h.t_out, blocked=False) for h in hours]
+    q0 = [x["heat_kw"] for x in plan_fn(free).hours]
+    return [max(0.0, q[i] - q0[i]) if i < first else 0.0 for i in range(len(hours))]
 
 
 def _preload_window(hours: list[PlanHour], pq: list[float], label: Callable[[int], str]) -> tuple[dict[str, Any] | None, str | None]:
@@ -170,7 +173,8 @@ def estimate_room(r: PlanRoom, t0: float, ts0: float, end: float, q5: dict[int, 
 def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
-              red_allowance: float = 0.0, preload: float = 0.0, flow_over_curve: float | None = None) -> Plan:
+              red_allowance: float = 0.0, preload: float = 0.0, flow_over_curve: float | None = None,
+              _preload_check: bool = True) -> Plan:
     """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra.
 
     ``boost`` (»jeg fryser«) hæver målet og rummenes min. i de første ``boost_hours`` timer.
@@ -247,8 +251,6 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
     #    (mindre går tabt, og gulvets forsinkede varme når ind i blokeringen).
     skip: set[tuple[str, int]] = set()
     extra: dict[str, float] = {}
-    nb = _next_block(hours)
-    pq = [0.0] * n  # forvarmning: varme lagt i time j for at holde et rum gennem en senere blokering
     cap = 10.0 + sum(d for d, h in zip(demand, hours) if h.blocked)
     for _ in range(1500):
         sim = simulate_rooms(rooms, hours, q, past_q)
@@ -265,13 +267,9 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
         if extra.get(r.name, 0.0) >= cap:
             skip.update((r.name, k) for k in range(i_bad, n))
             continue
-        before = q[:]
         added = add_cheapest([j for j in reversed(free) if j <= i_bad], STEP)
         if added:
             extra[r.name] = extra.get(r.name, 0.0) + added
-            j = next(k for k in range(n) if q[k] != before[k])
-            if nb[j] is not None and nb[j] <= i_bad:
-                pq[j] += added
         else:
             skip.add((r.name, i_bad))
 
@@ -292,6 +290,10 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
                 break
             q[hit] = max(q[hit], model.p_min)
 
+    pq = [0.0] * n
+    if _preload_check:
+        pq = _preload_q(hours, q, lambda hs: make_plan(hs, model, rooms, target, max_pause, past_q, label, boost, boost_hours,
+                                                       red_allowance, preload, flow_over_curve, _preload_check=False))
     # 5) resultat time for time. Der advares kun, når et rum ventes under selve min. (ikke min. + usikkerhed).
     plan.rooms = simulate_rooms(rooms, hours, q, past_q)
     lab = label or (lambda ts: f"om {(ts - hours[0].ts) // 3600} t")
@@ -330,7 +332,7 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
 
 def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0.3, e_max: float = 1.0,
                   past_q: list[float] | None = None, label: Callable[[int], str] | None = None,
-                  preload: float = 0.0, comfort: float = 0.0) -> Plan:
+                  preload: float = 0.0, comfort: float = 0.0, _preload_check: bool = True) -> Plan:
     """Plan for en luft-luft-varmepumpe i kWh el pr. time (rummodellerne lærer grader pr. kWh el).
 
     Varmen måles ikke, så der er intet husbehov at fordele. Planen varmer kun så meget, at rummene holder
@@ -363,8 +365,6 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
 
     skip: set[tuple[str, int]] = set()
     full: set[int] = set()
-    nb = _next_block(hours)
-    pq = [0.0] * n  # forvarmning: el lagt i time j for at holde et rum gennem en senere blokering
     sim = simulate_rooms(rooms, hours, q, past_q)
     for _ in range(800):
         worst: tuple[int, PlanRoom] | None = None
@@ -389,13 +389,14 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
                 full.add(j)
                 continue
             sim, added = sim2, True
-            if nb[j] is not None and nb[j] <= i_bad:
-                pq[j] += a
             break
         if not added:
             skip.add((r.name, i_bad))
 
     plan.rooms = sim
+    pq = [0.0] * n
+    if _preload_check:
+        pq = _preload_q(hours, q, lambda hs: make_air_plan(hs, rooms, e_min, e_max, past_q, label, preload, comfort, _preload_check=False))
     lab = label or (lambda ts: f"om {(ts - hours[0].ts) // 3600} t")
     for r in planned:
         s = sim[r.name]
