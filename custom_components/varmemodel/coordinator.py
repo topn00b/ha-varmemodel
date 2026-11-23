@@ -1706,11 +1706,17 @@ class VarmemodelCoordinator:
         res = history.get_significant_states(self.hass, start, dt_util.utcnow(), ids, include_start_time_state=True,
                                              significant_changes_only=False, no_attributes=True)
         ev = sorted([(z.last_updated.timestamp(), e, z.state) for e in ids for z in res.get(e, [])])
+        # Afrimning: kompressoren stopper kort ved start/slut (4-vejsventilen skifter) – stop fra 1 min. før en afrimning
+        # til 10 min. efter tæller ikke (ellers hævede hver afrimning målet)
+        df_on = [t for t, e, v in ev if e == df and v == "on"]
+        df_off = [t for t, e, v in ev if e == df and v == "off"]
         st: dict[str, str] = {}
         stops = 0
-        for _t, e, v in ev:
+        for t, e, v in ev:
             if e == comp and st.get(comp) == "on" and v == "off" and st.get(dhw) != "on" and st.get(df) != "on":
-                stops += 1
+                near_df = any(-60 <= x - t <= 300 for x in df_on) or any(0 <= t - x <= 600 for x in df_off)
+                if not near_df:
+                    stops += 1
             st[e] = v
         return stops
 

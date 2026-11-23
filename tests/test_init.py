@@ -926,3 +926,13 @@ async def test_flip_cap_still_switches_on(ha: HomeAssistant) -> None:
     assert calls == []  # frivillig sluk afvises efter loftet
     await c._hydro_apply(s, False, True, [])
     assert calls == ["off"]  # blokering slukker altid
+
+
+async def test_comp_stop_after_defrost_ignored(ha: HomeAssistant) -> None:
+    """Kompressorens korte stop efter en afrimning tæller ikke som »målet er for lavt«."""
+    import inspect
+
+    from custom_components.varmemodel import coordinator as co
+
+    src = inspect.getsource(co.VarmemodelCoordinator._comp_stops_sync)
+    assert "near_df" in src and "df_on" in src and "df_off" in src
