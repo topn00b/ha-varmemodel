@@ -37,6 +37,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
             # Luft-luft: el pr. døgn og en plan med anbefalet styring (el pr. time, gulv og loft pr. rum)
             ents += [DailyElSensor(c, s, "yesterday"), DailyElSensor(c, s, "week"),
                      PlanNowSensor(c, s), CommandSensor(c, s), PlanCostSensor(c, s)]
+            if c.air_climate(s):
+                ents.append(AirStepSensor(c, s))
         async_add_entities(ents, config_subentry_id=sid)
     for r in c.rooms_cfg:
         rents: list[SensorEntity] = [RoomSensor(c, r), RoomForecastSensor(c, r)]
@@ -515,8 +517,30 @@ class CommandSensor(SourceEntity, SensorEntity):
         return {
             # Vandbåren: fremløbsmålet. Luft-luft: setpunkt.
             "flow_setpoint": c.get("flow") if self.src.kind == SOURCE_HYDRONIC else None,
-            "setpoint": c.get("setpoint"), "reason": c.get("reason"),
+            "setpoint": c.get("setpoint"), "fan_mode": c.get("fan_mode"), "preset": c.get("preset"), "step": c.get("step"),
+            "reason": c.get("reason"),
             "since": _ts_local(since) if since and since > 0 else None,
             "writes_today": c.get("writes", 0), "switches_today": c.get("flips", 0), "heat_in_blocked_today": c.get("blocked_on", 0),
             "within_limits": c.get("writes", 0) <= 20 and c.get("flips", 0) <= 8 and c.get("blocked_on", 0) == 0,
         }
+
+
+class AirStepSensor(SourceEntity, SensorEntity):
+    """Luft-luft-stigen: trinnet nu, trinene (blæser og setpunkt) med lært forbrug, margen og forvarmning pr. rum."""
+
+    _attr_icon = "mdi:stairs"
+
+    def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
+        super().__init__(coordinator, s, "air_step")
+
+    @property
+    def _v(self) -> dict[str, Any]:
+        return (self.coordinator.air.get(self.src.sid) or {}).get("view") or {}
+
+    @property
+    def native_value(self) -> int | None:
+        return self._v.get("trin")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return dict(self._v)

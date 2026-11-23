@@ -173,6 +173,9 @@
       },
       "flow_learned": {
         "name": "Learned flow at 0 °C outdoor"
+      },
+      "air_step": {
+        "name": "Ladder step"
       }
     },
     "button": {
@@ -187,6 +190,18 @@
           "calibrated": "Learning",
           "frozen": "Frozen"
         }
+      },
+      "air_fan_day": {
+        "name": "Max fan, day"
+      },
+      "air_fan_night": {
+        "name": "Max fan, night"
+      },
+      "air_swing_v": {
+        "name": "Louvres up/down"
+      },
+      "air_swing_h": {
+        "name": "Louvres sideways"
       }
     },
     "number": {
@@ -213,11 +228,39 @@
       },
       "flow_margin": {
         "name": "Max flow above the learned flow"
+      },
+      "air_sp_min": {
+        "name": "Lowest setpoint"
+      },
+      "air_sp_max": {
+        "name": "Highest setpoint"
+      },
+      "air_sp_step": {
+        "name": "Setpoint per step"
+      },
+      "air_down_margin": {
+        "name": "Step down above floor by"
+      },
+      "air_preload_max": {
+        "name": "Max preload before blocking"
       }
     },
     "binary_sensor": {
       "missing_data": {
         "name": "Missing data"
+      }
+    },
+    "switch": {
+      "air_control": {
+        "name": "Varmemodel controls"
+      }
+    },
+    "time": {
+      "air_night_start": {
+        "name": "Night starts"
+      },
+      "air_night_end": {
+        "name": "Night ends"
       }
     }
   },
@@ -263,7 +306,8 @@
             "unit_temp_attribute": "Unit sensor: attribute (e.g. current_temperature)",
             "compressor": "Compressor running",
             "defrost": "Defrost",
-            "electricity_backup": "Additional electricity meter (e.g. cloud)"
+            "electricity_backup": "Additional electricity meter (e.g. cloud)",
+            "climate": "Climate entity (control; found automatically on the unit's device)"
           },
           "data_description": {
             "electricity_energy": "Without a heat meter the rooms learn how many degrees they get per kWh of electricity.",

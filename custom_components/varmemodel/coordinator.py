@@ -15,7 +15,7 @@ from homeassistant.components.recorder import get_instance, history
 from homeassistant.components.recorder.statistics import statistics_during_period
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, State, callback
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.event import async_call_later, async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -40,10 +40,26 @@ from .calibration import (
     sun_factor,
     validate_room,
 )
+from .air_control import (
+    LEARN_HOLD,
+    W_SETTLE,
+    band,
+    build_ladder,
+    choose_step,
+    fan_options,
+    is_night,
+    learn_w,
+    preload_per_room,
+)
 from .command import Command, step
 from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
 from .planner import FLOW_LOW_OPEN_S, PlanHour, PlanRoom, SourceModel, estimate_room, flow_boost_step, make_air_plan, make_plan, simulate_rooms
 from .const import (
+    AIR_NUMBERS,
+    AIR_SWITCH,
+    AIR_TIMES,
+    CONF_CLIMATE,
+    UNCHANGED,
     BACKFILL_DAYS,
     CALIB_VERSION,
     CALIBRATION_HOUR,
@@ -194,7 +210,8 @@ class VarmemodelCoordinator:
         self.rooms_check: dict[str, dict[str, Any]] = {}
         self.yesterday: dict[str, dict[str, Any]] = {}
         self.measures: list[dict[str, Any]] = []
-        self.commands: dict[str, dict[str, Any]] = {}  # anbefalet styring pr. vandbåren kilde
+        self.commands: dict[str, dict[str, Any]] = {}
+        self.air: dict[str, dict[str, Any]] = {}  # luft-luft-styring pr. kilde: trin, lært forbrug og starttrin  # anbefalet styring pr. vandbåren kilde
         self.plan_stats: dict[str, Any] = {}  # andel kvarterer med frisk plan i dag
         self.last_known: dict[str, list[float]] = {}  # føler -> [værdi, tidspunkt]: bro over korte udfald
         self.valve_since: dict[str, float] = {}  # termostaten kalder på varme siden (rummets nøgle)
@@ -283,6 +300,7 @@ class VarmemodelCoordinator:
         self.yesterday = data.get("yesterday", {})
         self.measures = data.get("measures", [])
         self.commands = data.get("commands", {})
+        self.air = data.get("air", {})
         self.plan_stats = data.get("plan_stats", {})
         self.last_known = data.get("last_known", {})
         for sid, s in self.sources.items():
@@ -332,7 +350,7 @@ class VarmemodelCoordinator:
                 "runs": self.runs[-30:], "mode": self.mode, "calib_version": CALIB_VERSION,
                 "rooms": self.rooms, "room_heat": self.room_heat, "settings": self.settings, "plan_log": self.plan_log,
                 "fc_log": self.fc_log, "yesterday": self.yesterday, "measures": self.measures,
-                "commands": self.commands, "plan_stats": self.plan_stats, "last_known": self.last_known}
+                "commands": self.commands, "plan_stats": self.plan_stats, "last_known": self.last_known, "air": self.air}
 
     async def _save(self) -> None:
         await self.store.async_save(self._data())
@@ -1100,6 +1118,168 @@ class VarmemodelCoordinator:
             d = d.replace(tzinfo=dt_util.get_default_time_zone())
         return d
 
+    # ------------------------------------------------------------ luft-luft-styring
+    def air_climate(self, s: SourceState) -> str | None:
+        """Luft-luft-kildens klimaentitet: den valgte, ellers den på samme enhed som enhedens føler eller elmåler."""
+        if s.kind == SOURCE_HYDRONIC:
+            return None
+        if eid := s.conf.get(CONF_CLIMATE):
+            return eid
+        reg = er.async_get(self.hass)
+        for key in (CONF_UNIT_TEMP, CONF_ELECTRICITY):
+            eid = s.conf.get(key)
+            if not eid:
+                continue
+            if eid.startswith("climate."):
+                return eid
+            e = reg.async_get(eid)
+            if e and e.device_id:
+                for x in er.async_entries_for_device(reg, e.device_id):
+                    if x.domain == "climate":
+                        return x.entity_id
+        return None
+
+    def air_options(self, s: SourceState, key: str) -> list[str]:
+        """Valgmuligheder for en luft-luft-indstilling, læst fra klimaentiteten."""
+        st = self.hass.states.get(self.air_climate(s) or "")
+        a = st.attributes if st else {}
+        if key in ("air_fan_day", "air_fan_night"):
+            return fan_options(a.get("fan_modes")) or ["–"]
+        if key == "air_swing_v":
+            return [UNCHANGED, *(a.get("swing_modes") or [])]
+        if key == "air_swing_h":
+            return [UNCHANGED, *(a.get("swing_horizontal_modes") or [])]
+        return []
+
+    def air_setting(self, s: SourceState, key: str) -> Any:
+        """En luft-luft-indstilling for kilden (gemt i Varmemodel), ellers standarden."""
+        v = self.settings.get(f"{s.sid}.{key}")
+        if v is not None:
+            return v
+        if key == AIR_SWITCH:
+            return False
+        for k, *_, dflt in AIR_NUMBERS:
+            if k == key:
+                return dflt
+        for k, dflt in AIR_TIMES:
+            if k == key:
+                return dflt
+        fans = self.air_options(s, "air_fan_day")
+        if key == "air_fan_day":
+            return fans[-1]
+        if key == "air_fan_night":
+            return fans[-2] if len(fans) > 1 else fans[-1]
+        return UNCHANGED
+
+    async def async_set_air(self, s: SourceState, key: str, value: Any) -> None:
+        self.settings[f"{s.sid}.{key}"] = value
+        await self._save()
+        await self.async_replan()
+
+    def _air_step(self, s: SourceState, clim: str, p: Any, show: list[PlanRoom], on: bool, blocked: bool, now: float) -> dict[str, Any]:
+        """Stigen for en luft-luft-kilde: hvilket trin (blæser + setpunkt) planens »varme« skal køre på.
+
+        Lærer samtidig forbrug pr. trin og starttrin pr. udetemperatur ud fra det, der faktisk kører –
+        også når Varmemodel ikke selv styrer (så tallene er klar, når den gør)."""
+        st = self.hass.states.get(clim)
+        attrs = st.attributes if st else {}
+        fans = fan_options(attrs.get("fan_modes"))
+        quiet = "quiet" in (attrs.get("preset_modes") or [])
+        lt = dt_util.now()
+        night = is_night(lt.hour * 60 + lt.minute, str(self.air_setting(s, "air_night_start")), str(self.air_setting(s, "air_night_end")))
+        cap = self.air_setting(s, "air_fan_night" if night else "air_fan_day")
+        sp_min, sp_max = float(self.air_setting(s, "air_sp_min")), float(self.air_setting(s, "air_sp_max"))
+        ladder = build_ladder(fans, cap, sp_min, max(sp_min, sp_max), float(self.air_setting(s, "air_sp_step")), quiet)
+        label = lambda x: f"{x.preset or x.fan} {x.setpoint:g}"  # noqa: E731
+        a = self.air.setdefault(s.sid, {})
+        pre, blk = preload_per_room([{"blocked": h["blocked"]} for h in p.hours], p.rooms, float(self.air_setting(s, "air_preload_max")))
+        margins = {r.name: round(r.t_now - r.t_min - pre.get(r.name, 0.0), 2) for r in show if r.t_min > -50 and not r.held}
+        t_out = p.hours[0]["t_out"] if p.hours else None
+        b = band(t_out)
+        starts = a.setdefault("start", {})
+        idx_of = {label(x): i for i, x in enumerate(ladder)}
+        if on and not blocked:
+            start = idx_of.get(starts.get(b)) if b else None
+            prev = a.get("step") if a.get("on") else None
+            i, changed, down_since, reason = choose_step(prev, len(ladder), margins, float(self.air_setting(s, "air_down_margin")),
+                                                         now, float(a.get("changed", 0.0)), a.get("down_since"), start)
+        else:
+            i, changed, down_since = a.get("step"), float(a.get("changed", 0.0)), None
+            reason = "blokeret – slukket" if blocked else "planen varmer ikke nu"
+        a.update(on=bool(on and not blocked), step=i, changed=changed, down_since=down_since)
+        if a["on"] and i is not None and margins and min(margins.values()) >= 0 and not pre and b and now - changed >= LEARN_HOLD:
+            starts[b] = label(ladder[min(i, len(ladder) - 1)])
+        # Det trin, der faktisk kører nu (matches på blæser og setpunkt), og forbruget pr. trin ud fra elmåleren
+        act = None
+        if st is not None and st.state == "heat":
+            if quiet and attrs.get("preset_mode") == "quiet":
+                act = f"quiet {float(attrs.get('temperature') or sp_min):g}"
+            else:
+                act = f"{attrs.get('fan_mode')} {float(attrs.get('temperature') or 0):g}"
+        if act != (a.get("act") or [None])[0]:
+            a["act"] = [act, now]
+        e_eid = s.eid(CONF_ELECTRICITY)
+        e_now = self._state_num(e_eid)
+        unit = str((self.hass.states.get(e_eid).attributes if e_eid and self.hass.states.get(e_eid) else {}).get("unit_of_measurement") or "kWh")
+        prev_e = a.get("e")
+        df = s.eid(CONF_DEFROST)
+        defrosting = bool(df and (x := self.hass.states.get(df)) and x.state == "on")
+        if (act and prev_e and e_now is not None and 600 <= now - prev_e[1] <= 1300 and prev_e[2] == act
+                and now - a["act"][1] >= W_SETTLE + (now - prev_e[1]) and not defrosting and e_now >= prev_e[0]):
+            kwh = (e_now - prev_e[0]) / (1000.0 if unit.lower() == "wh" else 1.0)
+            a["w"] = learn_w(a.get("w", {}), act, kwh * 3600 / (now - prev_e[1]) * 1000)  # type: ignore[arg-type]
+        a["e"] = [e_now, now, act] if e_now is not None else None
+        w = a.get("w", {})
+        cur = ladder[min(i, len(ladder) - 1)] if i is not None else None
+        a["view"] = {"klima": clim, "trin": i, "nat": night, "maks_blæser": cap, "styrer": bool(self.air_setting(s, AIR_SWITCH)), "grund": reason,
+                     "kører_nu": act, "blokering": blk, "forvarmning": pre or None, "margen": margins or None,
+                     "trin_liste": [{"trin": k, "blæser": x.preset or x.fan, "setpunkt": x.setpoint, "w": w.get(label(x))} for k, x in enumerate(ladder)],
+                     "starttrin": dict(starts), "skiftet": _ts_local_iso(changed) if changed else None}
+        out: dict[str, Any] = {"step": i}
+        if a["on"] and cur is not None:
+            out.update(setpoint=cur.setpoint, fan_mode=cur.fan, preset=cur.preset)
+        return out
+
+    async def _air_apply(self, s: SourceState, clim: str, d: dict[str, Any]) -> None:
+        """Skriv anbefalingen til klimaentiteten – kun det, der er forskelligt, og højst 60 skrivninger pr. døgn."""
+        st = self.hass.states.get(clim)
+        if st is None or st.state in ("unavailable", "unknown"):
+            return
+        a, at_ = self.air.setdefault(s.sid, {}), st.attributes
+        day = dt_util.now().date().isoformat()
+        if a.get("wday") != day:
+            a["wday"], a["writes"] = day, 0
+        calls: list[tuple[str, dict[str, Any]]] = []
+        if not d.get("on") or d.get("setpoint") is None:
+            if st.state != "off":
+                calls.append(("set_hvac_mode", {"hvac_mode": "off"}))
+        else:
+            if st.state != "heat":
+                calls.append(("set_hvac_mode", {"hvac_mode": "heat"}))
+            presets = at_.get("preset_modes") or []
+            want_preset = d.get("preset") or ("none" if "none" in presets else None)
+            if want_preset and want_preset in presets and at_.get("preset_mode") != want_preset:
+                calls.append(("set_preset_mode", {"preset_mode": want_preset}))
+            if d.get("fan_mode") and want_preset != "quiet" and at_.get("fan_mode") != d["fan_mode"]:
+                calls.append(("set_fan_mode", {"fan_mode": d["fan_mode"]}))
+            if _num(at_.get("temperature")) != d["setpoint"]:
+                calls.append(("set_temperature", {"temperature": d["setpoint"]}))
+            for key, attr, svc, field_ in (("air_swing_v", "swing_mode", "set_swing_mode", "swing_mode"),
+                                           ("air_swing_h", "swing_horizontal_mode", "set_swing_horizontal_mode", "swing_horizontal_mode")):
+                want = self.air_setting(s, key)
+                if want and want != UNCHANGED and at_.get(attr) is not None and at_.get(attr) != want:
+                    calls.append((svc, {field_: want}))
+        for svc, data in calls:
+            if a["writes"] >= 60:
+                _LOGGER.warning("%s: over 60 skrivninger i dag – Varmemodel holder pause", s.name)
+                break
+            try:
+                await self.hass.services.async_call("climate", svc, {"entity_id": clim, **data}, blocking=True)
+                a["writes"] += 1
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("%s: kunne ikke sende %s", s.name, svc)
+                break
+
     def _state_num(self, eid: str | None) -> float | None:
         if not eid:
             return None
@@ -1191,7 +1371,15 @@ class VarmemodelCoordinator:
         caps = [r.t_max for r in show if r.t_max is not None]
         sp = cur.get("setpoint") if cur and cur.get("setpoint") is not None else (min(caps) - 0.5 if caps else None)
         d["setpoint"] = sp if cmd.on else None
+        clim = self.air_climate(s)
+        if clim:
+            try:
+                d.update(self._air_step(s, clim, p, show, cmd.on, bool(cur and cur["blocked"]), now))
+            except Exception:  # noqa: BLE001 – stigen må aldrig vælte planen
+                _LOGGER.exception("Luft-luft-stigen fejlede")
         self.commands[s.sid] = d
+        if clim and self.air_setting(s, AIR_SWITCH):
+            await self._air_apply(s, clim, d)
         return {"plan": plan, "rooms": show, "rq": rq}
 
     async def async_replan(self) -> None:

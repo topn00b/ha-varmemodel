@@ -112,3 +112,18 @@ SETTINGS = (
     # Lavt og jævnt: højst så mange °C over det fremløb, modellen har lært huset bruger ved timens udetemperatur
     ("flow_margin", -5, 5, 0.5, "°C", 0.0),
 )
+
+# Luft-luft-styring (pr. varmekilde, kun når der er en klimaentitet): tal, valg, tider og kontakten
+CONF_CLIMATE = "climate"
+AIR_NUMBERS = (
+    # nøgle, min, maks, trin, enhed, standard
+    ("air_sp_min", 10, 30, 0.5, "°C", 20.0),
+    ("air_sp_max", 10, 30, 0.5, "°C", 23.0),
+    ("air_sp_step", 0.5, 2, 0.5, "°C", 0.5),
+    ("air_down_margin", 0, 2, 0.1, "°C", 0.5),
+    ("air_preload_max", 0, 3, 0.1, "°C", 1.5),
+)
+AIR_SELECTS = ("air_fan_day", "air_fan_night", "air_swing_v", "air_swing_h")
+AIR_TIMES = (("air_night_start", "22:00"), ("air_night_end", "07:00"))
+AIR_SWITCH = "air_control"
+UNCHANGED = "uændret"

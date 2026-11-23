@@ -173,6 +173,9 @@
       },
       "flow_learned": {
         "name": "Lært fremløb ved 0 °C ude"
+      },
+      "air_step": {
+        "name": "Trin på stigen"
       }
     },
     "button": {
@@ -187,6 +190,18 @@
           "calibrated": "Lærer løbende",
           "frozen": "Fastfrosset"
         }
+      },
+      "air_fan_day": {
+        "name": "Maks. blæser dag"
+      },
+      "air_fan_night": {
+        "name": "Maks. blæser nat"
+      },
+      "air_swing_v": {
+        "name": "Lameller op/ned"
+      },
+      "air_swing_h": {
+        "name": "Lameller side"
       }
     },
     "number": {
@@ -213,11 +228,39 @@
       },
       "flow_margin": {
         "name": "Maks. fremløb over det lærte"
+      },
+      "air_sp_min": {
+        "name": "Laveste setpunkt"
+      },
+      "air_sp_max": {
+        "name": "Højeste setpunkt"
+      },
+      "air_sp_step": {
+        "name": "Setpunkt pr. trin"
+      },
+      "air_down_margin": {
+        "name": "Trin ned ved over gulvet med"
+      },
+      "air_preload_max": {
+        "name": "Maks. forvarmning før blokering"
       }
     },
     "binary_sensor": {
       "missing_data": {
         "name": "Mangler data"
+      }
+    },
+    "switch": {
+      "air_control": {
+        "name": "Varmemodel styrer"
+      }
+    },
+    "time": {
+      "air_night_start": {
+        "name": "Nat begynder"
+      },
+      "air_night_end": {
+        "name": "Nat slutter"
       }
     }
   },
@@ -263,7 +306,8 @@
             "unit_temp_attribute": "Enhedens føler: attribut (fx current_temperature)",
             "compressor": "Kompressor kører",
             "defrost": "Afrimning",
-            "electricity_backup": "Supplerende elmåler (fx skyen)"
+            "electricity_backup": "Supplerende elmåler (fx skyen)",
+            "climate": "Klimaentitet (styring; findes selv på enhedens enhed)"
           },
           "data_description": {
             "electricity_energy": "Uden varmemåler lærer rummene, hvor mange grader de får pr. kWh el.",

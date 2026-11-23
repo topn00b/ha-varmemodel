@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.8.8';
+  const VERSION = '0.9.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -195,8 +195,20 @@
           const t = path.find((x) => x.dataset && x.dataset.e);
           if (t) { ev.stopPropagation(); this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: t.dataset.e }, bubbles: true, composed: true })); }
         });
+        // Indstillinger: dropdowns, tal og tider skriver straks til Varmemodels entiteter
+        r.addEventListener('change', (ev) => {
+          const el = ev.target; if (!el || !el.dataset || !el.dataset.svc) return;
+          const [dom, svc] = el.dataset.svc.split('.'); const eid = el.dataset.eid; let data = { entity_id: eid };
+          if (svc === 'select_option') data.option = el.value;
+          else if (svc === 'set_value' && dom === 'time') data.time = el.value.length === 5 ? el.value + ':00' : el.value;
+          else if (svc === 'set_value') data.value = +el.value;
+          this._h.callService(dom, svc, data); el.blur();
+        });
         r.addEventListener('toggle', (ev) => { const d = ev.target; if (d && d.id) { if (d.open) this._open.add(d.id); else this._open.delete(d.id); } }, true);
       }
+      // Tegn ikke om, mens en dropdown eller et felt er i brug (ellers lukker den)
+      const ae = this.shadowRoot.activeElement;
+      if (ae && ['SELECT', 'INPUT'].includes(ae.tagName)) { clearTimeout(this._tmE); this._tmE = setTimeout(() => this._draw(), 1500); return; }
       const vm = discover(this._h);
       let body;
       try { body = vm ? this.body(this._h, vm) : '<div class="mut">Varmemodel er ikke sat op endnu.</div>'; }
@@ -238,6 +250,32 @@
     const now = Date.now(); const on = Date.parse(w.fra) <= now && now < Date.parse(w.til);
     const t = `opvarmning før rød kl. ${k(w.fra)}–${k(w.til)}${on ? ' (nu)' : ''}` + (w.blokering_fra ? ` · rød ${k(w.blokering_fra)}–${k(w.blokering_til)}` : '');
     return short ? t : `${t} (${fmt(w.kwh)} ${u})`;
+  }
+
+  // Indstillinger for en Varmemodel-enhed som rigtige kontroller (dropdown, tal, tid, kontakt), grupperet
+  const SET_GROUPS = [
+    ['Styring', ['air_control']],
+    ['Blæser', ['air_fan_day', 'air_fan_night', 'air_night_start', 'air_night_end']],
+    ['Setpunkt', ['air_sp_min', 'air_sp_max', 'air_sp_step']],
+    ['Stigen', ['air_down_margin', 'air_preload_max']],
+    ['Lameller', ['air_swing_v', 'air_swing_h']],
+  ];
+  function settingsPanel(h, src, title = 'Indstillinger') {
+    let o = '';
+    for (const [g, keys] of SET_GROUPS) {
+      const rows = keys.map((k) => {
+        const eid = src.e(k); const s0 = st(h, eid); if (!s0) return '';
+        const a = s0.attributes || {}; const dom = eid.split('.')[0]; const name = String(a.friendly_name || k).replace(src.name, '').trim();
+        let ctl = '';
+        if (dom === 'select') ctl = `<select data-svc="select.select_option" data-eid="${esc(eid)}">${(a.options || []).map((x) => `<option${x === s0.state ? ' selected' : ''}>${esc(x)}</option>`).join('')}</select>`;
+        else if (dom === 'number') ctl = `<input type="number" data-svc="number.set_value" data-eid="${esc(eid)}" value="${esc(s0.state)}" min="${a.min}" max="${a.max}" step="${a.step}"><span class="mut sm"> ${esc(a.unit_of_measurement || '')}</span>`;
+        else if (dom === 'time') ctl = `<input type="time" data-svc="time.set_value" data-eid="${esc(eid)}" value="${esc(String(s0.state).slice(0, 5))}">`;
+        else if (dom === 'switch') ctl = `<button class="tg2${s0.state === 'on' ? ' on' : ''}" data-act="${esc(eid)}">${s0.state === 'on' ? 'til' : 'fra'}</button>`;
+        return `<div class="sr"><span>${esc(name)}</span><span>${ctl}</span></div>`;
+      }).join('');
+      if (rows) o += `<div class="sg"><div class="sgh">${esc(g)}</div>${rows}</div>`;
+    }
+    return o ? `<div class="b"><div class="pvh">${esc(title)}<span class="mut sm"> · gemmes i Varmemodel</span></div>${o}</div>` : '';
   }
 
   // Én etage som heatmap (cm-koordinater). o.unit: varmepumpens tilstand nu ('heat' | 'idle' | 'defrost' | 'off'),
@@ -602,6 +640,12 @@
   .tr.on{background:var(--primary-color);color:#fff}.tr.on .mut{color:#fff}.tn{font-weight:700;text-align:right}
   .tbar{height:8px;background:var(--divider-color);border-radius:4px;overflow:hidden}.tbar i{display:block;height:100%;background:${OR}}.tr.on .tbar i{background:#fff}
   .tw{white-space:nowrap;text-align:right}
+  .sg{margin-top:6px}.sgh{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--secondary-text-color);margin:6px 0 2px}
+  .sr{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 0;font-size:13px;border-bottom:1px solid var(--divider-color)}
+  .sr select,.sr input{font:inherit;font-size:13px;color:var(--primary-text-color);background:var(--card-background-color);border:1px solid var(--divider-color);border-radius:6px;padding:3px 6px}
+  .sr input[type=number]{width:70px}
+  .tg2{font:inherit;font-size:13px;font-weight:600;border-radius:12px;padding:3px 14px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer}
+  .tg2.on{background:${OR};border-color:${OR};color:#fff}
   .bento{display:grid;gap:8px}
   .bt{position:relative;border-radius:12px;padding:10px 12px;background:color-mix(in srgb,var(--c) 16%,var(--card-background-color));border:1px solid color-mix(in srgb,var(--c) 45%,transparent);border-left:5px solid var(--c);min-height:118px;display:flex;flex-direction:column;gap:4px;min-width:0}
   .bh{display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap}.bn{font-weight:600;cursor:pointer}
@@ -632,7 +676,7 @@
       const main = vm.sources.find((s) => s.kind === 'hydronic') || null;
       const air = vm.sources.filter((s) => s.kind !== 'hydronic');
       const D = this.data(h, vm, main);
-      if (!main && air.length === 1 && this._c.floor) return this.band(h, vm, main, D) + this.airView(h, vm, air[0]);
+      if (!main && air.length === 1) return this.band(h, vm, main, D) + this.airView(h, vm, air[0]);
       return this.band(h, vm, main, D) + this.svg(h, vm, main, air, D);
     }
     data(h, vm, main) {
@@ -994,6 +1038,12 @@
     // Bento-plan: rummene som kort, placeret som på plantegningen (rækker efter indhold, ikke efter cm).
     // Hvert kort: temperatur, kurve (12 t målt + forudsigelse stiplet), gulv og retning. Farven = afstand til gulv/loft.
     bento(h, vm, f, k, o = {}) {
+      // Uden plantegning: kildens rum som kort i et gitter (virker uden opsætning)
+      if (!f || !(f.rooms || []).length) {
+        const units = o.unitEntity ? [{ entity: o.unitEntity, name: o.unitName }] : [];
+        f = { rooms: vm.rooms.map((r, i) => ({ name: r.name, rect: [i % 2 * 100, Math.floor(i / 2) * 100, 100, 100] })), units };
+        if (units.length && f.rooms.length) { units[0].x = 50; units[0].y = 50; }
+      }
       const named = (f.rooms || []).filter((rr) => !rr.room && vm.rooms.find((x) => x.name === rr.name));
       const box = (rr) => { const p = pts(rr); const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; };
       const bx = named.map(box);
@@ -1045,10 +1095,13 @@
     }
     // Luft-luft på sin etage: varmepumpen, kWh el over tid og trinene til venstre – etagen som heatmap til højre
     airView(h, vm, s) {
-      const c = this._c, sc = this.sc(s.name), k = this._k || 0;
+      const c = this._c, k = this._k || 0;
+      // Klimaentitet og eleffekt: fra kortets opsætning, ellers fra integrationen (plug and play)
+      const sc = { climate: at(h, s.e('air_step')).klima || undefined, ...this.sc(s.name) };
       const cl = sc.climate ? st(h, sc.climate) : null; const pa = at(h, s.plan);
       const elW = sc.el_power ? kW(h, sc.el_power) : null;
-      const unit = !cl || cl.state === 'off' ? 'off' : (sc.defrost && isOn(h, sc.defrost)) ? 'defrost' : elW !== null && elW * 1000 >= (sc.running_w ?? 150) ? 'heat' : 'idle';
+      const running = elW !== null ? elW * 1000 >= (sc.running_w ?? 150) : cl ? (cl.attributes.hvac_action ? cl.attributes.hvac_action === 'heating' : cl.state === 'heat') : false;
+      const unit = !cl || cl.state === 'off' ? 'off' : (sc.defrost && isOn(h, sc.defrost)) ? 'defrost' : running ? 'heat' : 'idle';
       const UT = { heat: 'varmer', idle: 'pause', defrost: '❄ afrimer', off: 'slukket' };
       // varmepumpen
       let L = `<div class="b pvb"><div class="pvh">${esc(s.name)}<span class="mut sm"> · ${esc(sc.model || 'luft-luft')}</span></div>`
@@ -1093,8 +1146,20 @@
         + `<div class="sm" style="margin-top:6px">I dag <b>${fmt(today, 1)} kWh el</b> · i går ${M(h, s.e('el_yesterday'), 1, 'kWh el')} · snit 7 døgn ${M(h, s.e('el_week'), 1, 'kWh el')}</div>`
         + `<div class="dbs">${dbar}</div></div>`;
       // trinene: hvad hvert trin gør og hvad det lærte trin bruger
+      const ase = s.e('air_step'); const asa = at(h, ase);
+      if (asa.trin_liste) {
+        const cur = num(asa.trin); const L2 = asa.trin_liste; const wmx = Math.max(100, ...L2.map((x) => num(x.w) || 0));
+        let tr = '';
+        for (const x of [...L2].reverse()) {
+          const w = num(x.w);
+          tr += `<div class="tr${x.trin === cur ? ' on' : ''}"><span class="tn">${x.trin}</span><span class="tl2">${esc(x.blæser || '')} · ${fmt(x.setpunkt, 1)} °C</span>`
+            + `<span class="tbar"><i style="width:${w !== null ? Math.round((100 * w) / wmx) : 0}%"></i></span><span class="tw">${w !== null ? `${fmt(w, 0)} W · ${fmt(w / 1000, 2)} kWh el/t` : '<span class="mut">ikke lært</span>'}</span></div>`;
+        }
+        L += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, maks. blæser ${esc(asa.maks_blæser || '–')} · nu trin ${cur ?? '–'}${asa.kører_nu ? ` · kører ${esc(asa.kører_nu)}` : ''}</span></div>`
+          + `<div class="sm" style="margin-bottom:4px">${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div></div>`;
+      }
       const sp = c.steps;
-      if (sp && sp.entity) {
+      if (!asa.trin_liste && sp && sp.entity) {
         const cur = sv(h, sp.entity); const lw = sp.learned ? at(h, sp.learned)[sp.learned_attribute || 'w'] || {} : {};
         const labels = sp.labels || []; const n = Math.max(labels.length, ...Object.keys(lw).map((x) => +x + 1), cur !== null ? cur + 1 : 0);
         const wmx = Math.max(100, ...Object.values(lw).map(Number));
@@ -1106,6 +1171,7 @@
         }
         L += `<div class="b"><div class="pvh">${esc(sp.title || 'Trin')}<span class="mut sm"> · nu ${cur !== null ? fmt(cur, 0) : '–'} · lært forbrug</span></div><div class="trs" data-e="${esc(sp.learned || sp.entity)}">${tr}</div></div>`;
       }
+      L += settingsPanel(h, s);
       const R = `<div class="sm" style="margin-bottom:6px">${(c.hours || [0, 3, 6, 12]).map((x) => `<span class="pill${x === k ? ' on' : ''}" data-k="${x}">${x === 0 ? 'nu' : `om ${x} t`}</span>`).join(' ')}</div>`
         + this.bento(h, vm, c.floor, k, { unit, unitEntity: sc.climate, unitName: s.name })
         + `<div class="sm mut bleg" style="margin-top:8px"><span class="grad"></span><span>under gulvet</span><span>godt</span><span>loftet</span> · kurve: 12 t målt, stiplet = forudsigelse · ✎ ret gulvet</div>`;
@@ -1181,6 +1247,31 @@
     ['varmemodel-hus-card', HusCard, 'Varmemodel: hus', 'Status, plan og indstillinger'],
     ['varmemodel-plan-card', PlanCard, 'Varmemodel: plantegning', 'Rummene på din plantegning farvet efter temperatur – nu og de næste timer'],
   ];
+  // ------------------------------------------------------------------ dashboard på ét klik
+  // strategy: {type: custom:varmemodel} – et dashboard bygget af det, integrationen kender: én fane pr. varmekilde
+  // (anlæg + indstillinger), rum, varmekilder, energitiltag og hus. »Tag kontrol« i HA gør det til almindelig YAML.
+  class VarmemodelStrategy {
+    static async generate(config, hass) {
+      const vm = discover(hass);
+      if (!vm) return { title: 'Varme', views: [{ title: 'Varmemodel', cards: [{ type: 'markdown', content: 'Varmemodel er ikke sat op endnu.' }] }] };
+      const ov = (config && config.sources) || {};
+      const slug = (n) => n.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'kilde';
+      const views = vm.sources.map((s) => ({
+        title: s.name, path: slug(s.name), icon: s.kind === 'hydronic' ? 'mdi:water-boiler' : 'mdi:fan', type: 'panel',
+        cards: [{ type: 'custom:varmemodel-anlaeg-card', source: s.name, ...(config && config.anlaeg || {}), ...(ov[s.name] || {}) }],
+      }));
+      views.push(
+        { title: 'Rum', path: 'rum', icon: 'mdi:home-thermometer', type: 'panel', cards: [{ type: 'custom:varmemodel-rum-card' }] },
+        { title: 'Varmekilder', path: 'varmekilder', icon: 'mdi:heat-pump', type: 'sections', max_columns: 2,
+          sections: vm.sources.map((s) => ({ type: 'grid', cards: [{ type: 'custom:varmemodel-kilde-card', source: s.name }] })) },
+        { title: 'Energitiltag', path: 'energitiltag', icon: 'mdi:leaf', type: 'panel', cards: [{ type: 'custom:varmemodel-tiltag-card' }] },
+        { title: 'Hus', path: 'hus', icon: 'mdi:home-cog', type: 'sections', sections: [{ type: 'grid', cards: [{ type: 'custom:varmemodel-hus-card' }] }] },
+      );
+      return { title: (config && config.title) || 'Varme', views };
+    }
+  }
+  if (!customElements.get('ll-strategy-dashboard-varmemodel')) customElements.define('ll-strategy-dashboard-varmemodel', class extends HTMLElement { static generate(c, h) { return VarmemodelStrategy.generate(c, h); } });
+
   window.customCards = window.customCards || [];
   for (const [tag, cls, name, description] of DEFS) {
     if (!customElements.get(tag)) { customElements.define(tag, cls); window.customCards.push({ type: tag, name, description, preview: false }); }

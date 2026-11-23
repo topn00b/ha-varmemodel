@@ -36,7 +36,14 @@ const walk = (o, where) => {
 };
 for (const v of dash.views) walk(v, v.title);
 
+// Dashboardet på ét klik (strategy): dens kort tegnes også
+const strat = defs['ll-strategy-dashboard-varmemodel'];
+const stratViews = [];
+if (strat) { strat.generate({}, hass).then((d) => stratViews.push(...d.views)); }
 let bad = 0;
+(async () => {
+await Promise.resolve(); await Promise.resolve();
+for (const v of stratViews) walk(v, `strategy: ${v.title}`);
 for (const W of [1400, 420]) {
   global.__W = W;
   for (const [where, cfg] of cards) {
@@ -51,5 +58,6 @@ for (const W of [1400, 420]) {
     }
   }
 }
-console.log(bad ? `${bad} fejl` : `alle ${cards.length} kort tegnet uden fejl (bred og smal)`);
+console.log(bad ? `${bad} fejl` : `alle ${cards.length} kort tegnet uden fejl (bred og smal, inkl. ${stratViews.length} strategy-faner)`);
 process.exit(bad ? 1 : 0);
+})();

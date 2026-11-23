@@ -237,6 +237,22 @@ sources:
 
 Med `source: <varmekildens navn>` viser kortet kun den varmekilde: dens rum, plan, tidslinje og afvigelser. Så kan anlægget deles op i én visning pr. varmepumpe eller etage. En luft-luft-kilde tegnes med varmepumpen til venstre og rummene ved siden af.
 
+**Dashboard på ét klik:** opret et nyt dashboard i HA, vælg »Rediger → Rå konfiguration« og skriv `strategy: {type: custom:varmemodel}`. Varmemodel bygger dashboardet ud fra det, den kender: én fane pr. varmekilde (anlæg, plan, afvigelser og indstillinger), rum, varmekilder, energitiltag og hus. Kort-indstillinger for en bestemt kilde kan gives under `sources: {<navn>: {...}}`. »Tag kontrol« i HA gør dashboardet til almindelig konfiguration, man selv kan rette i.
+
+**Luft-luft-styring (stigen):** har en luft-luft-kilde en klimaentitet – valgt i opsætningen eller fundet på samme enhed som enhedens føler – får den sine egne indstillinger, der vises som dropdowns i kildens fane:
+
+| Entitet | Hvad |
+|---|---|
+| *Varmemodel styrer* (kontakt) | fra = kun anbefaling (standard). Til = Varmemodel skriver tænd/sluk, blæser og setpunkt til klimaentiteten (højst 60 skrivninger pr. døgn). Slå egne automationer for varmepumpen fra først. |
+| *Maks. blæser dag / nat* (valg) | blæserhastighederne læses fra klimaentiteten |
+| *Nat begynder / slutter* (tid) | standard 22:00–07:00 |
+| *Laveste / højeste setpunkt*, *setpunkt pr. trin* (tal) | standard 20–23 °C i trin af 0,5 |
+| *Trin ned ved over gulvet med* (tal) | standard 0,5 °C |
+| *Maks. forvarmning før blokering* (tal) | standard 1,5 °C |
+| *Lameller op/ned og side* (valg) | »uændret« eller en fast stilling |
+
+Stigen: først blæseren op (laveste trin er varmepumpens *quiet*, hvis den har det), så setpunktet op – blæseren højst til den valgte maks. Når planen siger varme, går stigen ét trin op pr. kvarter, mens et rum er under sit gulv (+ forvarmning før en blokering, regnet som planens forventede fald i rummet), og ét trin ned, når alle rum har været over gulvet + margen i 30 min., og trinnet har holdt i 45 min. Starttrinnet huskes pr. 5 °C udetemperatur, og forbruget pr. trin læres af elmåleren ud fra det, der faktisk kører – også mens Varmemodel kun anbefaler. Sensoren *Trin på stigen* viser trinene, det lærte forbrug, margen og forvarmning pr. rum.
+
 **Luft-luft med plantegning:** med `source` sat til en luft-luft-kilde og `floor` (samme format som én etage i plantegningskortet) vises etagen som en »bento-plan«: rummene som kort placeret som på tegningen (rækker efter indhold, ikke cm). Hvert kort viser temperaturen, en kurve med de sidste 12 timer og forudsigelsen 6 timer frem (stiplet), gulvet (tryk for at rette) og retningen om 3 timer. Kortets farve glider fra blå (under gulvet) over grøn til rød (over loftet). Varmepumpen står som et mærke i sit rum og drejer, mens den varmer. På smal skærm bliver kortene til to kolonner. Til venstre står varmepumpen med valgfrie `stats`, kWh el pr. time (24 timer tilbage farvet efter pris, planen 12 timer frem stiplet) og pr. døgn, og valgfrit `steps`: hvad hvert trin gør og dets lærte forbrug.
 
 ```yaml

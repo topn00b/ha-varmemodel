@@ -585,3 +585,48 @@ async def test_air_source_gets_plan_and_command(ha: HomeAssistant) -> None:
     assert cmd.state == "heat" and cmd.attributes["setpoint"] == 22.0
     plan_now = next(s for k, s in ents.items() if k.endswith("plan_now") and "luft_luft" in k)
     assert plan_now.state == "heat" and plan_now.attributes["kind"] == "air_air"
+
+
+async def test_air_ladder_shadow_and_control(ha: HomeAssistant) -> None:
+    """Luft-luft med klimaentitet: stigen regnes i skygge (ingen skrivning); med »Varmemodel styrer« skrives trinnet."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.rum_2", "19.0", {"state_class": "measurement"})
+    ha.states.async_set("climate.ll", "off", {"fan_modes": ["Auto", "Low", "Mid", "High"], "preset_modes": ["none", "quiet"],
+                                               "swing_modes": ["Auto", "Up"], "temperature": 20, "fan_mode": "Low"})
+    air_cfg = {**AIR, "climate": "climate.ll"}
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub(HYD, "source"), _sub(air_cfg, "source")])
+    e.add_to_hass(ha)
+    air = next(sid for sid, x in e.subentries.items() if x.data.get("source_type") == "air_air")
+    from homeassistant.config_entries import ConfigSubentry
+    ha.config_entries.async_add_subentry(e, ConfigSubentry(data={"name": "Loft", "temperature": "sensor.rum_2", "heat_source": air,
+                                                                 "minimum": 19.5, "maximum": 22.5}, subentry_type="room", title="Loft", unique_id=None))
+    calls: list = []
+    ha.services.async_register("climate", "set_hvac_mode", lambda call: calls.append(("hvac", call.data["hvac_mode"])))
+    ha.services.async_register("climate", "set_fan_mode", lambda call: calls.append(("fan", call.data["fan_mode"])))
+    ha.services.async_register("climate", "set_temperature", lambda call: calls.append(("sp", call.data["temperature"])))
+    ha.services.async_register("climate", "set_preset_mode", lambda call: calls.append(("preset", call.data["preset_mode"])))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c.rooms["sensor.rum_2"] = {"value": 0.4, "r2": 0.6, "extra": {"sources": {"Luft-luft": {"now": 0.7, "delayed": 0.0}}, "accuracy_6h_k": 0.3}}
+    c._recent_sync = lambda s, a, b: ({}, {})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    step = next(s for s in ha.states.async_all("sensor") if s.entity_id.endswith("ladder_step") or s.entity_id.endswith("air_step"))
+    assert step.state == "0" and len(step.attributes["trin_liste"]) == 1 + 3 + 6  # quiet, 3 blæsere, setpunkt 20,5–23
+    assert not calls  # kun anbefaling, så længe kontakten er slået fra
+    sel = {s.entity_id: s for s in ha.states.async_all("select")}
+    day = next(s for k, s in sel.items() if k.endswith("max_fan_day"))
+    assert day.state == "High" and day.attributes["options"] == ["Low", "Mid", "High"]
+    sw = next(s for s in ha.states.async_all("switch"))
+    await ha.services.async_call("switch", "turn_on", {"entity_id": sw.entity_id}, blocking=True)
+    await ha.async_block_till_done()
+    assert ("hvac", "heat") in calls and ("preset", "quiet") in calls

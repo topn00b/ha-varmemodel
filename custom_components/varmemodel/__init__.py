@@ -26,7 +26,7 @@ from .const import (
 from .coordinator import VarmemodelCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.BUTTON, Platform.NUMBER, Platform.SELECT, Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.BUTTON, Platform.NUMBER, Platform.SELECT, Platform.SENSOR, Platform.SWITCH, Platform.TIME]
 
 type VarmemodelConfigEntry = ConfigEntry[VarmemodelCoordinator]
 
