@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.9.0';
+  const VERSION = '0.9.1';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -255,9 +255,7 @@
   // Indstillinger for en Varmemodel-enhed som rigtige kontroller (dropdown, tal, tid, kontakt), grupperet
   const SET_GROUPS = [
     ['Styring', ['air_control']],
-    ['Blæser', ['air_fan_day', 'air_fan_night', 'air_night_start', 'air_night_end']],
-    ['Setpunkt', ['air_sp_min', 'air_sp_max', 'air_sp_step']],
-    ['Stigen', ['air_down_margin', 'air_preload_max']],
+    ['Støj: maks. blæser', ['air_fan_day', 'air_fan_night', 'air_night_start', 'air_night_end']],
     ['Lameller', ['air_swing_v', 'air_swing_h']],
   ];
   function settingsPanel(h, src, title = 'Indstillinger') {
@@ -637,7 +635,7 @@
   .dbs{display:flex;gap:6px;align-items:flex-end;margin-top:8px}.db{flex:1;display:flex;flex-direction:column;align-items:center;font-size:11px}
   .db i{display:block;width:70%;background:#8fc9ef;border-radius:3px 3px 0 0;min-height:1px}
   .trs{display:flex;flex-direction:column;gap:2px;cursor:pointer}.tr{display:grid;grid-template-columns:22px minmax(90px,1fr) 1fr auto;gap:6px;align-items:center;font-size:12px;padding:1px 4px;border-radius:5px}
-  .tr.on{background:var(--primary-color);color:#fff}.tr.on .mut{color:#fff}.tn{font-weight:700;text-align:right}
+  .tr.on{background:var(--primary-color);color:#fff}.tr.mt{outline:2px dashed var(--primary-color);outline-offset:-2px}.tr.on .mut{color:#fff}.tn{font-weight:700;text-align:right}
   .tbar{height:8px;background:var(--divider-color);border-radius:4px;overflow:hidden}.tbar i{display:block;height:100%;background:${OR}}.tr.on .tbar i{background:#fff}
   .tw{white-space:nowrap;text-align:right}
   .sg{margin-top:6px}.sgh{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--secondary-text-color);margin:6px 0 2px}
@@ -1152,10 +1150,10 @@
         let tr = '';
         for (const x of [...L2].reverse()) {
           const w = num(x.w);
-          tr += `<div class="tr${x.trin === cur ? ' on' : ''}"><span class="tn">${x.trin}</span><span class="tl2">${esc(x.blæser || '')} · ${fmt(x.setpunkt, 1)} °C</span>`
+          tr += `<div class="tr${x.trin === cur ? ' on' : ''}${x.trin === asa.mål_trin ? ' mt' : ''}"><span class="tn">${x.trin}</span><span class="tl2">${esc(x.blæser || '')} · ${fmt(x.setpunkt, 1)} °C</span>`
             + `<span class="tbar"><i style="width:${w !== null ? Math.round((100 * w) / wmx) : 0}%"></i></span><span class="tw">${w !== null ? `${fmt(w, 0)} W · ${fmt(w / 1000, 2)} kWh el/t` : '<span class="mut">ikke lært</span>'}</span></div>`;
         }
-        L += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, maks. blæser ${esc(asa.maks_blæser || '–')} · nu trin ${cur ?? '–'}${asa.kører_nu ? ` · kører ${esc(asa.kører_nu)}` : ''}</span></div>`
+        L += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, maks. blæser ${esc(asa.maks_blæser || '–')} · nu trin ${cur ?? '–'}${asa.el_mål_w ? ` · planens el-mål ${fmt(asa.el_mål_w, 0)} W${asa.mål_trin != null ? ` (trin ${asa.mål_trin})` : ' (lærer stadig trinene)'}` : ''}${asa.kører_nu ? ` · kører ${esc(asa.kører_nu)}` : ''}</span></div>`
           + `<div class="sm" style="margin-bottom:4px">${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div></div>`;
       }
       const sp = c.steps;

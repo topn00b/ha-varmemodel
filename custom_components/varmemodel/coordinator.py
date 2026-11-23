@@ -47,6 +47,7 @@ from .air_control import (
     build_ladder,
     choose_step,
     fan_options,
+    target_step,
     is_night,
     learn_w,
     preload_per_room,
@@ -1188,21 +1189,33 @@ class VarmemodelCoordinator:
         lt = dt_util.now()
         night = is_night(lt.hour * 60 + lt.minute, str(self.air_setting(s, "air_night_start")), str(self.air_setting(s, "air_night_end")))
         cap = self.air_setting(s, "air_fan_night" if night else "air_fan_day")
-        sp_min, sp_max = float(self.air_setting(s, "air_sp_min")), float(self.air_setting(s, "air_sp_max"))
-        ladder = build_ladder(fans, cap, sp_min, max(sp_min, sp_max), float(self.air_setting(s, "air_sp_step")), quiet)
+        # Flydende setpunkter: fra det højeste gulv blandt rummene (mindst klimaentitetens laveste) og 3 °C op
+        floors = [r.t_min for r in show if r.t_min > -50]
+        stp = float(attrs.get("target_temp_step") or 0.5)
+        sp_min = max(float(attrs.get("min_temp") or 16), round((max(floors) if floors else 20.0) / stp) * stp)
+        sp_max = min(float(attrs.get("max_temp") or 30), sp_min + 3.0)
+        ladder = build_ladder(fans, cap, sp_min, sp_max, stp, quiet)
         label = lambda x: f"{x.preset or x.fan} {x.setpoint:g}"  # noqa: E731
         a = self.air.setdefault(s.sid, {})
-        pre, blk = preload_per_room([{"blocked": h["blocked"]} for h in p.hours], p.rooms, float(self.air_setting(s, "air_preload_max")))
-        margins = {r.name: round(r.t_now - r.t_min - pre.get(r.name, 0.0), 2) for r in show if r.t_min > -50 and not r.held}
+        pre, blk = preload_per_room([{"blocked": h["blocked"]} for h in p.hours], p.rooms, 3.0)
+        meas = [r for r in show if r.t_min > -50 and not r.held]
+        margins = {r.name: round(r.t_now - r.t_min - pre.get(r.name, 0.0), 2) for r in meas}
+        # Ned kun når alle rum er over gulv + forvarmning + rummodellens egen usikkerhed (ingen fast margen)
+        down_ok = bool(meas) and all(r.t_now - r.t_min - pre.get(r.name, 0.0) >= r.margin for r in meas)
         t_out = p.hours[0]["t_out"] if p.hours else None
         b = band(t_out)
         starts = a.setdefault("start", {})
         idx_of = {label(x): i for i, x in enumerate(ladder)}
+        w_l = a.get("w", {})
+        el_now = p.hours[0].get("el_kw") if p.hours else None
+        tgt = target_step([w_l.get(label(x)) for x in ladder], el_now * 1000 if el_now else None)
         if on and not blocked:
             start = idx_of.get(starts.get(b)) if b else None
+            if start is None:
+                start = tgt
             prev = a.get("step") if a.get("on") else None
-            i, changed, down_since, reason = choose_step(prev, len(ladder), margins, float(self.air_setting(s, "air_down_margin")),
-                                                         now, float(a.get("changed", 0.0)), a.get("down_since"), start)
+            i, changed, down_since, reason = choose_step(prev, len(ladder), margins, down_ok,
+                                                         now, float(a.get("changed", 0.0)), a.get("down_since"), start, tgt)
         else:
             i, changed, down_since = a.get("step"), float(a.get("changed", 0.0)), None
             reason = "blokeret – slukket" if blocked else "planen varmer ikke nu"
@@ -1231,7 +1244,7 @@ class VarmemodelCoordinator:
         a["e"] = [e_now, now, act] if e_now is not None else None
         w = a.get("w", {})
         cur = ladder[min(i, len(ladder) - 1)] if i is not None else None
-        a["view"] = {"klima": clim, "trin": i, "nat": night, "maks_blæser": cap, "styrer": bool(self.air_setting(s, AIR_SWITCH)), "grund": reason,
+        a["view"] = {"klima": clim, "trin": i, "mål_trin": tgt, "el_mål_w": round(el_now * 1000) if el_now else None, "nat": night, "maks_blæser": cap, "styrer": bool(self.air_setting(s, AIR_SWITCH)), "grund": reason,
                      "kører_nu": act, "blokering": blk, "forvarmning": pre or None, "margen": margins or None,
                      "trin_liste": [{"trin": k, "blæser": x.preset or x.fan, "setpunkt": x.setpoint, "w": w.get(label(x))} for k, x in enumerate(ladder)],
                      "starttrin": dict(starts), "skiftet": _ts_local_iso(changed) if changed else None}

@@ -244,12 +244,11 @@ Med `source: <varmekildens navn>` viser kortet kun den varmekilde: dens rum, pla
 | Entitet | Hvad |
 |---|---|
 | *Varmemodel styrer* (kontakt) | fra = kun anbefaling (standard). Til = Varmemodel skriver tænd/sluk, blæser og setpunkt til klimaentiteten (højst 60 skrivninger pr. døgn). Slå egne automationer for varmepumpen fra først. |
-| *Maks. blæser dag / nat* (valg) | blæserhastighederne læses fra klimaentiteten |
+| *Maks. blæser dag / nat* (valg) | hvor meget den må larme – hastighederne læses fra klimaentiteten |
 | *Nat begynder / slutter* (tid) | standard 22:00–07:00 |
-| *Laveste / højeste setpunkt*, *setpunkt pr. trin* (tal) | standard 20–23 °C i trin af 0,5 |
-| *Trin ned ved over gulvet med* (tal) | standard 0,5 °C |
-| *Maks. forvarmning før blokering* (tal) | standard 1,5 °C |
 | *Lameller op/ned og side* (valg) | »uændret« eller en fast stilling |
+
+Resten regner modellen selv: setpunkterne flyder fra rummenes højeste gulv og 3 °C op (inden for klimaentitetens grænser), trinnet følger planens el-mål for timen (planen har valgt timer og mængde efter pris), og der gås kun ned, når alle rum er over gulv + forvarmning + rummodellens egen usikkerhed.
 
 Stigen: først blæseren op (laveste trin er varmepumpens *quiet*, hvis den har det), så setpunktet op – blæseren højst til den valgte maks. Når planen siger varme, går stigen ét trin op pr. kvarter, mens et rum er under sit gulv (+ forvarmning før en blokering, regnet som planens forventede fald i rummet), og ét trin ned, når alle rum har været over gulvet + margen i 30 min., og trinnet har holdt i 45 min. Starttrinnet huskes pr. 5 °C udetemperatur, og forbruget pr. trin læres af elmåleren ud fra det, der faktisk kører – også mens Varmemodel kun anbefaler. Sensoren *Trin på stigen* viser trinene, det lærte forbrug, margen og forvarmning pr. rum.
 

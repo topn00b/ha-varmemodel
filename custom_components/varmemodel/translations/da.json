@@ -228,21 +228,6 @@
       },
       "flow_margin": {
         "name": "Maks. fremløb over det lærte"
-      },
-      "air_sp_min": {
-        "name": "Laveste setpunkt"
-      },
-      "air_sp_max": {
-        "name": "Højeste setpunkt"
-      },
-      "air_sp_step": {
-        "name": "Setpunkt pr. trin"
-      },
-      "air_down_margin": {
-        "name": "Trin ned ved over gulvet med"
-      },
-      "air_preload_max": {
-        "name": "Maks. forvarmning før blokering"
       }
     },
     "binary_sensor": {

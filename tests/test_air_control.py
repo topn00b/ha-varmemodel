@@ -13,6 +13,7 @@ from custom_components.varmemodel.air_control import (
     is_night,
     learn_w,
     preload_per_room,
+    target_step,
 )
 
 FANS = fan_options(["Auto", "Low", "LowMid", "Mid", "HighMid", "High"])
@@ -34,22 +35,35 @@ def test_night_window_over_midnight() -> None:
 
 
 def test_up_one_per_quarter_down_after_hold() -> None:
-    i, ch, ds, why = choose_step(None, 12, {"A": -0.2}, 0.5, 0, 0, None, start=4)
+    i, ch, ds, why = choose_step(None, 12, {"A": -0.2}, False, 0, 0, None, start=4)
     assert i == 4 and "starter" in why
-    i, ch, ds, why = choose_step(4, 12, {"A": -0.2}, 0.5, 600, ch, ds)
+    i, ch, ds, why = choose_step(4, 12, {"A": -0.2}, False, 600, ch, ds)
     assert i == 4 and "venter" in why
-    i, ch, ds, _ = choose_step(4, 12, {"A": -0.2}, 0.5, UP_EVERY, ch, ds)
+    i, ch, ds, _ = choose_step(4, 12, {"A": -0.2}, False, UP_EVERY, ch, ds)
     assert i == 5
-    # alle rum over gulv + margen: først efter 30 min. og 45 min. på trinnet
+    # alle rum over gulv + usikkerhed: først efter 30 min. og 45 min. på trinnet
     t = UP_EVERY + 60
-    i, ch2, ds, _ = choose_step(5, 12, {"A": 0.6}, 0.5, t, ch, ds)
+    i, ch2, ds, _ = choose_step(5, 12, {"A": 0.6}, True, t, ch, ds)
     assert i == 5 and ds == t
-    i, ch2, ds, _ = choose_step(5, 12, {"A": 0.6}, 0.5, t + DOWN_HOLD, ch, ds)
+    i, ch2, ds, _ = choose_step(5, 12, {"A": 0.6}, True, t + DOWN_HOLD, ch, ds)
     assert i == 5  # trinnet har ikke holdt 45 min.
-    i, ch2, ds, why = choose_step(5, 12, {"A": 0.6}, 0.5, ch + DOWN_GAP + DOWN_HOLD, ch, t)
+    i, ch2, ds, why = choose_step(5, 12, {"A": 0.6}, True, ch + DOWN_GAP + DOWN_HOLD, ch, t)
     assert i == 4 and "ned" in why
-    # mellem gulv og margen: holdes
-    assert choose_step(4, 12, {"A": 0.3}, 0.5, 10**6, 0, None)[0] == 4
+    # over gulvet, men ikke over usikkerheden: holdes
+    assert choose_step(4, 12, {"A": 0.3}, False, 10**6, 0, None)[0] == 4
+
+
+def test_plan_target_drives_step() -> None:
+    """Planens el-mål: laveste trin, hvis lærte forbrug dækker målet – op pr. kvarter, ned først når rummene har overskud."""
+    w = [180, None, 300, None, 450, 600]
+    assert target_step(w, 400) == 4 and target_step(w, 100) == 0 and target_step(w, 900) == 5
+    assert target_step([None, 300, None], 200) is None and target_step(w, None) is None
+    i, ch, _, why = choose_step(2, 6, {"A": 0.4}, False, UP_EVERY, 0, None, target=4)
+    assert i == 3 and "el-mål" in why
+    # målet er lavere, men rummene har ikke overskud: holdes
+    assert choose_step(4, 6, {"A": 0.1}, False, 10**6, 0, None, target=1)[0] == 4
+    # rum under gulvet går forud for målet
+    assert choose_step(2, 6, {"A": -0.1}, False, UP_EVERY, 0, None, target=0)[0] == 3
 
 
 def test_preload_is_planned_drop_during_block() -> None:

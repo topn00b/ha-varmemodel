@@ -4,10 +4,13 @@ Stigen: først blæseren op (laveste trin kan være varmepumpens »quiet«), så
 højst til den valgte maks. (dag eller nat). Planen siger, om der skal varmes; stigen siger, hvor hårdt:
 
 - op ét trin pr. kvarter, når et rum er under sit gulv (+ forvarmning før en blokering)
-- ned ét trin, når alle rum har været mindst »ned-margen« over i 30 min., og trinnet har holdt i 45 min.
+- ellers mod planens el-mål for timen: det laveste trin, hvis lærte forbrug dækker målet (planen har valgt
+  timer og mængde efter pris) – højst ét trin pr. kvarter op og pr. 45 min. ned
+- uden nok lærte trin: ned ét trin, når alle rum har været over gulv + deres usikkerhed i 30 min.
 - start på det trin, der sidst holdt rummene ved samme udetemperatur (lært pr. 5 °C)
 
-Alt regnes fra målinger og planens forudsigelse; intet forskydes kunstigt.
+Setpunkterne flyder: de regnes fra rummenes gulv og klimaentitetens grænser. Brugeren vælger kun,
+hvor meget blæseren må larme (maks. blæser dag og nat). Intet forskydes kunstigt.
 """
 
 from __future__ import annotations
@@ -84,9 +87,22 @@ def preload_per_room(plan: list[dict[str, Any]], forecast: dict[str, list[float]
     return out, f"{s}–{e + 1}"
 
 
-def choose_step(cur: int | None, n: int, margins: dict[str, float], down_margin: float, now: float,
-                changed: float, down_since: float | None, start: int | None = None) -> tuple[int, float, float | None, str]:
-    """Næste trin. ``margins``: rum → målt temperatur − (gulv + forvarmning). Giver (trin, ændret, ned-siden, grund)."""
+def target_step(ladder_w: list[float | None], target_w: float | None) -> int | None:
+    """Det laveste trin, hvis lærte forbrug (W) dækker målet. None uden mål eller med under to lærte trin."""
+    known = [(i, w) for i, w in enumerate(ladder_w) if w is not None]
+    if target_w is None or len(known) < 2:
+        return None
+    if target_w <= 0:
+        return 0
+    hit = next((i for i, w in known if w >= target_w), None)
+    return hit if hit is not None else known[-1][0]
+
+
+def choose_step(cur: int | None, n: int, margins: dict[str, float], down_ok: bool, now: float,
+                changed: float, down_since: float | None, start: int | None = None,
+                target: int | None = None) -> tuple[int, float, float | None, str]:
+    """Næste trin. ``margins``: rum → målt − (gulv + forvarmning). ``down_ok``: alle rum over gulv + usikkerhed.
+    ``target``: trinnet der dækker planens el-mål (None = ukendt). Giver (trin, ændret, ned-siden, grund)."""
     top = max(0, n - 1)
     if cur is None:
         cur = min(top, start if start is not None else 0)
@@ -101,12 +117,17 @@ def choose_step(cur: int | None, n: int, margins: dict[str, float], down_margin:
         if now - changed >= UP_EVERY:
             return cur + 1, now, None, f"{low} er {abs(margins[low]):.1f} °C under gulvet – et trin op"
         return cur, changed, None, f"{low} er under gulvet – venter (højst ét trin pr. kvarter)"
-    if all(m >= down_margin for m in margins.values()):
+    if target is not None and target > cur:
+        if now - changed >= UP_EVERY:
+            return cur + 1, now, None, f"mod planens el-mål (trin {target}) – et trin op"
+        return cur, changed, None, f"mod planens el-mål (trin {target}) – venter"
+    if down_ok and (target is None or target < cur):
         ds = down_since if down_since is not None else now
         if cur > 0 and now - ds >= DOWN_HOLD and now - changed >= DOWN_GAP:
-            return cur - 1, now, None, f"alle rum mindst {down_margin:.1f} °C over gulvet i 30 min. – et trin ned"
-        return cur, changed, ds, f"alle rum over gulvet + {down_margin:.1f} – venter med at gå ned"
-    return cur, changed, None, "rummene holder – trinnet holdes"
+            return cur - 1, now, None, ("mod planens el-mål – et trin ned" if target is not None
+                                        else "alle rum over gulv + usikkerhed i 30 min. – et trin ned")
+        return cur, changed, ds, "rummene har overskud – venter med at gå ned"
+    return cur, changed, None, "rummene holder – trinnet holdes" + (f" (planens el-mål: trin {target})" if target is not None else "")
 
 
 def learn_w(learned: dict[str, float], step: int, watt: float) -> dict[str, float]:

@@ -228,21 +228,6 @@
       },
       "flow_margin": {
         "name": "Max flow above the learned flow"
-      },
-      "air_sp_min": {
-        "name": "Lowest setpoint"
-      },
-      "air_sp_max": {
-        "name": "Highest setpoint"
-      },
-      "air_sp_step": {
-        "name": "Setpoint per step"
-      },
-      "air_down_margin": {
-        "name": "Step down above floor by"
-      },
-      "air_preload_max": {
-        "name": "Max preload before blocking"
       }
     },
     "binary_sensor": {
