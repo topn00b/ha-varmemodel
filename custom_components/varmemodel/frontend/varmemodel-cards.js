@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.12.1';
+  const VERSION = '0.12.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };

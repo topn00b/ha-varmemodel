@@ -1408,7 +1408,9 @@ class VarmemodelCoordinator:
             return
         a = st.attributes
         lo, hi = _num(a.get("min_temp", a.get("min"))), _num(a.get("max_temp", a.get("max")))
-        want = float(min(max(want, lo if lo is not None else 20.0), hi if hi is not None else 45.0))
+        # Entitetens trin (fx hele grader – nogle varmepumper runder ellers et halvt fremløbsmål ned); uden trin: hele grader
+        stp = _num(a.get("target_temp_step", a.get("step"))) or 1.0
+        want = float(min(max(round(want / stp) * stp, lo if lo is not None else 20.0), hi if hi is not None else 45.0))
         cur = _num(a.get("temperature")) if dom == "climate" else _num(st.state)
         f = self.air.setdefault(f"flow:{s.sid}", {})
         day = dt_util.now().date().isoformat()
