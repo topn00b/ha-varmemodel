@@ -639,11 +639,12 @@ class VarmemodelCoordinator:
                 continue
             # Ny modelopbygning (andre varmekilder eller nabozoner end sidst) er en ny model – ingen ±10 %-grænse
             pe = (prev or {}).get("extra") or {}
-            new_shape = f.value is not None and prev is not None and (
+            # Ny regnemetode (CALIB_VERSION) eller ny opbygning er en ny model – den gamle ±10 %-grænse gælder ikke
+            new_shape = f.value is not None and prev is not None and (prev.get("v") != CALIB_VERSION or
                 set((pe.get("sources") or {})) != set((f.extra.get("sources") or {}))
                 or set((pe.get("neighbours") or {})) != set((f.extra.get("neighbours") or {})))
             if new_shape:
-                value, note = f.value, "ny model (varmekilder eller naboer ændret)"
+                value, note = f.value, "ny model (ny regnemetode, varmekilder eller naboer ændret)"
             else:
                 value, note = guard(f.value, prev.get("value") if prev else None, (f.t_out_min, f.t_out_max),
                                     (prev.get("t_out_min"), prev.get("t_out_max")) if prev else (None, None))
@@ -659,7 +660,8 @@ class VarmemodelCoordinator:
                 val = await self.hass.async_add_executor_job(validate_room, room_hours[eid], Fit(value, extra=extra))
                 if val is not None:
                     extra.update(validated_6h_k=val["rmse"], validated_bias_6h_k=val["bias"], validated_windows=val["n"])
-            self.rooms[eid] = {"value": value, "guard": note, "n": f.n, "r2": None if f.r2 is None else round(f.r2, 2),
+            self.rooms[eid] = {"v": CALIB_VERSION if not keep_prev else (prev or {}).get("v"),
+                               "value": value, "guard": note, "n": f.n, "r2": None if f.r2 is None else round(f.r2, 2),
                                "t_out_min": f.t_out_min, "t_out_max": f.t_out_max, "note": f.note,
                                "fitted_at": now if f.value is not None else (prev or {}).get("fitted_at"), "extra": extra}
         self.room_heat = self._room_heat(hours_by_source)

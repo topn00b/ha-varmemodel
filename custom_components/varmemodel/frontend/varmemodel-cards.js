@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.10.2';
+  const VERSION = '0.11.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -567,7 +567,7 @@
         o += '</div>';
       }
       o += '<div class="h2">Planens indstillinger</div><div class="grid">';
-      for (const [k, n, u] of [['max_pause', 'Maks. pause uden gulvvarme', 't'], ['comfort_offset', 'Planen sigter over gulvet med', '°C'], ['boost_delta', 'Jeg fryser hæver med', '°C'],
+      for (const [k, n, u] of [['max_pause', 'Maks. pause uden gulvvarme', 't'], ['comfort_offset', 'Rum må svinge over gulvet med', '°C'], ['boost_delta', 'Jeg fryser hæver med', '°C'],
         ['boost_hours', 'Jeg fryser gælder højst', 't'], ['red_allowance', 'Må gå under gulvet i røde timer med', '°C'], ['cold_caution', 'Forsigtighed ved kulde', '%'], ['flow_margin', 'Maks. fremløb over det lærte', '°C']]) {
         const e = vm.e(k); o += row(n, e ? `<span class="v" data-e="${esc(e)}">${fmt(sv(h, e))} ${u}</span>` : '–');
       }
@@ -774,7 +774,7 @@
       const pa = pa0;
       return rows + `<details id="vmzd"><summary>planens begrundelse ▾</summary><div class="sm" style="margin-top:4px">${esc(pa.reason || '')}<br>`
         + (hyd[0] ? `Behov ${fmt(pa.demand_kwh, 0)} kWh varme · plan ${fmt(pa.heat_kwh, 0)} kWh varme · ${fmt(pa.el_kwh, 0)} kWh el` : `Plan ${fmt(pa.el_kwh, 0)} kWh el`) + ` · ca. ${fmt(pa.cost_kr, 0)} kr over ${pa.horizon_h ?? '–'} timer<br>`
-        + `Komfort +${fmt(pa.comfort_offset)} °C · må gå ${fmt(pa.red_allowance)} °C under gulvet i røde timer · maks. pause ${pa.max_pause ?? '–'} timer<br>`
+        + `Rum må svinge ${fmt(pa.comfort_offset)} °C over gulvet · må gå ${fmt(pa.red_allowance)} °C under gulvet i røde timer · maks. pause ${pa.max_pause ?? '–'} timer<br>`
         + (() => { if (!hyd[0]) return ''; const ca = at(h, hyd[0].e('command')); return ca.reason !== undefined ? `Anbefalet styring: ${esc(ca.reason)} · i dag ${ca.writes_today ?? 0} skrivninger (højst 20) og ${ca.switches_today ?? 0} tænd/sluk (højst 8)<br>` : ''; })()
         + `Frisk plan i dag: ${fmt(pa.fresh_pct_today, 0)} % af kvartererne</div></details>`;
     }

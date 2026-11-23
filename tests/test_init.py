@@ -224,7 +224,9 @@ async def test_guarded_room_validates_stored_model(ha: HomeAssistant, entry: Moc
 
     c = entry.runtime_data
     prev_extra = {"sources": {"A": {"now": 0.03, "delayed": 0.0}}, "validated_6h_k": 9.9}
-    c.rooms["sensor.rum_1"] = {"value": 0.10, "extra": prev_extra, "t_out_min": 0.0, "t_out_max": 5.0}
+    from custom_components.varmemodel.const import CALIB_VERSION
+
+    c.rooms["sensor.rum_1"] = {"v": CALIB_VERSION, "value": 0.10, "extra": prev_extra, "t_out_min": 0.0, "t_out_max": 5.0}
     new = Fit(0.30, 50, 0.7, 0.2, 0.0, 5.0, "fit", {"sources": {"A": {"now": 0.05, "delayed": 0.0}}, "validated_6h_k": 0.1})
     # Rummet følger præcis den model, der gemmes: hele den forrige model (0.10.0: værdi og koefficienter holdes sammen)
     t, rh = 20.0, []
@@ -647,3 +649,19 @@ async def test_plant_week_survives_restart(ha: HomeAssistant, entry: MockConfigE
     await c._save()
     data = await c.store.async_load()
     assert data["plant_week"] == 14.5
+
+
+
+async def test_room_model_from_older_method_is_replaced(ha: HomeAssistant, entry: MockConfigEntry) -> None:
+    """En rummodel regnet med en ældre metode (uden versionsmærke) erstattes af den nye uden ±10 %-grænsen."""
+    c = entry.runtime_data
+    c.rooms["sensor.rum_1"] = {"value": 0.10, "extra": {"sources": {"A": {"now": 0.03, "delayed": 0.0}}}, "t_out_min": 0.0, "t_out_max": 5.0}
+    new = Fit(0.30, 50, 0.7, 0.2, 0.0, 5.0, "fit", {"sources": {"A": {"now": 0.05, "delayed": 0.0}}})
+    orig = c._rooms_fit
+    c._rooms_fit = lambda _h, keep=None: {"sensor.rum_1": new}
+    try:
+        await c.async_calibrate()
+    finally:
+        c._rooms_fit = orig
+    r = c.rooms["sensor.rum_1"]
+    assert r["value"] == 0.30 and r["guard"].startswith("ny model") and r["extra"]["sources"]["A"]["now"] == 0.05

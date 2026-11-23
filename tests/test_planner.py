@@ -215,7 +215,8 @@ def test_air_plan_keeps_floor_in_cheap_hours_never_in_red() -> None:
     q = [x["heat_kw"] for x in p.hours]
     sim = simulate_rooms([_air_room()], hs, q)["Rum A"]
     assert all(q[i] == 0 for i in range(14, 21))
-    assert min(sim) >= 19.5 + 0.4 - 0.05 and not p.warnings
+    # Usikkerheden vokser fra 0 nu til fuld efter 6 timer
+    assert all(t >= 19.5 + 0.4 * min(1.0, (i + 1) / 6) - 0.05 for i, t in enumerate(sim)) and not p.warnings
     assert sum(q[2:5]) > 0 and "kWh el" in p.reason
     assert all(x["setpoint"] is not None for x in p.hours if x["heat_kw"] > 0)
     # Varme lagt før den røde blok for at holde rummet gennem den er forvarmning – med tidspunkt
@@ -322,3 +323,26 @@ def test_air_plan_red_allowance_saves_heat_before_block() -> None:
     loose = make_air_plan(hs, [_air_room()], e_min=0.3, e_max=1.0, red_allowance=1.0)
     assert loose.el_kwh < strict.el_kwh
     assert all(x["heat_kw"] == 0 for x in loose.hours if x["blocked"])
+
+
+
+def test_comfort_is_a_band_not_a_target() -> None:
+    """Komfort er et bånd: kravet er gulv + usikkerhed (voksende til 6 t) – komfort får ikke planen til at købe mere varme."""
+    from custom_components.varmemodel.planner import make_air_plan
+
+    hs = hours(24, price=lambda i: 2.0, t_out=lambda i: 2.0)
+    a = make_air_plan(hs, [_air_room()], e_min=0.3, e_max=1.0, comfort=0.0)
+    b = make_air_plan(hs, [_air_room()], e_min=0.3, e_max=1.0, comfort=1.0)
+    assert a.el_kwh == b.el_kwh
+    room = PlanRoom(name="Stue", t_now=20.3, t_min=20.0, heat_now=0.08, heat_delayed=0.05, cool_per_hk=0.006, margin=0.3)
+    p0 = make_plan(hours(), M, [room], 20.5, comfort=0.0)
+    p1 = make_plan(hours(), M, [room], 20.5, comfort=1.0)
+    assert p0.heat_kwh == p1.heat_kwh
+
+
+def test_margin_grows_with_lead_time() -> None:
+    """Usikkerheden er 0 i timen nu og fuld efter 6 timer (den horisont præcisionen er målt over)."""
+    from custom_components.varmemodel.planner import _mg
+
+    r = PlanRoom(name="x", t_now=20, t_min=20, heat_now=0, heat_delayed=0, cool_per_hk=0, margin=0.6)
+    assert abs(_mg(r, 0) - 0.1) < 1e-9 and abs(_mg(r, 2) - 0.3) < 1e-9 and _mg(r, 5) == 0.6 and _mg(r, 20) == 0.6

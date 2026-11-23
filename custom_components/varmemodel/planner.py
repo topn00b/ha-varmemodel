@@ -80,6 +80,13 @@ AIR_STEP = 0.1  # kWh el pr. portion for luft-luft
 FLOW_MIN, FLOW_MAX = 25.0, 45.0  # fremløbsmål, varmepumpen kan sætte
 
 
+def _mg(r: PlanRoom, i: int) -> float:
+    """Rummets krav over gulvet i time i: modellens usikkerhed, der vokser fra 0 nu til den fulde (6-timers) præcision.
+
+    Komfort er et bånd – rummene må svinge op til »komfort« over gulvet – ikke et mål planen køber varme for at nå."""
+    return r.margin * min(1.0, (i + 1) / 6)
+
+
 def flow_for(m: SourceModel, p: float, target: float) -> float:
     """Fremløbsmålet for p kW varme: rummål + p ÷ gulvets afgivelse, begrænset og rundet til 0,5 °C."""
     f = target + (p / m.emission_kw_k if m.emission_kw_k > 0 else 0.0)
@@ -290,7 +297,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
         worst: tuple[int, PlanRoom] | None = None
         for r in rooms:
             for i, t in enumerate(sim[r.name]):
-                if t < limit(r, i) + comfort + r.margin + pre[i] and (r.name, i) not in skip:
+                if t < limit(r, i) + _mg(r, i) + pre[i] and (r.name, i) not in skip:
                     if worst is None or i < worst[0]:
                         worst = (i, r)
                     break
@@ -311,7 +318,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
     #     dermed fremløbet, når modellen forudser, at rummene klarer sig med mindre. Uden rummodeller: intet skæres.
     if rooms:
         def need_ok(sim2: dict[str, list[float]], base: dict[str, list[float]]) -> bool:
-            return all(t >= limit(r, i) + comfort + r.margin + pre[i] - 1e-6 or t >= b - 1e-6
+            return all(t >= limit(r, i) + _mg(r, i) + pre[i] - 1e-6 or t >= b - 1e-6
                        for r in rooms for i, (t, b) in enumerate(zip(sim2[r.name], base[r.name])))
 
         sim = simulate_rooms(rooms, hours, q, past_q)
@@ -412,7 +419,7 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
 
     def need(r: PlanRoom, i: int) -> float:
         # Brugerens valg: i blokerede (røde) timer må rummet gå op til ``red_allowance`` under gulvet for at spare
-        return r.t_min + comfort + r.margin + pre[i] - (red_allowance if hours[i].blocked else 0.0)
+        return r.t_min + _mg(r, i) + pre[i] - (red_allowance if hours[i].blocked else 0.0)
 
     def floor_at(r: PlanRoom, i: int) -> float:
         return r.t_min - (red_allowance if hours[i].blocked else 0.0)
