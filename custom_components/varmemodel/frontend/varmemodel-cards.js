@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.9.3';
+  const VERSION = '0.9.4';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -719,7 +719,7 @@
       if (cs && cs.state !== 'unknown' && (cs.state === 'heat') !== (pst === 'heat')) plan += ` · styring: ${cs.state === 'heat' ? 'varme' : 'slukket'} (${cs.attributes.reason || ''})`;
       const bg = zc || 'var(--primary-color)';
       const zone = `<div class="b zb" style="background:${bg};border-color:${bg}"><div class="z">${z ? `${ico} ${esc(z.toUpperCase())} · ` : ''}${fmt(price, 2)} kr/kWh el</div>`
-        + `<div class="sub">Plan: ${esc(plan)}${c.dry_run ? ' (styrer ikke endnu)' : ''}${flags.length ? ' · ' + esc(flags.join(' · ')) : ''}</div></div>`;
+        + `<div class="sub">Plan: ${esc(plan)}${this.dry(h, vm) ? ' (styrer ikke endnu)' : air0 && st(h, air0.e('air_control')) ? ' · Varmemodel styrer' : ''}${flags.length ? ' · ' + esc(flags.join(' · ')) : ''}</div></div>`;
       const notes = (c.notes || []).map((n) => { const v = n.attribute ? at(h, n.entity)[n.attribute] : (st(h, n.entity) || {}).state; return v ? `<div>${esc(v)}</div>` : ''; }).join('');
       // Bred skærm med vandbåren kilde: knapperne står i diagrammets øverste række (se wideSvg)
       const svgActs = !!main && !(this._tall ?? ((this.clientWidth || 1000) < 700));
@@ -807,7 +807,7 @@
         }
       }
       if (D.lowMin >= 30) w.push(['⚠️', `COP ${fmt(D.live, 2)} mod forventet ${fmt(D.exp, 2)} i ${Math.round(D.lowMin)} min.`]);
-      if (D.differs && !this._c.dry_run) w.push(['⚠️', 'Varmepumpen følger ikke planen']);
+      if (D.differs && !this.dry(h, vm)) w.push(['⚠️', 'Varmepumpen følger ikke planen']);
       const ids = [...Object.entries(D.f).filter(([k, v]) => typeof v === 'string' && v.includes('.') && !k.endsWith('_attribute')).map(([, v]) => v),
         D.outdoor, ...vm.rooms.map((r) => at(h, r.model)['temperaturføler'])].filter(Boolean);
       // Datapunkter væk i over 30 min. står for sig (»Mangler data«); resten under »Svarer ikke«
@@ -1008,6 +1008,12 @@
       return { w: 1500, h: H, g };
     }
     _setK(k) { this._k = +k || 0; this._draw(); }
+    // Styrer Varmemodel? En luft-luft-kilde siger det selv (kontakten »Varmemodel styrer«); ellers kortets dry_run
+    dry(h, vm) {
+      const air = vm.sources.length === 1 && vm.sources[0].kind !== 'hydronic' ? vm.sources[0] : null;
+      const sw = air ? st(h, air.e('air_control')) : null;
+      return sw ? sw.state !== 'on' : !!this._c.dry_run;
+    }
     // Timeforbruget (kWh el) fra statistikken – hentes højst hvert 10. minut
     kwh(h, eid) {
       const c = this._kw && this._kw.eid === eid ? this._kw : null;
