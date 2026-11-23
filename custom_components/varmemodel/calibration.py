@@ -809,7 +809,7 @@ def fit_room(hours: list[RoomHour], block: int = 6, step: int = 3, min_blocks: i
         if any(h.aired for h in cur):
             aired_blocks += 1
             continue
-        if any(h.t_out is None or h.t_room is None for h in cur):
+        if any(h.t_out is None or h.t_room is None for h in cur) or prev[-1].t_room is None:
             continue
         cands.append((cur, prev))
     cover = {k: sum(1 for cur, prev in cands if all(_inp(h, k) is not None for h in cur + prev)) / max(1, len(cands)) for k in keys}

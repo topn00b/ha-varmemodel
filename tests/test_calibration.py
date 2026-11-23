@@ -363,3 +363,12 @@ def test_room_fit_recovers_true_coefficients() -> None:
     src = f.extra["sources"]["A"]
     assert abs(f.value / 20 - cool) / cool < 0.08
     assert abs(src["now"] - heat) / heat < 0.08 and abs(src["delayed"]) < 0.25 * heat
+
+
+def test_room_fit_skips_block_when_hour_before_lacks_temperature() -> None:
+    """Mangler timen før blokken en rumtemperatur, springes blokken over (0.10.0 fejlede på None)."""
+    from custom_components.varmemodel.calibration import RoomHour, fit_room
+
+    hs = [RoomHour(ts=1_700_000_000 + i * 3600, t_room=None if i % 7 == 0 else 20.0 + 0.1 * (i % 5), t_out=3.0, inputs={"A": 1.0})
+          for i in range(24 * 20)]
+    fit_room(hs)  # må ikke fejle
