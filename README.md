@@ -237,7 +237,7 @@ sources:
 
 Med `source: <varmekildens navn>` viser kortet kun den varmekilde: dens rum, plan, tidslinje og afvigelser. Så kan anlægget deles op i én visning pr. varmepumpe eller etage. En luft-luft-kilde tegnes med varmepumpen til venstre og rummene ved siden af.
 
-**Luft-luft med plantegning:** med `source` sat til en luft-luft-kilde og `floor` (samme format som én etage i plantegningskortet) tegnes etagen som heatmap med varmepumpen ovenpå. Luftpilene strømmer, mens den varmer (grå i pause, blå ved afrimning). Hvert rum viser temperatur, gulv (tryk for at rette) og forudsigelsen om 3 og 6 timer. Til venstre står varmepumpen med valgfrie `stats`, kWh el pr. time (24 timer tilbage farvet efter pris, planen 12 timer frem stiplet) og pr. døgn, og valgfrit `steps`: hvad hvert trin gør og dets lærte forbrug.
+**Luft-luft med plantegning:** med `source` sat til en luft-luft-kilde og `floor` (samme format som én etage i plantegningskortet) vises etagen som en »bento-plan«: rummene som kort placeret som på tegningen (rækker efter indhold, ikke cm). Hvert kort viser temperaturen, en kurve med de sidste 12 timer og forudsigelsen 6 timer frem (stiplet), gulvet (tryk for at rette) og retningen om 3 timer. Kortets farve glider fra blå (under gulvet) over grøn til rød (over loftet). Varmepumpen står som et mærke i sit rum og drejer, mens den varmer. På smal skærm bliver kortene til to kolonner. Til venstre står varmepumpen med valgfrie `stats`, kWh el pr. time (24 timer tilbage farvet efter pris, planen 12 timer frem stiplet) og pr. døgn, og valgfrit `steps`: hvad hvert trin gør og dets lærte forbrug.
 
 ```yaml
 type: custom:varmemodel-anlaeg-card

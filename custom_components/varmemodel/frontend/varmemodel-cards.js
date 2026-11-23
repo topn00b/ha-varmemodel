@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.8.7';
+  const VERSION = '0.8.8';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -218,6 +218,15 @@
     if (t <= cap - 0.5) return '#a8dbb5';
     if (t <= cap) return '#f6d98b';
     return '#ef9a8f';
+  };
+  // Glidende farve: blå under gulvet → grøn i komfort → rav ved loftet → rød over
+  const HCOL = (t, lo, hi) => {
+    if (t === null) return '#8a9198';
+    const fl = lo ?? 19.5, cap = hi ?? fl + 3;
+    const stops = [[fl - 1, 212], [fl, 200], [fl + 0.5, 150], [cap - 0.5, 140], [cap, 42], [cap + 1, 4]];
+    let hue = t <= stops[0][0] ? stops[0][1] : stops[stops.length - 1][1];
+    for (let i = 0; i < stops.length - 1; i++) { const [a, ha] = stops[i], [b, hb] = stops[i + 1]; if (t >= a && t <= b) { hue = ha + ((t - a) / (b - a || 1)) * (hb - ha); break; } }
+    return `hsl(${Math.round(hue)} 62% 52%)`;
   };
   const pts = (x) => (x.points || (x.rect ? [[x.rect[0], x.rect[1]], [x.rect[0] + x.rect[2], x.rect[1]], [x.rect[0] + x.rect[2], x.rect[1] + x.rect[3]], [x.rect[0], x.rect[1] + x.rect[3]]] : []));
   const mid = (p) => [p.reduce((a, q) => a + q[0], 0) / (p.length || 1), p.reduce((a, q) => a + q[1], 0) / (p.length || 1)];
@@ -593,6 +602,19 @@
   .tr.on{background:var(--primary-color);color:#fff}.tr.on .mut{color:#fff}.tn{font-weight:700;text-align:right}
   .tbar{height:8px;background:var(--divider-color);border-radius:4px;overflow:hidden}.tbar i{display:block;height:100%;background:${OR}}.tr.on .tbar i{background:#fff}
   .tw{white-space:nowrap;text-align:right}
+  .bento{display:grid;gap:8px}
+  .bt{position:relative;border-radius:12px;padding:10px 12px;background:color-mix(in srgb,var(--c) 16%,var(--card-background-color));border:1px solid color-mix(in srgb,var(--c) 45%,transparent);border-left:5px solid var(--c);min-height:118px;display:flex;flex-direction:column;gap:4px;min-width:0}
+  .bh{display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap}.bn{font-weight:600;cursor:pointer}
+  .bv{font-size:30px;font-weight:700;line-height:1.1;cursor:pointer;color:var(--primary-text-color)}
+  .sp{width:100%;height:44px;display:block}.spm{fill:none;stroke-width:2.2}.spc{fill:none;stroke-width:2.2;stroke-dasharray:4 3;opacity:.85}
+  .spf{stroke:var(--secondary-text-color);stroke-width:1;stroke-dasharray:2 3;opacity:.7}.spn{stroke:var(--divider-color);stroke-width:1}
+  .bf{display:flex;justify-content:space-between;gap:6px;font-size:12px;color:var(--secondary-text-color);margin-top:auto;flex-wrap:wrap}
+  .gl2{color:var(--primary-color);cursor:pointer;text-decoration:underline dotted}
+  .uchip{font-size:12px;font-weight:600;border-radius:12px;padding:2px 9px;background:#9aa0a6;color:#fff;cursor:pointer;white-space:nowrap}
+  .uchip.heat{background:${OR}}.uchip.defrost{background:${BL}}.fan{display:inline-block;margin-right:4px}
+  .fan.spin{animation:vmspin 1.6s linear infinite}@keyframes vmspin{to{transform:rotate(360deg)}}
+  .bleg{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.grad{width:120px;height:10px;border-radius:5px;background:linear-gradient(90deg,hsl(212 62% 52%),hsl(150 62% 52%),hsl(140 62% 52%),hsl(42 62% 52%),hsl(4 62% 52%))}
+  @container (max-width:640px){.bento{grid-template-columns:1fr 1fr !important}.bt{grid-column:auto !important;grid-row:auto !important}}
   :host{container-type:inline-size}`;
       this._ro = new ResizeObserver(() => { const w = this.clientWidth; if (w && (w < 700) !== this._tall) { this._tall = w < 700; this._draw(); } });
     }
@@ -604,6 +626,7 @@
       if (this._c.source) {
         const sources = vm.sources.filter((s) => s.name === this._c.source);
         if (!sources.length) return `<div class="mut">Varmekilden »${esc(this._c.source)}« findes ikke</div>`;
+        this._all = vm.sources;
         vm = { ...vm, sources, rooms: sources.flatMap((s) => s.rooms), plan: sources[0].plan };
       }
       const main = vm.sources.find((s) => s.kind === 'hydronic') || null;
@@ -956,6 +979,70 @@
       }
       return c ? c.d : null;
     }
+    // Rumtemperaturer de sidste 12 timer (til kurverne) – hentes højst hvert 10. minut
+    hist(h, eids) {
+      const key = eids.join(','); const c = this._hi && this._hi.key === key ? this._hi : null;
+      if (eids.length && !this._hiBusy && (!c || Date.now() - c.t > 600e3)) {
+        this._hiBusy = true;
+        h.callWS({ type: 'history/history_during_period', start_time: new Date(Date.now() - 12 * 3600e3).toISOString(), entity_ids: eids, minimal_response: true, no_attributes: true, significant_changes_only: false })
+          .then((r) => { const d = {}; for (const e of eids) d[e] = (r[e] || []).map((x) => [((x.lu ?? x.lc) || 0) * 1000, num(x.s)]).filter((x) => x[1] !== null); this._hi = { key, t: Date.now(), d }; })
+          .catch(() => { this._hi = { key, t: Date.now(), d: {} }; })
+          .finally(() => { this._hiBusy = false; this._draw(); });
+      }
+      return c ? c.d : {};
+    }
+    // Bento-plan: rummene som kort, placeret som på plantegningen (rækker efter indhold, ikke efter cm).
+    // Hvert kort: temperatur, kurve (12 t målt + forudsigelse stiplet), gulv og retning. Farven = afstand til gulv/loft.
+    bento(h, vm, f, k, o = {}) {
+      const named = (f.rooms || []).filter((rr) => !rr.room && vm.rooms.find((x) => x.name === rr.name));
+      const box = (rr) => { const p = pts(rr); const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; };
+      const bx = named.map(box);
+      const X = [...new Set(bx.flatMap((b) => [b[0], b[2]]))].sort((a, b) => a - b), Y = [...new Set(bx.flatMap((b) => [b[1], b[3]]))].sort((a, b) => a - b);
+      const cols = X.slice(1).map((x, i) => `${Math.max(1, x - X[i])}fr`).join(' ');
+      // varmepumpen hører til det rum, dens punkt ligger i (også en del af et rum)
+      const inside = (rr, x, y) => { const [a, b, c2, d] = box(rr); return x >= a && x <= c2 && y >= b && y <= d; };
+      const unitRoom = {};
+      for (const u of f.units || []) { if (!u.entity) continue; const hit = (f.rooms || []).find((rr) => inside(rr, u.x, u.y)); if (hit) unitRoom[hit.room || hit.name] = u; }
+      const ds = named.map((rr) => room(h, vm, vm.rooms.find((x) => x.name === rr.name)));
+      const hist = this.hist(h, ds.map((d) => d.tE).filter(Boolean));
+      const UT = { heat: 'varmer', idle: 'pause', defrost: 'afrimer', off: 'slukket' };
+      const tiles = named.map((rr, i) => {
+        const d = ds[i], a = d.a, b = bx[i];
+        const lo = num(a.gulv), hi = num(a.loft);
+        const t = k === 0 ? d.t : (d.fc && d.fc.length >= k ? d.fc[k - 1] : null);
+        const col = HCOL(t, lo, hi);
+        // kurve: målt 12 t + forudsigelse 6 t
+        const now = Date.now(), t0 = now - 12 * 3600e3, t1 = now + 6 * 3600e3;
+        const ms = (hist[d.tE] || []).filter((x) => x[0] >= t0);
+        const nowH = new Date(); nowH.setMinutes(0, 0, 0);
+        const fs = (d.fc || []).slice(0, 6).map((v, j) => [nowH.getTime() + (j + 1) * 3600e3, v]);
+        if (d.t !== null) fs.unshift([now, d.t]);
+        const all = [...ms, ...fs].map((x) => x[1]).concat(lo !== null ? [lo] : []);
+        let spark = '';
+        if (all.length > 1) {
+          const vmin = Math.min(...all) - 0.2, vmax = Math.max(...all) + 0.2, W = 200, HH = 44;
+          const px = (x) => ((x - t0) / (t1 - t0)) * W, py = (v) => HH - ((v - vmin) / (vmax - vmin)) * HH;
+          const line = (arr) => arr.map((x, j) => `${j ? 'L' : 'M'}${px(x[0]).toFixed(1)} ${py(x[1]).toFixed(1)}`).join(' ');
+          spark = `<svg class="sp" viewBox="0 0 ${W} ${HH}" preserveAspectRatio="none">`
+            + (lo !== null ? `<line x1="0" x2="${W}" y1="${py(lo).toFixed(1)}" y2="${py(lo).toFixed(1)}" class="spf"/>` : '')
+            + `<line x1="${px(now).toFixed(1)}" x2="${px(now).toFixed(1)}" y1="0" y2="${HH}" class="spn"/>`
+            + (ms.length > 1 ? `<path d="${line(ms)}" class="spm" style="stroke:${col}"/>` : '')
+            + (fs.length > 1 ? `<path d="${line(fs)}" class="spc" style="stroke:${col}"/>` : '') + '</svg>';
+        }
+        const gE = a.min_entitet || d.r.model; const gv = a.min_entitet ? sv(h, a.min_entitet) : lo;
+        const f3 = d.fc && d.fc.length > 2 ? d.fc[2] : null; const tr = f3 !== null && d.t !== null ? (f3 - d.t > 0.15 ? '↗' : f3 - d.t < -0.15 ? '↘' : '→') : '';
+        const u = unitRoom[rr.name]; const live = u && o.unitEntity === u.entity ? o.unit : null;
+        const chip = u ? `<span class="uchip ${live || ''}" data-e="${esc(u.entity)}"><span class="fan${live === 'heat' ? ' spin' : ''}">✻</span>${esc(o.unitName || u.name || '')} · ${UT[live] || '–'}</span>` : '';
+        const ci = X.indexOf(b[0]) + 1, ce = X.indexOf(b[2]) + 1, ri = Y.indexOf(b[1]) + 1, re = Y.indexOf(b[3]) + 1;
+        return `<div class="bt" style="grid-column:${ci}/${ce};grid-row:${ri}/${re};--c:${col}">`
+          + `<div class="bh"><span class="bn" data-e="${esc(d.tE || d.r.model)}">${esc(rr.label || rr.name)}</span>${chip}</div>`
+          + `<div class="bv" data-e="${esc(d.tE || d.r.model)}">${t === null ? '–' : `${k === 0 && d.est ? '≈' : ''}${fmt(t)}°`}${k ? `<span class="mut sm"> om ${k} t</span>` : ''}</div>`
+          + spark
+          + `<div class="bf">${a.i_plan !== false && gv !== null ? `<span class="gl2" data-e="${esc(gE)}">gulv ${fmt(gv)} ✎</span>` : '<span></span>'}`
+          + `${f3 !== null ? `<span>${tr} ${fmt(f3)}° om 3 t</span>` : ''}</div></div>`;
+      }).join('');
+      return `<div class="bento" style="grid-template-columns:${cols}">${tiles}</div>`;
+    }
     // Luft-luft på sin etage: varmepumpen, kWh el over tid og trinene til venstre – etagen som heatmap til højre
     airView(h, vm, s) {
       const c = this._c, sc = this.sc(s.name), k = this._k || 0;
@@ -977,7 +1064,9 @@
       L += '</div>';
       // kWh el over tid: sidste 24 timer (farvet efter pris) og planen de næste 12 timer, dagene under
       const eid = sensorsOf(h, s).electricity_energy; const rows = this.kwh(h, eid);
-      const P = {}; for (const x of pa.history || []) P[Date.parse(x.t)] = x; for (const x of pa.plan || []) P[Date.parse(x.t)] = { ...P[Date.parse(x.t)], ...x };
+      const P = {};
+      for (const o of this._all || []) { const oa = at(h, o.plan); for (const x of [...(oa.history || []), ...(oa.plan || [])]) P[Date.parse(x.t)] = { price: x.price, blocked: x.blocked }; }
+      for (const x of pa.history || []) P[Date.parse(x.t)] = { ...P[Date.parse(x.t)], ...x }; for (const x of pa.plan || []) P[Date.parse(x.t)] = { ...P[Date.parse(x.t)], ...x };
       const prs = Object.values(P).map((x) => x.price).filter((x) => x != null).sort((a, b) => a - b);
       const q1 = prs[Math.floor(prs.length / 3)], q2 = prs[Math.floor((2 * prs.length) / 3)];
       const pc = (x) => (!x ? '#9aa0a6' : x.blocked ? RE : x.price <= q1 ? GR : x.price <= q2 ? YE : OR);
@@ -1018,8 +1107,8 @@
         L += `<div class="b"><div class="pvh">${esc(sp.title || 'Trin')}<span class="mut sm"> · nu ${cur !== null ? fmt(cur, 0) : '–'} · lært forbrug</span></div><div class="trs" data-e="${esc(sp.learned || sp.entity)}">${tr}</div></div>`;
       }
       const R = `<div class="sm" style="margin-bottom:6px">${(c.hours || [0, 3, 6, 12]).map((x) => `<span class="pill${x === k ? ' on' : ''}" data-k="${x}">${x === 0 ? 'nu' : `om ${x} t`}</span>`).join(' ')}</div>`
-        + floorSvg(h, vm, c.floor, k, { detail: true, unit, unitEntity: sc.climate })
-        + `<div class="sm mut" style="margin-top:6px">${PLEG} · rød prik = føler · ✎ ret gulvet</div>`;
+        + this.bento(h, vm, c.floor, k, { unit, unitEntity: sc.climate, unitName: s.name })
+        + `<div class="sm mut bleg" style="margin-top:8px"><span class="grad"></span><span>under gulvet</span><span>godt</span><span>loftet</span> · kurve: 12 t målt, stiplet = forudsigelse · ✎ ret gulvet</div>`;
       return `<div class="pv"><div class="pvl">${L}</div><div class="pvr">${R}</div></div>`;
     }
     airPlan(h, s) {

@@ -1260,6 +1260,13 @@ class VarmemodelCoordinator:
             if s2.kind != SOURCE_HYDRONIC:
                 air_plans[s2.sid] = await self._air_plan(s2, hours, now, h0)
                 plans[s2.sid] = air_plans[s2.sid]["plan"]
+                # Log som for vandbårne kilder: timens plan, pris og blokering (kortets tidslinje og kWh-søjler)
+                ah = plans[s2.sid]["hours"]
+                alog = self.plan_log.setdefault(s2.sid, {})
+                if ah and ah[0]["ts"] == h0 and str(h0) not in alog:
+                    alog[str(h0)] = {"p": ah[0]["heat_kw"], "e": ah[0]["heat_kw"], "pr": ah[0]["price"], "b": ah[0]["blocked"]}
+                for k in [k for k in alog if int(k) < h0 - 3 * 86400]:
+                    del alog[k]
         for sid, s in self.sources.items():
             if s.kind != SOURCE_HYDRONIC:
                 continue
