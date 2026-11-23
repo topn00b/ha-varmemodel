@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.8.6';
+  const VERSION = '0.8.7';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -567,6 +567,8 @@
   svg.an .rn{font-size:17px;font-weight:600}svg.an .rt{font-size:21px;font-weight:700}
   svg.an .vt{fill:var(--secondary-text-color);font-size:13px}
   svg.an .gulv{fill:var(--primary-color);cursor:pointer;text-decoration:underline dotted}
+  svg.an .act{cursor:pointer}svg.an .act rect{fill:var(--card-background-color);stroke:var(--primary-color);stroke-width:2}
+  svg.an .act text{font-size:14px;font-weight:600}svg.an .act.on rect{fill:${OR};stroke:${OR}}svg.an .act.on text{fill:#fff}
   svg.an .flg{fill:${RE};font-weight:800;font-size:19px}
   `;
   const TX = (x, y, s, cls = '', ex = '') => `<text x="${x}" y="${y}" class="${cls}"${ex}>${esc(s)}</text>`;
@@ -654,7 +656,9 @@
       const zone = `<div class="b zb" style="background:${bg};border-color:${bg}"><div class="z">${z ? `${ico} ${esc(z.toUpperCase())} · ` : ''}${fmt(price, 2)} kr/kWh el</div>`
         + `<div class="sub">Plan: ${esc(plan)}${c.dry_run ? ' (styrer ikke endnu)' : ''}${flags.length ? ' · ' + esc(flags.join(' · ')) : ''}</div></div>`;
       const notes = (c.notes || []).map((n) => { const v = n.attribute ? at(h, n.entity)[n.attribute] : (st(h, n.entity) || {}).state; return v ? `<div>${esc(v)}</div>` : ''; }).join('');
-      const acts = (c.actions || []).map((a) => {
+      // Bred skærm med vandbåren kilde: knapperne står i diagrammets øverste række (se wideSvg)
+      const svgActs = !!main && !(this._tall ?? ((this.clientWidth || 1000) < 700));
+      const acts = svgActs ? '' : (c.actions || []).map((a) => {
         const s = st(h, a.entity); const on = !!s && s.state === 'on';
         return `<button class="${on ? 'on' : ''}" data-act="${esc(a.entity)}">${esc(a.name || a.entity)}${on ? ' · siden ' + new Date(s.last_changed).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' }) : ''}</button>`;
       }).join('');
@@ -761,6 +765,7 @@
       else s0 = (D.compOn ? 'varmer' : 'pause');
       p.status = [s0, cfg.climate || f.compressor, { bg }];
       p.plan = `plan: ${PS[D.pst] || D.pst}${D.pst === 'heat' && pa.flow != null ? ` · fremløb ${fmt(pa.flow, 1)} °C` : ''}`;
+      p.ind = [`ind ${fmt(D.ret)} °C`, f.return_temp];
       p.ud = [`ud ${fmt(D.flow)} °C${D.pst === 'heat' && pa.flow != null ? ' · mål ' + fmt(pa.flow) : ''}`, f.flow_temp];
       p.ind = [`ind ${fmt(D.ret)} °C`, f.return_temp];
       p.cop = [D.steady ? `${fmt(D.hpk)} kW · COP ${fmt(D.live)} / ${fmt(D.exp)}` : `${fmt(D.hpk)} kW · COP –`, cfg.heat_power || f.heat_energy, { bg: D.lowMin >= 30 ? YE : null }];
@@ -851,11 +856,25 @@
         const sc = this.sc(main.name);
         g += BOX(20, 140, 260, 420, main.name, sc.model || 'varmepumpe');
         g += P(150, 211, 236, p.status, 30) + TX(150, 241, p.plan, 'm c', D.differs ? ` style="fill:${YE};font-weight:700"` : '');
-        g += P(150, 260, 236, p.ud) + P(150, 345, 236, p.cop) + P(150, 430, 236, p.flow);
+        // ud ud for fremløbet (y 260), ind ud for returen (y 470)
+        g += P(150, 260, 236, p.ud) + P(150, 330, 236, p.cop) + P(150, 400, 236, p.flow) + P(150, 470, 236, p.ind);
         // Øverste række ved siden af »Ude«: varmt vand og energi i dag (jævner skærmen ud på bred skærm)
         if (D.f.dhw || p.tank) {
           g += BOX(300, 20, 260, 116, 'Varmt vand') + TX(370, 64, 'beholder', 'm c') + TX(495, 64, 'laver nu', 'm c');
           g += (p.tank ? P(370, 92, 110, p.tank) : TX(370, 98, '–', 'c')) + P(495, 92, 130, p.vv) + PATH('M430 136 V160 H284', D.dhw ? 'hot' : 'idle', true);
+        }
+        // Knapperne i samme række (slår til/fra)
+        const acts = c.actions || [];
+        if (acts.length) {
+          g += BOX(900, 20, 590, 116, 'Knapper');
+          const n = Math.min(acts.length, 3), bw = (550 - (n - 1) * 12) / n;
+          acts.slice(0, 6).forEach((a, i) => {
+            const s0 = st(h, a.entity); const on = !!s0 && s0.state === 'on';
+            const x = 920 + (i % 3) * (bw + 12), y = 46 + Math.floor(i / 3) * 46;
+            const lbl = (a.name || a.entity) + (on ? ' · ' + new Date(s0.last_changed).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' }) : '');
+            g += `<g class="act${on ? ' on' : ''}" data-act="${esc(a.entity)}"><rect x="${x}" y="${y + (acts.length > 3 ? -6 : 10)}" width="${bw}" height="38" rx="8"/>`
+              + TX(x + bw / 2, y + (acts.length > 3 ? 18 : 34), lbl, 'c') + '</g>';
+          });
         }
         g += BOX(580, 20, 300, 116, 'Energi i dag') + TX(636, 64, 'kWh varme', 'm c') + TX(730, 64, 'kWh el', 'm c') + TX(824, 64, 'COP', 'm c');
         g += P(636, 88, 88, p.vdag, 28) + P(730, 88, 88, p.edag, 28) + P(824, 88, 80, p.copd, 28) + TX(730, 124, p.igaar, 'm c');
@@ -1025,7 +1044,7 @@
         if (vv) g += BOX(265, 10, 245, 100, 'Varmt vand') + TX(327, 56, 'beholder', 'm c') + TX(447, 56, 'laver nu', 'm c') + (p.tank ? P(327, 84, 105, p.tank) : '') + P(447, 84, 110, p.vv);
         g += BOX(10, 125, 500, 235, `${main.name} · ${sc.model || 'varmepumpe'}`);
         g += P(135, 180, 230, p.status) + TX(135, 212, p.plan, 'm c', D.differs ? ` style="fill:${YE};font-weight:700"` : '');
-        g += P(385, 180, 230, p.ud) + P(135, 250, 230, p.cop) + P(385, 250, 230, p.flow);
+        g += P(385, 180, 230, p.ud) + P(135, 250, 230, p.cop) + P(385, 250, 230, p.flow) + P(385, 320, 230, p.ind);
         const bp = !!c.bypass, bf = !!c.buffer;
         g += PATH('M440 360 V776', 'hot', true) + PATH('M80 780 V364', 'cold', true);
         if (bp) {
