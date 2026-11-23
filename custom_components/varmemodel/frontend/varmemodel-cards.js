@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.9.1';
+  const VERSION = '0.9.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -254,7 +254,7 @@
 
   // Indstillinger for en Varmemodel-enhed som rigtige kontroller (dropdown, tal, tid, kontakt), grupperet
   const SET_GROUPS = [
-    ['Styring', ['air_control']],
+    ['Styring', ['air_control', 'air_boost']],
     ['Støj: maks. blæser', ['air_fan_day', 'air_fan_night', 'air_night_start', 'air_night_end']],
     ['Lameller', ['air_swing_v', 'air_swing_h']],
   ];

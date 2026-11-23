@@ -119,4 +119,5 @@ AIR_NUMBERS: tuple = ()  # 0.9.1: setpunkter og margener flyder (regnes af model
 AIR_SELECTS = ("air_fan_day", "air_fan_night", "air_swing_v", "air_swing_h")
 AIR_TIMES = (("air_night_start", "22:00"), ("air_night_end", "07:00"))
 AIR_SWITCH = "air_control"
+AIR_BOOST = "air_boost"  # »jeg fryser« for luft-luft: øverste trin (powerful), også i blokerede timer, i højst »jeg fryser gælder højst« timer
 UNCHANGED = "uændret"

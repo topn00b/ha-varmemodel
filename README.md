@@ -243,6 +243,7 @@ Med `source: <varmekildens navn>` viser kortet kun den varmekilde: dens rum, pla
 
 | Entitet | Hvad |
 |---|---|
+| *Jeg fryser* (kontakt) | øverste trin (powerful, hvis varmepumpen har det) – også i blokerede timer – i højst »Jeg fryser gælder højst« timer; slår selv fra |
 | *Varmemodel styrer* (kontakt) | fra = kun anbefaling (standard). Til = Varmemodel skriver tænd/sluk, blæser og setpunkt til klimaentiteten (højst 60 skrivninger pr. døgn). Slå egne automationer for varmepumpen fra først. |
 | *Maks. blæser dag / nat* (valg) | hvor meget den må larme – hastighederne læses fra klimaentiteten |
 | *Nat begynder / slutter* (tid) | standard 22:00–07:00 |

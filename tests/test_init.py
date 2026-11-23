@@ -626,7 +626,15 @@ async def test_air_ladder_shadow_and_control(ha: HomeAssistant) -> None:
     sel = {s.entity_id: s for s in ha.states.async_all("select")}
     day = next(s for k, s in sel.items() if k.endswith("max_fan_day"))
     assert day.state == "High" and day.attributes["options"] == ["Low", "Mid", "High"]
-    sw = next(s for s in ha.states.async_all("switch"))
+    sw = next(s for s in ha.states.async_all("switch") if s.entity_id.endswith("controls"))
     await ha.services.async_call("switch", "turn_on", {"entity_id": sw.entity_id}, blocking=True)
     await ha.async_block_till_done()
     assert ("hvac", "heat") in calls and ("preset", "quiet") in calls
+    # »Jeg fryser«: øverste trin med powerful – også selvom planen ikke varmer
+    ha.states.async_set("climate.ll", "heat", {"fan_modes": ["Auto", "Low", "Mid", "High"], "preset_modes": ["none", "quiet", "powerful"],
+                                                "swing_modes": ["Auto", "Up"], "temperature": 20, "fan_mode": "Low", "preset_mode": "quiet"})
+    calls.clear()
+    boost = next(s for s in ha.states.async_all("switch") if "cold" in s.entity_id)
+    await ha.services.async_call("switch", "turn_on", {"entity_id": boost.entity_id}, blocking=True)
+    await ha.async_block_till_done()
+    assert ("preset", "powerful") in calls and any(k == "sp" for k, _ in calls)

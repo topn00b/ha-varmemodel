@@ -238,6 +238,9 @@
     "switch": {
       "air_control": {
         "name": "Varmemodel controls"
+      },
+      "air_boost": {
+        "name": "I'm cold"
       }
     },
     "time": {

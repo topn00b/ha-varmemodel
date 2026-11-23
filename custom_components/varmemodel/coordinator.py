@@ -57,6 +57,7 @@ from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
 from .planner import FLOW_LOW_OPEN_S, PlanHour, PlanRoom, SourceModel, estimate_room, flow_boost_step, make_air_plan, make_plan, simulate_rooms
 from .const import (
     AIR_NUMBERS,
+    AIR_BOOST,
     AIR_SWITCH,
     AIR_TIMES,
     CONF_CLIMATE,
@@ -1172,6 +1173,11 @@ class VarmemodelCoordinator:
             return fans[-2] if len(fans) > 1 else fans[-1]
         return UNCHANGED
 
+    def air_boost_active(self, s: SourceState) -> bool:
+        """»Jeg fryser« for kilden: slået til for under »jeg fryser gælder højst« timer siden."""
+        since = float(self.settings.get(f"{s.sid}.{AIR_BOOST}") or 0)
+        return since > 0 and time.time() - since < self.setting(CONF_BOOST_HOURS) * 3600
+
     async def async_set_air(self, s: SourceState, key: str, value: Any) -> None:
         self.settings[f"{s.sid}.{key}"] = value
         await self._save()
@@ -1209,7 +1215,10 @@ class VarmemodelCoordinator:
         w_l = a.get("w", {})
         el_now = p.hours[0].get("el_kw") if p.hours else None
         tgt = target_step([w_l.get(label(x)) for x in ladder], el_now * 1000 if el_now else None)
-        if on and not blocked:
+        boost = self.air_boost_active(s)
+        if boost:
+            i, changed, down_since, reason = len(ladder) - 1, now, None, "jeg fryser – øverste trin"
+        elif on and not blocked:
             start = idx_of.get(starts.get(b)) if b else None
             if start is None:
                 start = tgt
@@ -1219,8 +1228,8 @@ class VarmemodelCoordinator:
         else:
             i, changed, down_since = a.get("step"), float(a.get("changed", 0.0)), None
             reason = "blokeret – slukket" if blocked else "planen varmer ikke nu"
-        a.update(on=bool(on and not blocked), step=i, changed=changed, down_since=down_since)
-        if a["on"] and i is not None and margins and min(margins.values()) >= 0 and not pre and b and now - changed >= LEARN_HOLD:
+        a.update(on=bool((on and not blocked) or boost), step=i, changed=changed, down_since=down_since)
+        if a["on"] and not boost and i is not None and margins and min(margins.values()) >= 0 and not pre and b and now - changed >= LEARN_HOLD:
             starts[b] = label(ladder[min(i, len(ladder) - 1)])
         # Det trin, der faktisk kører nu (matches på blæser og setpunkt), og forbruget pr. trin ud fra elmåleren
         act = None
@@ -1251,6 +1260,10 @@ class VarmemodelCoordinator:
         out: dict[str, Any] = {"step": i}
         if a["on"] and cur is not None:
             out.update(setpoint=cur.setpoint, fan_mode=cur.fan, preset=cur.preset)
+        if boost:
+            presets = attrs.get("preset_modes") or []
+            out.update(on=True, preset="powerful" if "powerful" in presets else out.get("preset"))
+        a["view"]["jeg_fryser"] = boost
         return out
 
     async def _air_apply(self, s: SourceState, clim: str, d: dict[str, Any]) -> None:
