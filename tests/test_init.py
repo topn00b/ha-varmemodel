@@ -879,3 +879,19 @@ def test_calm_ladder_drops_untested_high_step() -> None:
 
     src = inspect.getsource(co.VarmemodelCoordinator._air_step)
     assert "prøver trin" in src and "soft_tested" in src
+
+
+async def test_low_cap_order(ha: HomeAssistant) -> None:
+    """Planens fremløb under »søg laveste«: målet nu → lært for udetemperaturen → sidste mål → retur + 3."""
+    c, s = await _lv_entry(ha)
+    hs: dict = {}
+    assert c._low_cap(s, hs, 1.0) == 24.0  # retur 21,5 + 3 → 24 (afrundet)
+    hs["low_last"] = 27.0
+    assert c._low_cap(s, hs, 1.0) == 27.0
+    hs["low_learned"] = {"0": 26.0}
+    assert c._low_cap(s, hs, 1.0) == 26.0
+    hs["low"] = 29.0
+    assert c._low_cap(s, hs, 1.0) == 29.0
+    from custom_components.varmemodel.coordinator import _dk_txt
+
+    assert _dk_txt("Gang +0.2 °C, -0.08 °C/t, om 3 t -0.0") == "Gang +0,2 °C, −0,08 °C/t, om 3 t ±0,0"

@@ -209,15 +209,15 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
               red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None, comfort: float = 0.0,
-              economy: float = 0.0) -> Plan:
+              economy: float = 0.0, flow_raise_max: int = FLOW_BOOST_MAX) -> Plan:
     """Planen. Forudsiger modellen, at et rum kommer under planens grænse, fordi fremløbsgrænsen holder varmen
     nede, hæves grænsen 1 °C ad gangen (højst ``FLOW_BOOST_MAX``) til rummene holder – i god tid, da gulvet er langsomt."""
     args = (hours, model, rooms, target, max_pause, past_q, label, boost, boost_hours, red_allowance, preload, comfort, economy)
     base = _plan_once(*args, flow_margin)
-    if flow_margin is None or base.deficit <= 0.05:
+    if flow_margin is None or base.deficit <= 0.05 or flow_raise_max <= 0:
         return base
     best = base
-    for k in range(1, FLOW_BOOST_MAX + 1):
+    for k in range(1, flow_raise_max + 1):
         p = _plan_once(*args, flow_margin + k)
         # Kun hvis det hjælper mærkbart: mindst 0,1 °C mindre manko pr. grad hævet (ellers kan fremløbet ikke rette det)
         if p.deficit < best.deficit and base.deficit - p.deficit >= 0.1 * k:

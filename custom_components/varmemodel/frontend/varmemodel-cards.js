@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.15.3';
+  const VERSION = '0.16.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -657,6 +657,7 @@
   .tg2{font:inherit;font-size:13px;font-weight:600;border-radius:12px;padding:3px 14px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer}
   .tg2.on{background:${OR};border-color:${OR};color:#fff}
   .ax{font-size:11px;fill:var(--secondary-text-color,#999)}
+  .fsr{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.fsc{border:1px solid var(--divider-color);border-radius:8px;padding:4px 8px}.fsv{font-size:18px;font-weight:600}
   .pv2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:8px;margin-top:10px;align-items:start}
   .bento{display:grid;gap:8px}
   .bt{position:relative;border-radius:12px;padding:10px 12px;background:color-mix(in srgb,var(--c) 16%,var(--card-background-color));border:1px solid color-mix(in srgb,var(--c) 45%,transparent);border-left:5px solid var(--c);min-height:118px;display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -689,6 +690,7 @@
       const air = vm.sources.filter((s) => s.kind !== 'hydronic');
       const D = this.data(h, vm, main);
       if (!main && air.length === 1) return this.band(h, vm, main, D) + this.airView(h, vm, air[0]);
+      this._fs = main ? at(h, main.e('command')).flow_search || null : null;
       return this.band(h, vm, main, D) + this.svg(h, vm, main, air, D) + this.flowPanel(h, main);
     }
     data(h, vm, main) {
@@ -843,14 +845,18 @@
       else if (D.dhw) s0 = 'varmt vand';
       else s0 = (D.compOn ? 'varmer' : 'pause');
       p.status = [s0, cfg.climate || f.compressor, { bg }];
-      p.plan = `plan: ${PS[D.pst] || D.pst}${D.pst === 'heat' && pa.flow != null ? ` · fremløb ${fmt(pa.flow, 1)} °C` : ''}`;
+      const fsq = at(h, main.e('command')).flow_search;
+      p.plan = fsq ? (fsq.slukket ? (fsq.næste_start ? `starter kl. ${fsq.næste_start} ved ca. ${fmt(fsq.mål, 0)} °C` : `starter ved ca. ${fmt(fsq.mål, 0)} °C, når planen varmer`)
+        : `søger laveste · mål ${fmt(fsq.mål, 0)} °C · loft ${fmt(fsq.loft, 0)} °C`)
+        : `plan: ${PS[D.pst] || D.pst}${D.pst === 'heat' && pa.flow != null ? ` · fremløb ${fmt(pa.flow, 1)} °C` : ''}`;
       p.ind = [`ind ${fmt(D.ret)} °C`, f.return_temp];
       // Målet, der faktisk står i varmepumpen (fremløbsmålet), ikke planens – under blød start: »mål 26 → 35«
       const tgE = f.flow_target, tg = tgE ? (tgE.startsWith('climate.') ? at(h, tgE).temperature : sv(h, tgE)) : null;
       const soft = at(h, main.e('command')).soft_start_flow;
       const running = !(D.clim && D.clim.state === 'off');
       const fsx = at(h, main.e('command')).flow_search;
-      const mål = tg != null && running ? (fsx && fsx.aktiv ? `${fmt(tg, 0)} (søger lavest)` : soft != null && pa.flow != null ? `${fmt(tg, 0)} → ${fmt(pa.flow, 0)}` : fmt(tg, 0))
+      const mål = fsx && tg != null ? fmt(tg, 0)
+        : tg != null && running ? (soft != null && pa.flow != null ? `${fmt(tg, 0)} → ${fmt(pa.flow, 0)}` : fmt(tg, 0))
         : (D.pst === 'heat' && pa.flow != null ? fmt(pa.flow) : null);
       p.ud = [`ud ${fmt(D.flow)} °C${mål != null ? ' · mål ' + mål : ''}`, tgE || f.flow_temp];
       p.cop = [D.steady ? `${fmt(D.hpk)} kW · COP ${fmt(D.live)} / ${fmt(D.exp)}` : `${fmt(D.hpk)} kW · COP –`, cfg.heat_power || f.heat_energy, { bg: D.lowMin >= 30 ? YE : null }];
@@ -887,6 +893,10 @@
       const nameEx = ` data-e="${esc(d.r.model)}"`;
       const sub1 = d.passive ? (() => { const pl = pulls(h, vm, d.r, d.t); return pl && Math.abs(pl.eff) >= 0.005 ? `${pl.eff >= 0 ? 'varmer' : 'køler'} ${pl.name} ${fmt(Math.abs(pl.eff), 2)} °C/t` : 'opvarmes passivt'; })()
         : d.valve ? (d.valve === 'altid åben' ? 'altid åben' : d.vs === 'on' ? 'telestat åben' : d.vs === 'off' ? 'telestat lukket' : '') : '';
+      // Søg laveste fremløb: rummets målte tendens (pil) og ◆ ved rummet, der bestemmer fremløbet
+      const fr = this._fs && (this._fs.rum || []).find((x) => x.navn === d.r.name);
+      const arrow = fr ? ` · ${fr.tendens >= 0.05 ? '↗' : fr.tendens <= -0.05 ? '↘' : '→'} ${fr.tendens >= 0 ? '+' : ''}${fmt(fr.tendens, 2)}/t` : '';
+      const bindsFlow = !!(this._fs && this._fs.bestemmer === d.r.name);
       const sub2 = d.chk ? `ventet ${fmt(d.chk.ventet)} · ${statusTxt(d)}` : 'ingen forudsigelse endnu';
       const fc = d.f3 !== null ? [`om 3 t ${fmt(d.f3)}`, `om 6 t ${fmt(d.f6)}`] : [];
       // Gulvet (rummets mindste temperatur) – klik åbner hjælperen, så det kan justeres
@@ -896,7 +906,8 @@
         const two = !!sub1;
         g += TX(x + 22, y + (two ? 20 : 24), d.r.name, 'rn', nameEx);
         if (flag) g += TX(x + 30 + d.r.name.length * 9.5, y + (two ? 20 : 24), '!', 'flg', nameEx);
-        if (sub1) g += TX(x + 22, y + 37, sub1, 'vt');
+        if (bindsFlow) g += `<text x="${x + 30 + d.r.name.length * 9.5 + (flag ? 10 : 0)}" y="${y + (two ? 20 : 24)}" fill="${OR}" font-size="14"><title>Bestemmer fremløbet (tættest på gulvet)</title>◆</text>`;
+        if (sub1) g += TX(x + 22, y + 37, sub1 + arrow, 'vt');
         g += TX(x + 22, y + (two ? 51 : 41), sub2, 'vt', col ? ` style="fill:${col}"` : '');
         g += TX(x + 215, y + ht / 2 + 8, tTxt(d), 'rt c', ` data-e="${esc(d.tE)}"${d.est ? ` style="fill:${YE}"` : col ? ` style="fill:${col}"` : ''}`);
         g += G(x + 215, y + ht - 5, 'vt c');
@@ -1207,7 +1218,7 @@
             + `<span class="tbar"><i style="width:${w !== null ? Math.round((100 * w) / wmx) : 0}%"></i></span><span class="tw">${w !== null ? `${fmt(w, 0)} W · ${fmt(w / 1000, 2)} kWh el/t` : '<span class="mut">ikke lært</span>'}${num(x.grader_pr_kwh_el) !== null && eb > 0 ? ` · <b title="rummenes varme pr. kWh el i forhold til det bedste trin">${fmt((100 * x.grader_pr_kwh_el) / eb, 0)} %</b>` : ''}</span></div>`;
         }
         S += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, maks. blæser ${esc(asa.maks_blæser || '–')} · nu trin ${cur ?? '–'}${asa.el_mål_w ? ` · planens el-mål ${fmt(asa.el_mål_w, 0)} W${asa.mål_trin != null ? ` (trin ${asa.mål_trin})` : ' (lærer stadig trinene)'}` : ''}${asa.kører_nu ? ` · kører ${esc(asa.kører_nu)}` : ''}</span></div>`
-          + `<div class="sm" style="margin-bottom:4px">${asa.ventilation ? `Ventilation ${esc(asa.ventilation)}${asa.ventilation_virkning_pct != null ? ` · med ventilation ${asa.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(asa.ventilation_virkning_pct, 0)} % varme pr. kWh el` : ' · effekten læres'} · ` : ''}${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div><div class="sm mut" style="margin-top:4px">% = varme i rummene pr. kWh el i forhold til det bedste trin (lært af rumfølerne, efter afkøling og opdrift fra stueplanen). Stigen vælger det trin, der dækker planens varme for mindst el.</div></div>`;
+          + `<div class="sm" style="margin-bottom:4px">${asa.ventilation ? `Ventilation ${esc(asa.ventilation)}${asa.ventilation_virkning_pct != null ? ` · med ventilation ${asa.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(asa.ventilation_virkning_pct, 0)} % varme pr. kWh el` : ' · effekten læres'} · ` : ''}${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div><div class="sm mut" style="margin-top:4px"><b style="color:var(--info-color,#3b82c4)">Fyldt blå</b> = trinnet nu · <b>stiplet ramme</b> = planens mål-trin · <span style="color:#f2711c">orange bjælke</span> = lært forbrug (W). % = varme i rummene pr. kWh el i forhold til det bedste trin (lært af rumfølerne, efter afkøling og opdrift fra stueplanen). Stigen vælger det trin, der dækker planens varme for mindst el; med rolig opstart prøves et trin i 30 min., og der skrues kun op, når det kolde rum ikke stiger 0,2 °C/t.</div></div>`;
       }
       L += settingsPanel(h, s);
       const R = `<div class="sm" style="margin-bottom:6px">${(c.hours || [0, 3, 6, 12]).map((x) => `<span class="pill${x === k ? ' on' : ''}" data-k="${x}">${x === 0 ? 'nu' : `om ${x} t`}</span>`).join(' ')}</div>`
@@ -1216,50 +1227,82 @@
       // Venstre: varmepumpen, ventilationen og indstillingerne. Højre: etagen og under den kWh og stigen side om side
       return `<div class="pv"><div class="pvl">${L}</div><div class="pvr">${R}<div class="pv2">${K}${S}</div></div></div>`;
     }
-    // Søg laveste fremløb: målet nu mod planen, hvorfor, rummenes margen og tendens, lært pr. udetemperatur og 24 t-graf
+    // Historik til fremløbsgrafen (12 t): målt fremløb og retur, kompressoren og målet i varmepumpen – hentes højst hvert 5. min.
+    flowHist(h, main, f) {
+      const key = main.id, now = Date.now(); this._fhc = this._fhc || {};
+      const c = this._fhc[key];
+      if ((!c || now - c.t > 300000) && !(c && c.loading)) {
+        const ids = [f.flow_temp, f.return_temp, f.compressor, f.flow_target].filter(Boolean);
+        this._fhc[key] = { ...(c || {}), t: c ? c.t : 0, loading: true };
+        if (ids.length && h.callWS) h.callWS({ type: 'history/history_during_period', start_time: new Date(now - 12 * 3600000).toISOString(),
+          entity_ids: ids, minimal_response: false, no_attributes: false, significant_changes_only: false })
+          .then((r) => { this._fhc[key] = { t: Date.now(), data: r || {}, loading: false }; if (this._draw) this._draw(); })
+          .catch(() => { this._fhc[key] = { t: Date.now(), data: {}, loading: false }; });
+      }
+      return (this._fhc[key] || {}).data || {};
+    }
+    // Graf 12 t tilbage og 12 t frem: målt fremløb (ud) og retur (ind), målet som trappe, planens timer frem, loftet,
+    // kompressor i drift (bjælke forneden) og blokerede timer (rød baggrund)
+    flowChart(h, main, fs, f) {
+      const hist = this.flowHist(h, main, f);
+      const now = Date.now(), t0 = now - 12 * 3600000, t1 = now + 12 * 3600000;
+      const ser = (eid, attr) => (hist[eid] || []).map((x) => ({ t: (x.lu ?? x.lc ?? 0) * 1000, v: attr ? num((x.a || {})[attr]) : num(x.s), s: x.s }));
+      const ud = ser(f.flow_temp).filter((x) => x.v !== null), ind = ser(f.return_temp).filter((x) => x.v !== null);
+      const tg = f.flow_target ? ser(f.flow_target, 'temperature').filter((x) => x.v !== null) : [];
+      const comp = ser(f.compressor);
+      const pa = at(h, main.plan); const fut = (pa.plan || []).map((x) => ({ t: Date.parse(x.t), v: x.heat_kw > 0 ? num(x.flow) : null, b: !!x.blocked }));
+      const past = (pa.history || []).map((x) => ({ t: Date.parse(x.t), b: !!x.blocked }));
+      const vals = [...ud, ...ind, ...tg].map((x) => x.v).concat(fut.map((x) => x.v), [fs.loft, fs.mål]).filter((x) => x !== null && x !== undefined);
+      const lo = Math.floor(Math.min(20, ...vals) / 2) * 2, hi = Math.ceil(Math.max(34, ...vals) / 2) * 2;
+      const W = 640, H = 190, L = 30, R = 10, T = 8, B = 30;
+      const X = (t) => L + ((Math.min(Math.max(t, t0), t1) - t0) / (t1 - t0)) * (W - L - R), Y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+      const hhmm = (t) => { const d = new Date(t); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+      let g = '';
+      // Blokerede timer (rød), fortid og fremtid
+      for (const x of [...past, ...fut]) if (x.b && x.t + 3600000 > t0 && x.t < t1) g += `<rect x="${X(x.t)}" y="${T}" width="${Math.max(0, X(x.t + 3600000) - X(x.t))}" height="${H - T - B}" fill="#d6453d" opacity="0.12"/>`;
+      for (let v = lo; v <= hi; v += 2) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--divider-color,#888)" stroke-width="0.5"/>` + (v % 4 === 0 ? `<text x="${L - 4}" y="${Y(v) + 4}" text-anchor="end" class="ax">${v}</text>` : '');
+      const h0 = Math.ceil(t0 / 3600000) * 3600000;
+      for (let t = h0; t <= t1; t += 3 * 3600000) g += `<line x1="${X(t)}" x2="${X(t)}" y1="${T}" y2="${H - B}" stroke="var(--divider-color,#888)" stroke-width="0.3"/><text x="${X(t)}" y="${H - 8}" text-anchor="middle" class="ax">${hhmm(t)}</text>`;
+      // Kompressor i drift: bjælke forneden
+      let on = null;
+      for (const x of [...comp, { t: now, s: 'end' }]) { if (on !== null && x.t > on) { g += `<rect x="${X(on)}" y="${H - B + 2}" width="${Math.max(1, X(x.t) - X(on))}" height="5" fill="${OR}" opacity="0.8"/>`; } on = x.s === 'on' ? Math.max(x.t, t0) : null; }
+      const line = (pts, col, w, dash) => { const p2 = pts.filter((x) => x.t >= t0 - 3600000); if (p2.length < 1) return ''; return `<polyline points="${p2.map((x) => `${X(x.t)},${Y(x.v)}`).join(' ')} ${X(now)},${Y(p2[p2.length - 1].v)}" fill="none" stroke="${col}" stroke-width="${w}"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`; };
+      const step = (pts, col, w, dash, end) => { if (!pts.length) return ''; let d = ''; let last = null; for (const x of pts) { const xx = X(x.t), yy = Y(x.v); d += last === null ? `M${xx},${yy}` : `H${xx}V${yy}`; last = yy; } d += `H${X(end)}`; return `<path d="${d}" fill="none" stroke="${col}" stroke-width="${w}"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`; };
+      g += line(ind, BL, 1.5) + line(ud, OR, 1.5);
+      g += step(tg.filter((x) => x.t >= t0 - 12 * 3600000), 'var(--primary-text-color,#ddd)', 2.2, null, now);
+      // Planens timer frem (fremløb i varmetimerne)
+      let fp = ''; for (const x of fut) if (x.v !== null && x.t + 3600000 > now) fp += `<line x1="${X(Math.max(x.t, now))}" x2="${X(x.t + 3600000)}" y1="${Y(x.v)}" y2="${Y(x.v)}" stroke="var(--secondary-text-color,#999)" stroke-width="2.2" stroke-dasharray="4 3"/>`;
+      g += fp;
+      if (fs.loft != null) g += `<line x1="${L}" x2="${W - R}" y1="${Y(fs.loft)}" y2="${Y(fs.loft)}" stroke="var(--secondary-text-color,#999)" stroke-width="1" stroke-dasharray="1 3"/><text x="${W - R - 2}" y="${Y(fs.loft) - 3}" text-anchor="end" class="ax">loft ${fmt(fs.loft, 0)}</text>`;
+      g += `<line x1="${X(now)}" x2="${X(now)}" y1="${T}" y2="${H - B}" stroke="var(--primary-text-color,#ddd)" stroke-width="1" stroke-dasharray="2 2"/><text x="${X(now) + 3}" y="${T + 10}" class="ax">nu</text>`;
+      const loading = !Object.keys(hist).length;
+      return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;margin-top:6px" role="img" aria-label="Fremløb: målt, mål og planens timer 12 timer tilbage og frem">${g}</svg>`
+        + `<div class="sm mut">${loading ? 'henter historik … · ' : ''}<span style="color:${OR}">━</span> målt fremløb (ud) · <span style="color:${BL}">━</span> retur (ind) · <b>━</b> mål i varmepumpen · ╌ planens timer frem · ┄ loft · <span style="color:${OR}">▬</span> kompressor kører · <span style="color:#d6453d">▮</span> blokeret</div>`;
+    }
+    // Søg laveste fremløb: status i klart sprog, mål/målt/loft, graf, lært pr. udetemperatur og »Sådan virker det«
     flowPanel(h, main) {
       if (!main) return '';
       const set = settingsPanel(h, main, 'Indstillinger');
       const ca = at(h, main.e('command')); const fs = ca.flow_search;
       if (!fs) return set ? `<div class="pv2">${set}</div>` : '';
-      const SC = { holder: ['holder', null], hæver: ['hæver', '#e0702a'], sænker: ['sænker', '#3b8ad8'], løfter: ['løfter (blød start)', '#e0a02a'], start: ['starter', '#e0a02a'] };
-      const [stxt, scol] = SC[fs.status] || [fs.status || '–', null];
-      const chip = `<span class="pill" style="${scol ? `background:${scol};color:#fff;border-color:${scol}` : ''}">${esc(stxt)}</span>`;
-      const nx = fs.næste_ændring ? new Date(fs.næste_ændring) : null;
-      const hhmm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-      // Graf: de seneste 24 timer – målet (fuld) og planens fremløb (stiplet)
-      const log = (fs.log || []).map((x) => ({ t: x[0] * 1000, v: x[1], p: x[2], w: x[3] }));
-      const now = Date.now(), t0 = now - 24 * 3600 * 1000;
-      const W = 600, H = 150, L = 34, R = 8, T = 10, B = 22;
-      const vals = log.flatMap((x) => [x.v, x.p]).concat([fs.mål, fs.plan]).filter((x) => x !== null && x !== undefined);
-      const lo = Math.floor(Math.min(20, ...vals) / 2) * 2, hi = Math.ceil(Math.max(36, ...vals) / 2) * 2;
-      const X = (t) => L + ((Math.max(t, t0) - t0) / (now - t0)) * (W - L - R), Y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
-      const stepPath = (key, cur) => { const pts = log.filter((x) => x[key] !== null && x[key] !== undefined && x.t >= t0 - 86400000);
-        if (!pts.length && cur == null) return ''; let d = ''; let last = null;
-        for (const x of pts) { const xx = X(x.t), yy = Y(x[key]); d += last === null ? `M${xx},${yy}` : `H${xx}V${yy}`; last = yy; }
-        if (cur != null) { const yy = Y(cur); d += last === null ? `M${X(t0)},${yy}H${X(now)}` : `H${X(now)}V${yy}`; } else d += `H${X(now)}`;
-        return d; };
-      let g = '';
-      for (let v = lo; v <= hi; v += 2) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--divider-color,#888)" stroke-width="0.5"/>`
-        + (v % 4 === 0 ? `<text x="${L - 4}" y="${Y(v) + 4}" text-anchor="end" class="ax">${v}</text>` : '');
-      for (let k = 0; k <= 24; k += 6) { const t = t0 + k * 3600000; g += `<text x="${X(t)}" y="${H - 6}" text-anchor="middle" class="ax">${hhmm(new Date(t))}</text>`; }
-      g += `<path d="${stepPath('p', fs.plan)}" fill="none" stroke="var(--secondary-text-color,#999)" stroke-width="1.5" stroke-dasharray="5 4"/>`;
-      g += `<path d="${stepPath('v', fs.mål)}" fill="none" stroke="${OR}" stroke-width="2.5"/>`;
-      for (const x of log.filter((z) => z.t >= t0)) g += `<circle cx="${X(x.t)}" cy="${Y(x.v)}" r="3" fill="${OR}"><title>${esc(hhmm(new Date(x.t)))}: ${fmt(x.v, 0)} °C – ${esc(x.w || '')}</title></circle>`;
-      const chart = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="Fremløbsmål og planens fremløb de seneste 24 timer">${g}</svg>`
-        + `<div class="sm mut"><span style="color:${OR}">━</span> mål i varmepumpen · <span>╌</span> planens fremløb · prik = ændring (hold musen over for grunden)</div>`;
-      // Rummene: margen over gulvet, målt tendens og om 3 timer
-      const rows = (fs.rum || []).map((r) => { const c3 = r.om_3t < 0.1 ? '#e0702a' : (r.om_3t >= 0.5 ? '#2e9d5b' : null);
-        return `<tr><td>${esc(r.navn)}</td><td class="n">${r.margen >= 0 ? '+' : ''}${fmt(r.margen, 1)}</td><td class="n">${r.tendens >= 0 ? '+' : ''}${fmt(r.tendens, 2)}</td>`
-          + `<td class="n"${c3 ? ` style="color:${c3};font-weight:600"` : ''}>${r.om_3t >= 0 ? '+' : ''}${fmt(r.om_3t, 1)}</td></tr>`; }).join('');
-      const tbl = rows ? `<div class="wrap"><table><tr><th>Rum</th><th class="n">Over gulvet °C</th><th class="n">Tendens °C/t</th><th class="n">Om 3 t</th></tr>${rows}</table></div>` : '<div class="sm mut">Rummene læses ved næste planlægning.</div>';
-      const lært = Object.entries(fs.lært || {}).sort((a, b) => +a[0] - +b[0]).map(([k, v]) => `${String(+k).replace('-', '−')}…${String(+k + 5).replace('-', '−')} °C ude: <b>${fmt(v, 0)} °C</b>`).join(' · ');
-      const box = `<div class="b"><div class="pvh">Søg laveste fremløb ${chip}</div>`
-        + `<div class="pvs" style="margin:4px 0">Mål nu <b>${fmt(fs.mål, 0)} °C</b><span class="mut sm"> · planens fremløb ${fmt(fs.plan, 0)} °C${fs.mål != null && fs.plan != null && fs.plan > fs.mål ? ` · ${fmt(fs.plan - fs.mål, 0)} °C lavere` : ''}</span></div>`
-        + `<div class="sm">${esc(fs.grund || '')}${nx ? ` · næste mulige ændring kl. ${hhmm(nx)}` : ''}</div>`
-        + chart + tbl
-        + `<div class="sm" style="margin-top:6px">Lært laveste fremløb: ${lært || '<span class="mut">endnu intet (læres, når målet har holdt alle rum over gulvet i 3 timer)</span>'}</div>`
-        + `<div class="sm mut" style="margin-top:4px">+1 °C pr. time, når et rum er på vej under gulvet inden for 3 timer · +2 °C pr. halve time, når et rum er under gulvet og ikke på vej op · −1 °C hver anden time, når alle rum er mindst 0,5 °C over gulvet og stabile · aldrig over planens fremløb</div></div>`;
+      const f = sensorsOf(h, main);
+      const SC = { holder: ['holder', '#2e9e5b'], hæver: ['hæver', '#e0702a'], sænker: ['sænker', '#3b8ad8'], løfter: ['løfter', '#e0a02a'], start: ['starter', '#e0a02a'], slukket: ['slukket', '#8a9198'] };
+      const [stxt, scol] = SC[fs.status] || [fs.status || '–', '#8a9198'];
+      const chip = `<span class="pill" style="background:${scol};color:#fff;border-color:${scol}">${esc(stxt)}</span>`;
+      const ud = sv(h, f.flow_temp), ind = sv(h, f.return_temp);
+      const n3 = (lbl, v, sub) => `<div class="fsc"><div class="mut sm">${lbl}</div><div class="fsv">${v}</div>${sub ? `<div class="mut sm">${sub}</div>` : ''}</div>`;
+      const nums = `<div class="fsr">${n3('Mål i varmepumpen', `${fmt(fs.mål, 0)} °C`, fs.slukket ? 'ved næste start' : 'søger laveste')}`
+        + `${n3('Målt ud / ind', `${fmt(ud, 1)} / ${fmt(ind, 1)} °C`, ud !== null && ind !== null ? `ΔT ${fmt(ud - ind, 1)} K` : '')}`
+        + `${n3('Loft', `${fmt(fs.loft, 0)} °C`, fs.mål != null && fs.loft != null && fs.loft > fs.mål ? `${fmt(fs.loft - fs.mål, 0)} °C over målet` : 'det lærte fremløb + margen')}</div>`;
+      const lært = Object.entries(fs.lært || {}).sort((a, b) => +a[0] - +b[0]).map(([k, v]) => `<tr><td>${String(+k).replace('-', '−')}…${String(+k + 5).replace('-', '−')} °C ude</td><td class="n"><b>${fmt(v, 0)} °C</b></td></tr>`).join('');
+      const box = `<div class="b"><div class="pvh">Fremløb · søg laveste ${chip}</div>`
+        + `<div style="margin:4px 0 6px;font-size:14px">${esc(fs.tekst || '')}</div>` + nums + this.flowChart(h, main, fs, f)
+        + `<div class="sm" style="margin-top:6px"><b>Lært laveste fremløb</b> ${lært ? `<div class="wrap"><table>${lært}</table></div>` : '<span class="mut">– endnu intet (læres, når målet har holdt alle rum over gulvet i 3 timer)</span>'}</div>`
+        + `<details id="fsHow"${this._open && this._open.has('fsHow') ? ' open' : ''}><summary class="sm">Sådan virker det</summary><div class="sm mut" style="margin-top:4px">`
+        + `Luft-vand starter ved retur + 3 °C og holder målet lavt. Planen regner med samme mål, så forudsigelser og »ventet« passer med det, der kører, og den lægger flere timer med lavt fremløb.<br>`
+        + `• +1 °C pr. time, når et rum er på vej under gulvet inden for 3 timer (målt tendens over 2 timer)<br>• +2 °C pr. halve time, når et rum er under gulvet og ikke på vej op<br>`
+        + `• +1 °C, når kompressoren stopper (målet er under varmepumpens laveste ydelse)<br>• −1 °C hver anden time, når alle rum er mindst 0,5 °C over gulvet og stabile<br>`
+        + `• aldrig over loftet (det lærte fremløb + margen). Rummet, der bestemmer, er markeret med ◆ i rumlisten; pilen viser rummets tendens.</div></details></div>`;
       return `<div class="pv2">${box}${set}</div>`;
     }
     airPlan(h, s) {
