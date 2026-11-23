@@ -1529,7 +1529,10 @@ class VarmemodelCoordinator:
         # så kompressoren ikke går til fuld effekt mod et koldt gulv (bedre COP, færre afrimninger i kulde)
         hs = self.air.setdefault(f"hydro:{s.sid}", {})
         if self.settings.get(f"{s.sid}.{SOFT_START}", "test") == "lavest" and (pre_start or st.state == "heat" or dom != "climate"):
+            plan_now = want
             want = await self._low_flow(s, hs, hs.get("low_loft") or want, pre_start)
+            if hs.get("low_raise") and plan_now is not None:
+                want = max(want, min(plan_now, hs.get("low_loft") or plan_now))  # planens forvarmning går forud
             hs["soft"] = True
         elif hs.get("soft") and hs.get("start_t"):
             if hs.get("ramp0") is None:
@@ -1787,6 +1790,8 @@ class VarmemodelCoordinator:
                     start_at = max(x["ts"], now)
                     break
         f = lambda v: f"{v:.0f}" if v is not None else "–"  # noqa: E731
+        k = float(hs.get("low_raise") or 0.0)
+        eff = min((low if low is not None else cap or 0) + k, hs.get("low_loft") or 99) if k else None
         if off:
             when = dt_util.as_local(dt_util.utc_from_timestamp(start_at)).strftime("%H:%M") if start_at else None
             text = (f"Luft-vand er slukket. Næste start {'kl. ' + when if when else 'når planen varmer'} ved ca. {f(cap)} °C"
@@ -1811,9 +1816,12 @@ class VarmemodelCoordinator:
                     f"om 3 t ca. {bind['om_3t']:+.1f} °C).")
         else:
             text = f"Holder {f(low)} °C."
+        if k and not off:
+            text = (f"Forvarmer: {f(eff)} °C (søgningens {f(low)} °C + {k:.0f} °C), fordi modellen forudser, at {f(low)} °C i flere timer "
+                    f"ikke holder rummene gennem den næste blokering. Søgningen fortsætter bagefter. ") + text
         return {
             "aktiv": low is not None and bool(hs.get("start_t")) and not off,
-            "slukket": off, "mål": low if low is not None else cap, "loft": hs.get("low_loft"),
+            "slukket": off, "mål": low if low is not None else cap, "loft": hs.get("low_loft"), "forvarmer": k or None, "mål_nu": eff,
             "plan": (self.commands.get(s.sid) or {}).get("flow"), "status": "slukket" if off else status,
             "tekst": _dk_txt(text), "grund": _dk_txt(hs.get("low_why") or ""), "næste_ændring": _ts_local_iso(nxt) if nxt_txt else None,
             "bestemmer": bind["navn"] if bind and not off else None, "kompressorstop": hs.get("low_stops") or 0,
@@ -2223,7 +2231,9 @@ class VarmemodelCoordinator:
                 low_cap = self._low_cap(s, hs, t0)
                 if low_cap is not None:
                     low_cap = min(low_cap, hs["low_loft"])
-                    fm, raise_max = low_cap - base_f, 0
+                    # Planen må stadig hæve (højst FLOW_BOOST_MAX), når flere timer ved søgningens mål ikke kan holde
+                    # rummene – fx gennem en lang blokering (forvarmning går forud for søgningen)
+                    fm = low_cap - base_f
             else:
                 hs.pop("low_loft", None)
             p = await self.hass.async_add_executor_job(
@@ -2231,10 +2241,16 @@ class VarmemodelCoordinator:
                         boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE), economy=self.setting(CONF_ECONOMY),
                         comfort=offset, flow_margin=fm, **({"flow_raise_max": raise_max} if raise_max is not None else {})))
             if low_cap is not None:
+                k = float(p.flow_raise or 0.0)
+                hs["low_raise"] = k
                 for x in p.hours:
                     if x.get("heat_kw") and x.get("flow") is not None:
-                        x["flow"] = float(round(low_cap))  # varmepumpen kører søgningens mål i varmetimerne
-                p.reason += f" – søger laveste fremløb: planen regner med {low_cap:.0f} °C (loft {hs['low_loft']:.0f} °C)"
+                        # varmepumpen kører søgningens mål (+ planens forvarmning) i varmetimerne
+                        x["flow"] = float(round(min(low_cap + k, hs["low_loft"])))
+                p.reason += (f" – søger laveste fremløb: planen regner med {low_cap:.0f} °C (loft {hs['low_loft']:.0f} °C)"
+                             + (f"; forvarmer +{k:.0f} °C, fordi {low_cap:.0f} °C i flere timer ikke holder rummene" if k else ""))
+            elif sid:
+                (self.air.get(f"hydro:{sid}") or {}).pop("low_raise", None)
             if (eco := self.setting(CONF_ECONOMY)) > 0:
                 p.reason += f" – økonomi: rummene må gå {eco:.2f} °C under gulvet"
             # Log: det planlagte for timen (første plan i timen) og rummenes forudsigelse – til »i går« og »!«

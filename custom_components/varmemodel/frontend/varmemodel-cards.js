@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.16.0';
+  const VERSION = '0.16.1';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -1286,12 +1286,12 @@
       const ca = at(h, main.e('command')); const fs = ca.flow_search;
       if (!fs) return set ? `<div class="pv2">${set}</div>` : '';
       const f = sensorsOf(h, main);
-      const SC = { holder: ['holder', '#2e9e5b'], hæver: ['hæver', '#e0702a'], sænker: ['sænker', '#3b8ad8'], løfter: ['løfter', '#e0a02a'], start: ['starter', '#e0a02a'], slukket: ['slukket', '#8a9198'] };
-      const [stxt, scol] = SC[fs.status] || [fs.status || '–', '#8a9198'];
+      const SC = { forvarmer: ['forvarmer', '#d6453d'], holder: ['holder', '#2e9e5b'], hæver: ['hæver', '#e0702a'], sænker: ['sænker', '#3b8ad8'], løfter: ['løfter', '#e0a02a'], start: ['starter', '#e0a02a'], slukket: ['slukket', '#8a9198'] };
+      const [stxt, scol] = SC[fs.forvarmer && !fs.slukket ? 'forvarmer' : fs.status] || [fs.status || '–', '#8a9198'];
       const chip = `<span class="pill" style="background:${scol};color:#fff;border-color:${scol}">${esc(stxt)}</span>`;
       const ud = sv(h, f.flow_temp), ind = sv(h, f.return_temp);
       const n3 = (lbl, v, sub) => `<div class="fsc"><div class="mut sm">${lbl}</div><div class="fsv">${v}</div>${sub ? `<div class="mut sm">${sub}</div>` : ''}</div>`;
-      const nums = `<div class="fsr">${n3('Mål i varmepumpen', `${fmt(fs.mål, 0)} °C`, fs.slukket ? 'ved næste start' : 'søger laveste')}`
+      const nums = `<div class="fsr">${n3('Mål i varmepumpen', `${fmt(fs.mål_nu ?? fs.mål, 0)} °C`, fs.slukket ? 'ved næste start' : fs.forvarmer ? `forvarmer +${fmt(fs.forvarmer, 0)} °C (søgning ${fmt(fs.mål, 0)})` : 'søger laveste')}`
         + `${n3('Målt ud / ind', `${fmt(ud, 1)} / ${fmt(ind, 1)} °C`, ud !== null && ind !== null ? `ΔT ${fmt(ud - ind, 1)} K` : '')}`
         + `${n3('Loft', `${fmt(fs.loft, 0)} °C`, fs.mål != null && fs.loft != null && fs.loft > fs.mål ? `${fmt(fs.loft - fs.mål, 0)} °C over målet` : 'det lærte fremløb + margen')}</div>`;
       const lært = Object.entries(fs.lært || {}).sort((a, b) => +a[0] - +b[0]).map(([k, v]) => `<tr><td>${String(+k).replace('-', '−')}…${String(+k + 5).replace('-', '−')} °C ude</td><td class="n"><b>${fmt(v, 0)} °C</b></td></tr>`).join('');
@@ -1302,6 +1302,7 @@
         + `Luft-vand starter ved retur + 3 °C og holder målet lavt. Planen regner med samme mål, så forudsigelser og »ventet« passer med det, der kører, og den lægger flere timer med lavt fremløb.<br>`
         + `• +1 °C pr. time, når et rum er på vej under gulvet inden for 3 timer (målt tendens over 2 timer)<br>• +2 °C pr. halve time, når et rum er under gulvet og ikke på vej op<br>`
         + `• +1 °C, når kompressoren stopper (målet er under varmepumpens laveste ydelse)<br>• −1 °C hver anden time, når alle rum er mindst 0,5 °C over gulvet og stabile<br>`
+        + `• forvarmning: kan flere timer ved søgningens mål ikke holde rummene gennem en blokering, hæver planen fremløbet (højst 5 °C) – vist som »forvarmer«<br>`
         + `• aldrig over loftet (det lærte fremløb + margen). Rummet, der bestemmer, er markeret med ◆ i rumlisten; pilen viser rummets tendens.</div></details></div>`;
       return `<div class="pv2">${box}${set}</div>`;
     }

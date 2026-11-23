@@ -895,3 +895,14 @@ async def test_low_cap_order(ha: HomeAssistant) -> None:
     from custom_components.varmemodel.coordinator import _dk_txt
 
     assert _dk_txt("Gang +0.2 °C, -0.08 °C/t, om 3 t -0.0") == "Gang +0,2 °C, −0,08 °C/t, om 3 t ±0,0"
+
+
+async def test_low_flow_preheat_shown(ha: HomeAssistant) -> None:
+    """Søg laveste: når planen hæver for at forvarme før en blokering, vises det (mål nu = søgning + hævning, højst loftet)."""
+    c, s = await _lv_entry(ha)
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    ha.states.async_set("climate.vp", "heat", {})
+    hs = c.air.setdefault(f"hydro:{s.sid}", {})
+    hs.update(low=28.0, start_t=time.time(), low_t=time.time(), low_status="holder", low_loft=35.0, low_raise=3.0)
+    v = c.flow_search(s)
+    assert v["forvarmer"] == 3.0 and v["mål_nu"] == 31.0 and v["tekst"].startswith("Forvarmer: 31 °C")
