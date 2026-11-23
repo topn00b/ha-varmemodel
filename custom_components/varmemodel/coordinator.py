@@ -657,6 +657,9 @@ class VarmemodelCoordinator:
         prev = s.accepted.get(key)
         if self.mode == MODE_FROZEN and prev:
             return
+        if key == "cop_loss":
+            # Ekstra el er en måling (målt mod målt), ikke en model: ingen ±10 %-grænse
+            prev = None
         prev_v = prev.get("value") if prev else None
         prev_rng = (prev.get("t_out_min"), prev.get("t_out_max")) if prev else (None, None)
         value, note = guard(fit.value, prev_v, (fit.t_out_min, fit.t_out_max), prev_rng)
@@ -770,7 +773,7 @@ class VarmemodelCoordinator:
         cutoff = end.timestamp() - COLLECT_KEEP_DAYS * 86400
         s.slots = {k: v for k, v in s.slots.items() if int(k) >= cutoff}
         steady = fit_cop_steady([Slot(int(k), *v) for k, v in s.slots.items()])
-        return steady, fit_cop_loss(steady, five, comp, dhw)
+        return steady, fit_cop_loss(steady, five, comp, defrost, dhw)
 
     # ------------------------------------------------------------ rum
     def _source_input(self, s: SourceState, h: Hour) -> float | None:

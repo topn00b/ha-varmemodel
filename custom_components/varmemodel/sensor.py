@@ -156,7 +156,7 @@ class CopTodaySensor(SourceEntity, SensorEntity):
             "varmt_vand_kwh_varme": d.get("dhw_heat_kwh"), "varmt_vand_kwh_el": d.get("dhw_el_kwh"),
             "cop_uden_varmt_vand": d.get("cop_without_dhw"),
             "cop_stabil_drift": d.get("cop_steady"), "minutter_stabil_drift": d.get("steady_minutes"),
-            "tab_opstart_afrimning_pct": d.get("loss_start_defrost_pct"),
+            "ekstra_el_opstart_afrimning_standby_pct": d.get("loss_start_defrost_pct"),
             "varmt_vand_traek_pct": d.get("dhw_effect_pct"),
             "stabil_cop_ifølge_model": d.get("expected_steady"), "stabil_mod_model_pct": d.get("steady_vs_model_pct"),
             "metode": "5-minutters portioner siden midnat; stabil drift = fra 10 min efter start/afrimning til afrimning, varmt vand eller stop",

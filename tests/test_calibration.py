@@ -350,3 +350,15 @@ def test_cop_today_breakdown():
     assert 3 < d["loss_start_defrost_pct"] < 4.5
     assert d["dhw_effect_pct"] > 0
     assert cop_today({}, [], [], [], None) is None
+
+
+def test_cop_loss_same_method_as_today():
+    """14-dages-tallet og COP i dag regnes ens: rumvarme mod målt stabil drift."""
+    from custom_components.varmemodel.calibration import Fit, cop_today, fit_cop_loss
+
+    t0 = 1_700_000_100 // 300 * 300
+    five = {t0 + i * 300: {"q": 0.2 if i < 2 else 0.3, "e": 0.1, "t_out": 2.0, "t_flow": 33.0} for i in range(24)}
+    comp = [(t0, t0 + 24 * 300)]
+    f = fit_cop_loss(Fit(None), five, comp, [], [])
+    assert f.value == cop_today(five, comp, [], [], None)["loss_start_defrost_pct"]
+    assert f.value > 0

@@ -114,7 +114,7 @@
         "name": "COP reference A0/W35 4 kW (steady state)"
       },
       "cop_loss": {
-        "name": "Loss from start-up and defrost"
+        "name": "Extra electricity from start-up, defrost and standby"
       },
       "cop_yesterday": {
         "name": "COP yesterday"

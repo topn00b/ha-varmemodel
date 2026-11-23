@@ -628,35 +628,28 @@ def fit_cop_steady(slots: list[Slot], min_n: int = 100, min_runs: int = 20) -> F
 
 
 def fit_cop_loss(steady: Fit, five: dict[int, dict[str, float | None]], comp: list[tuple[float, float]],
-                 dhw: list[tuple[float, float]]) -> Fit:
-    """Tab ved opstart og afrimning: målt COP over al kompressortid mod stabil COP
-    for den samme varme (samme 5-minutters portioner på begge sider)."""
-    if steady.value is None:
-        return Fit(None, 0, note="kræver COP i stabil drift")
-    a, b, c, d = (steady.extra.get(k, 0.0) for k in ("a", "b", "c", "d"))
-    qa = ea = es = 0.0
-    n = 0
-    for x, y in comp:
-        t = int(x // 300 * 300)
-        while t < y:
-            r = five.get(t) or {}
-            q, e, u, f = r.get("q"), r.get("e"), r.get("t_out"), r.get("t_flow")
-            if None not in (q, e, u, f) and q > 0 and not any(p < t + 300 and k > t for p, k in dhw):
-                qa += q
-                ea += e
-                es += q / max(1.2, a + b * u + c * f + d * q * 12)
-                n += 1
-            t += 300
-    if ea <= 1 or es <= 0:
-        return Fit(None, n, note="for lidt kompressortid")
-    eff, st = qa / ea, qa / es
-    return Fit(round((1 - eff / st) * 100, 1), n, None, None, steady.t_out_min, steady.t_out_max, "fit",
-               {"cop_effective": round(eff, 2), "cop_steady_same_heat": round(st, 2), "value_is": "% lavere COP end stabil drift"})
+                 defrost: list[tuple[float, float]], dhw: list[tuple[float, float]]) -> Fit:
+    """Ekstra el ved opstart, afrimning og standby over de seneste 14 dage – samme regnestykke som
+    COP i dag (``cop_today``), bare over hele perioden: rumvarmens COP mod den målte stabile drift.
+
+    Værdien er andelen af el, der går ud over, hvad stabil drift ville have brugt til samme varme:
+    1 − COP(rumvarme) ÷ COP(stabil drift). Modellens afvigelse står for sig i ``extra``.
+    """
+    d = cop_today(five, comp, defrost, dhw, steady)
+    if d is None or d["loss_start_defrost_pct"] is None:
+        return Fit(None, 0, note="for lidt drift")
+    return Fit(d["loss_start_defrost_pct"], d["steady_minutes"] // 5, None, None,
+               steady.t_out_min if steady else None, steady.t_out_max if steady else None, "fit",
+               {"cop_space_heating": d["cop_without_dhw"], "cop_steady_measured": d["cop_steady"],
+                "cop_steady_model": d["expected_steady"], "steady_vs_model_pct": d["steady_vs_model_pct"],
+                "kwh_heat": d["heat_kwh"], "kwh_el": d["el_kwh"],
+                "value_is": "% ekstra el mod målt stabil drift for samme varme (opstart, afrimning og standby)"})
+
 
 def cop_today(five: dict[int, dict[str, float | None]], comp: list[tuple[float, float]],
               defrost: list[tuple[float, float]], dhw: list[tuple[float, float]], steady: Fit | None) -> dict[str, Any] | None:
-    """Dagens COP fra 5-minutters portioner: samlet, uden varmt vand, stabil drift (ekspertmetoden:
-    fra 10 min efter start/afrimning til afrimning, varmt vand eller stop) og hvad tabet skyldes.
+    """COP fra 5-minutters portioner (i dag eller en hel periode): samlet, uden varmt vand, stabil drift
+    (ekspertmetoden: fra 10 min efter start/afrimning til afrimning, varmt vand eller stop) og hvad tabet skyldes.
 
     Alle energier er kWh: ``q`` = kWh varme, ``e`` = kWh el.
     """
@@ -691,7 +684,7 @@ def cop_today(five: dict[int, dict[str, float | None]], comp: list[tuple[float, 
         "cop_without_dhw": None if cop_sh is None else round(cop_sh, 2),
         "cop_steady": None if cop_st is None else round(cop_st, 2),
         "steady_minutes": len(sl) * 5,
-        # Tab ved opstart og afrimning: rumvarme over al driftstid mod stabil drift samme dag
+        # Ekstra el ved opstart, afrimning og standby: rumvarmens COP mod målt stabil drift i samme periode
         "loss_start_defrost_pct": None if cop_sh is None or cop_st is None else round((1 - cop_sh / cop_st) * 100, 1),
         # Varmt vands træk på dagens COP
         "dhw_effect_pct": None if cop_sh is None else round((1 - cop / cop_sh) * 100, 1),
