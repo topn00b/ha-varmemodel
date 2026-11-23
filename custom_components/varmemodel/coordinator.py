@@ -1296,6 +1296,7 @@ class VarmemodelCoordinator:
                                      "grader_pr_kwh_el": None if (ev := eff_per_kwh(a.get("eff", {}), label(x) + vkey)) is None else round(ev, 3),
                                      "målinger": int((a.get("eff", {}).get(label(x) + vkey) or [0, 0, 0])[2])} for k, x in enumerate(ladder)],
                      "ventilation": None if vent is None else ("til" if vent else "fra"),
+                     "ventilation_entitet": s.conf.get(CONF_ASSIST), "ventilation_hastighed_entitet": s.conf.get(CONF_ASSIST_SPEED),
                      "ventilation_virkning_pct": self._vent_effect(a.get("eff", {})),
                      "starttrin": dict(starts), "skiftet": _ts_local_iso(changed) if changed else None}
         out: dict[str, Any] = {"step": i}

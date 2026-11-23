@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.9.5';
+  const VERSION = '0.9.6';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -1119,6 +1119,22 @@
       }).join('');
       if (stats) L += `<div class="grid">${stats}</div>`;
       L += '</div>';
+      // Ventilationen, der fordeler varmen (valgt i kildens opsætning): tilstand og hastighed kan ændres her
+      const va = at(h, s.e('air_step'));
+      if (va.ventilation_entitet) {
+        const ctl = (eid) => {
+          const s0 = st(h, eid); if (!s0) return '–'; const a2 = s0.attributes || {}; const dom = eid.split('.')[0];
+          if (dom === 'select' || dom === 'input_select') return `<select data-svc="${dom}.select_option" data-eid="${esc(eid)}">${(a2.options || []).map((x) => `<option${x === s0.state ? ' selected' : ''}>${esc(x)}</option>`).join('')}</select>`;
+          if (dom === 'number' || dom === 'input_number') return `<input type="number" data-svc="${dom}.set_value" data-eid="${esc(eid)}" value="${esc(s0.state)}" min="${a2.min}" max="${a2.max}" step="${a2.step}">`;
+          if (['fan', 'switch', 'input_boolean'].includes(dom)) return `<button class="tg2${s0.state === 'on' ? ' on' : ''}" data-act="${esc(eid)}">${s0.state === 'on' ? 'til' : 'fra'}</button>`;
+          return `<span class="v" data-e="${esc(eid)}">${esc(s0.state)}</span>`;
+        };
+        L += `<div class="b"><div class="pvh">Ventilation<span class="mut sm"> · fordeler varmen · ${va.ventilation === 'til' ? 'kører' : 'står'}</span></div>`
+          + `<div class="sr"><span>Tilstand</span><span>${ctl(va.ventilation_entitet)}</span></div>`
+          + (va.ventilation_hastighed_entitet ? `<div class="sr"><span>Hastighed</span><span>${ctl(va.ventilation_hastighed_entitet)}</span></div>` : '')
+          + `<div class="sm" style="margin-top:4px">${va.ventilation_virkning_pct != null ? `Med ventilation ${va.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(va.ventilation_virkning_pct, 0)} % varme i rummene pr. kWh el` : 'Effekten på varmen pr. kWh el læres (samme trin med og uden ventilation)'}</div>`
+          + (c.assist_automation ? `<div class="sm mut">Styres af <span class="v" data-e="${esc(c.assist_automation)}">${esc(at(h, c.assist_automation).friendly_name || c.assist_automation)}</span> (${(st(h, c.assist_automation) || {}).state === 'on' ? 'til' : 'fra'})</div>` : '') + '</div>';
+      }
       // kWh el over tid: sidste 24 timer (farvet efter pris) og planen de næste 12 timer, dagene under
       const eid = sensorsOf(h, s).electricity_energy; const rows = this.kwh(h, eid);
       const P = {};
