@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.16.1';
+  const VERSION = '0.16.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -700,7 +700,13 @@
       const pst = (st(h, main.plan) || {}).state || 'unknown';
       const flow = sv(h, f.flow_temp), ret = sv(h, f.return_temp);
       const comp = st(h, f.compressor); const compOn = !!comp && comp.state === 'on';
-      const onMin = compOn ? (Date.now() - Date.parse(comp.last_changed)) / 60e3 : 0;
+      // Stabil drift tælles fra kompressorens rigtige start (Varmemodel læser den i historikken), ikke fra last_changed,
+      // som en genstart af HA nulstiller – medmindre kompressoren er skiftet efter Varmemodels seneste tjek
+      const cmdA = at(h, main.e('command'));
+      const lc = comp ? Date.parse(comp.last_changed) : NaN, cs = cmdA.compressor_on_since ? Date.parse(cmdA.compressor_on_since) : NaN;
+      const cc = cmdA.compressor_checked ? Date.parse(cmdA.compressor_checked) : NaN;
+      const runStart = !isNaN(cs) && !isNaN(cc) && lc <= cc ? Math.min(cs, lc) : lc;
+      const onMin = compOn ? (Date.now() - runStart) / 60e3 : 0;
       const defr = isOn(h, f.defrost), dhw = isOn(h, f.dhw);
       const clim = cfg.climate ? st(h, cfg.climate) : null;
       const hpk = kW(h, cfg.heat_power), ep = kW(h, cfg.el_power);

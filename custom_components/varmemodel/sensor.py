@@ -522,6 +522,9 @@ class CommandSensor(SourceEntity, SensorEntity):
             if self.src.kind == SOURCE_HYDRONIC else None,
             # Søg laveste fremløb: mål, plan, status, grund, rummenes margen/tendens, lært pr. ude-bånd og log
             "flow_search": self.coordinator.flow_search(self.src) if self.src.kind == SOURCE_HYDRONIC else None,
+            # Kompressoren kører siden (fra historikken, så en genstart ikke nulstiller »stabil drift«)
+            "compressor_on_since": _ts_local(cs) if (cs := (self.coordinator.air.get(f"hydro:{self.src.sid}") or {}).get("comp_since")) else None,
+            "compressor_checked": _ts_local(ck) if (ck := (self.coordinator.air.get(f"hydro:{self.src.sid}") or {}).get("comp_checked")) else None,
             "setpoint": c.get("setpoint"), "fan_mode": c.get("fan_mode"), "preset": c.get("preset"), "step": c.get("step"),
             "reason": c.get("reason"),
             "since": _ts_local(since) if since and since > 0 else None,

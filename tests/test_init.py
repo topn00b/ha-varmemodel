@@ -906,3 +906,23 @@ async def test_low_flow_preheat_shown(ha: HomeAssistant) -> None:
     hs.update(low=28.0, start_t=time.time(), low_t=time.time(), low_status="holder", low_loft=35.0, low_raise=3.0)
     v = c.flow_search(s)
     assert v["forvarmer"] == 3.0 and v["mål_nu"] == 31.0 and v["tekst"].startswith("Forvarmer: 31 °C")
+
+
+@pytest.mark.parametrize("expected_lingering_timers", [True])
+async def test_flip_cap_still_switches_on(ha: HomeAssistant) -> None:
+    """Efter loftet på tænd/sluk slukker Varmemodel kun ved blokering – men tænder stadig (huset står aldrig uden varme)."""
+    c, s = await _lv_entry(ha)
+    s.conf["onoff_target"] = "climate.vp"
+    ha.states.async_set("climate.vp", "off", {})
+    calls: list = []
+    ha.services.async_register("climate", "set_hvac_mode", lambda call: calls.append(call.data["hvac_mode"]))
+    h = c.air.setdefault(f"hydro:{s.sid}", {})
+    h.update(day=dt_util.now().date().isoformat(), flips=10)
+    await c._hydro_apply(s, True, False, [{"flow": 30.0, "blocked": False}])
+    assert calls == ["heat"]
+    ha.states.async_set("climate.vp", "heat", {})
+    calls.clear()
+    await c._hydro_apply(s, False, False, [])
+    assert calls == []  # frivillig sluk afvises efter loftet
+    await c._hydro_apply(s, False, True, [])
+    assert calls == ["off"]  # blokering slukker altid

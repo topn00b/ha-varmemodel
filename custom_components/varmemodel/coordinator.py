@@ -1588,8 +1588,11 @@ class VarmemodelCoordinator:
             want_on = False
         if want_on == is_on:
             return
-        if h["flips"] >= HYDRO_MAX_FLIPS and not (blocked and is_on):
-            _LOGGER.warning("%s: over %s tænd/sluk i dag – Varmemodel holder pause", s.name, HYDRO_MAX_FLIPS)
+        if h["flips"] >= HYDRO_MAX_FLIPS and not want_on and not blocked:
+            # Loftet skåner kompressoren mod mange korte kørsler: efter loftet slukker Varmemodel kun ved blokering – men
+            # tænder stadig, så huset aldrig står uden varme resten af døgnet (kodegennemgang 23/11)
+            _LOGGER.warning("%s: over %s tænd/sluk i dag – Varmemodel slukker kun ved blokering resten af døgnet", s.name,
+                            HYDRO_MAX_FLIPS)
             return
         soft, mode = False, None
         if want_on:
@@ -1672,6 +1675,25 @@ class VarmemodelCoordinator:
             return float(hs["low_last"])
         ret = self._state_num(s.eid(CONF_RETURN))
         return float(round(max(ret + SOFT_OVER_RETURN_K, SOFT_FLOOR))) if ret is not None else None
+
+    def _comp_on_since_sync(self, s: SourceState) -> float | None:
+        """Hvornår kompressoren sidst gik fra slukket til tændt (de seneste 8 timer); None, når den er slukket.
+        Utilgængelig/ukendt (fx under en genstart) springes over, så en genstart ikke tæller som en ny start."""
+        comp = s.eid(CONF_COMPRESSOR)
+        if not comp:
+            return None
+        end = dt_util.utcnow()
+        start = end - timedelta(hours=8)
+        res = history.get_significant_states(self.hass, start, end, [comp], include_start_time_state=True,
+                                             significant_changes_only=False, no_attributes=True)
+        since, last = None, None
+        for z in res.get(comp, []):
+            if z.state in ("unavailable", "unknown"):
+                continue
+            if z.state == "on" and last != "on":
+                since = max(z.last_changed, start).timestamp()
+            last = z.state
+        return since if last == "on" else None
 
     def _comp_stops_sync(self, s: SourceState, since: float) -> int:
         """Kompressorstop (on → off) siden ``since`` uden varmt vand eller afrimning – tegn på, at fremløbsmålet er under
@@ -2332,7 +2354,13 @@ class VarmemodelCoordinator:
                        (bool(cur and cur["blocked"]) or self.live_blocked()))
             self.commands[sid] = cmd.dump()
             full = bool(s.conf.get(CONF_ONOFF_TARGET) and self.settings.get(f"{sid}.{HYDRO_SWITCH}"))
-            hst = self.air.get(f"hydro:{sid}") or {}
+            hst = self.air.setdefault(f"hydro:{sid}", {})
+            try:
+                # Kompressoren kører siden … (fra historikken – en genstart nulstiller last_changed, så COP ellers skjules)
+                hst["comp_since"] = await get_instance(self.hass).async_add_executor_job(self._comp_on_since_sync, s)
+                hst["comp_checked"] = time.time()
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("Kompressorens starttid kunne ikke læses", exc_info=True)
             if any("cop" not in x and now - x["t"] > SOFT_EVAL_S + 600 for x in hst.get("starts", [])):
                 try:
                     await get_instance(self.hass).async_add_executor_job(self._soft_eval_sync, s, hst["starts"])
