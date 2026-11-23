@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.7.4';
+  const VERSION = '0.8.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -389,7 +389,7 @@
       o += row('Største effekt', V(h, s.e('max_power'), 2, 'kW'));
       o += row('Laveste stabile effekt', V(h, s.e('min_power'), 2, 'kW'));
       o += row('Gulvets afgivelse', V(h, s.e('emission'), 3, 'kW/K'));
-      o += row('Varmekurve ved 0 °C ude', V(h, s.e('curve'), 1, '°C'));
+      o += row('Lært fremløb ved 0 °C ude', V(h, s.e('flow_learned'), 1, '°C'));
       return o + '</div>';
     }
     air(h, vm, s) {
@@ -487,14 +487,14 @@
         o += row('Periode', `${pa.horizon_h ?? '–'} timer · ca. ${fmt(pa.cost_kr, 0)} kr`);
         o += row('Jeg fryser', pa.boost ? `+${fmt(pa.boost_delta)} °C til ${when(pa.boost_until)}` : 'fra');
         const ce = s.e('command'); const ca = at(h, ce);
-        if (ce) o += row('Anbefalet styring', `<span class="v" data-e="${esc(ce)}">${(st(h, ce) || {}).state === 'heat' ? 'varme' : 'slukket'}${ca.flow_setpoint != null ? ` · fremløb ${fmt(ca.flow_setpoint, 0)} °C` : ca.shift != null ? ' · kurve ' + sgn(ca.shift, 0) : ''}</span> <span class="mut sm">${esc(ca.reason || '')}</span>`);
+        if (ce) o += row('Anbefalet styring', `<span class="v" data-e="${esc(ce)}">${(st(h, ce) || {}).state === 'heat' ? 'varme' : 'slukket'}${ca.flow_setpoint != null ? ` · fremløb ${fmt(ca.flow_setpoint, 0)} °C` : ''}</span> <span class="mut sm">${esc(ca.reason || '')}</span>`);
         if (ce) o += row('I dag', `${ca.writes_today ?? 0} skrivninger · ${ca.switches_today ?? 0} tænd/sluk ${ca.within_limits === false ? '<span class="amber">over grænsen</span>' : '<span class="green">inden for grænsen</span>'}`);
         o += row('Frisk plan i dag', `${fmt(pa.fresh_pct_today, 0)} % af kvartererne`);
         o += '</div>';
       }
       o += '<div class="h2">Planens indstillinger</div><div class="grid">';
       for (const [k, n, u] of [['max_pause', 'Maks. pause uden gulvvarme', 't'], ['comfort_offset', 'Komfort over komfortgulvet', '°C'], ['boost_delta', 'Jeg fryser hæver med', '°C'],
-        ['boost_hours', 'Jeg fryser gælder højst', 't'], ['red_allowance', 'Må falde i blokerede timer', '°C'], ['cold_caution', 'Forsigtighed ved kulde', '%'], ['preload', 'Forvarm pr. 6 timers blokering', '°C'], ['flow_over_curve', 'Maks. fremløb over kurven', '°C']]) {
+        ['boost_hours', 'Jeg fryser gælder højst', 't'], ['red_allowance', 'Må falde i blokerede timer', '°C'], ['cold_caution', 'Forsigtighed ved kulde', '%'], ['preload', 'Forvarm pr. 6 timers blokering', '°C'], ['flow_margin', 'Maks. fremløb over det lærte', '°C']]) {
         const e = vm.e(k); o += row(n, e ? `<span class="v" data-e="${esc(e)}">${fmt(sv(h, e))} ${u}</span>` : '–');
       }
       return o + '</div>';
@@ -571,11 +571,6 @@
       const comp = st(h, f.compressor); const compOn = !!comp && comp.state === 'on';
       const onMin = compOn ? (Date.now() - Date.parse(comp.last_changed)) / 60e3 : 0;
       const defr = isOn(h, f.defrost), dhw = isOn(h, f.dhw);
-      let shift = null;
-      if (f.curve_offset) {
-        const o = f.curve_offset_attribute ? num(at(h, f.curve_offset)[f.curve_offset_attribute]) : sv(h, f.curve_offset);
-        if (o !== null) shift = Math.round(o - (num(f.curve_offset_zero) || 0));
-      }
       const clim = cfg.climate ? st(h, cfg.climate) : null;
       const hpk = kW(h, cfg.heat_power), ep = kW(h, cfg.el_power);
       const steady = compOn && onMin >= 10 && !defr && !dhw && hpk !== null && ep !== null && ep > 0.15;
@@ -589,7 +584,7 @@
       const differs = pst !== 'unknown' && (planHeat !== actHeat);
       const pumpOn = cfg.pump_running ? isOn(h, cfg.pump_running) : null;
       const bal = compOn && onMin >= 15 && !defr && !dhw && pumpOn !== false;
-      Object.assign(D, { f, cfg, pa, pst, flow, ret, compOn, onMin, defr, dhw, shift, clim, hpk, ep, steady, live, exp, lowMin, differs, pumpOn, bal,
+      Object.assign(D, { f, cfg, pa, pst, flow, ret, compOn, onMin, defr, dhw, clim, hpk, ep, steady, live, exp, lowMin, differs, pumpOn, bal,
         A_: sv(h, cfg.a), B_: sv(h, cfg.b), C_: sv(h, cfg.c), D_: sv(h, cfg.d) });
       return D;
     }
@@ -711,7 +706,6 @@
       else if (D.defr) { s0 = '❄ afrimer'; bg = BL; }
       else if (D.dhw) s0 = 'varmt vand';
       else s0 = (D.compOn ? 'varmer' : 'pause');
-      if (D.shift !== null && !(D.clim && D.clim.state === 'off')) s0 += ` · kurve ${sgn(D.shift, 0)}`;
       p.status = [s0, cfg.climate || f.compressor, { bg }];
       p.plan = `plan: ${PS[D.pst] || D.pst}${D.pst === 'heat' && pa.flow != null ? ` · fremløb ${fmt(pa.flow, 1)} °C` : ''}`;
       p.ud = [`ud ${fmt(D.flow)} °C${D.pst === 'heat' && pa.flow != null ? ' · mål ' + fmt(pa.flow) : ''}`, f.flow_temp];
@@ -736,7 +730,7 @@
       p.balTxt = D.bal ? '✓ retvisende' : `⏸ ${D.pumpOn === false ? 'pumpen står' : !D.compOn ? 'kompressor holder pause' : D.defr ? 'afrimer' : D.dhw ? 'laver varmt vand' : 'indsvinger'}`;
       if (cfg.pump || cfg.pump_running) {
         const ps = cfg.pump ? (st(h, cfg.pump) || {}).state || '' : ''; const k = (ps.match(/(\d)/) || [])[1];
-        const txt = D.pumpOn === false ? 'står' : (D.pumpOn ? 'kører' : '') + (k ? (D.pumpOn ? ' · ' : '') + 'kurve ' + k : ps ? ' ' + ps : '');
+        const txt = D.pumpOn === false ? 'står' : (D.pumpOn ? 'kører' : '') + (k ? (D.pumpOn ? ' · ' : '') + 'trin ' + k : ps ? ' ' + ps : '');
         p.pump = [txt.trim() || '–', cfg.pump_running || cfg.pump, { bg: D.pumpOn ? GR : null }];
       }
       return p;

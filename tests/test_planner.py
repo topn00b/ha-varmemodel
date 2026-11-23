@@ -5,7 +5,7 @@ from __future__ import annotations
 from custom_components.varmemodel.planner import PlanHour, PlanRoom, SourceModel, make_plan
 
 M = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, cop=(3.0, 0.15, -0.04, 0.0), emission_kw_k=0.25,
-                curve_c0=34.5, curve_slope=-0.6)
+                flow_c0=34.5, flow_slope=-0.6)
 
 
 def hours(n=24, price=lambda i: 2.0, t_out=lambda i: 3.0, blocked=lambda i: False):
@@ -57,11 +57,11 @@ def test_max_pause_breaks_long_gap() -> None:
     assert best <= 6
 
 
-def test_shift_and_flow() -> None:
+def test_flow() -> None:
     p = make_plan(hours(), M, [], 20.5)
     h = next(x for x in p.hours if x["heat_kw"] > 0)
     assert h["flow"] == round(20.5 + h["heat_kw"] / M.emission_kw_k, 1)
-    assert M.shift_min <= h["shift"] <= M.shift_max
+    assert "shift" not in h
 
 
 def test_deterministic() -> None:
@@ -253,12 +253,12 @@ def test_flow_target_is_direct_and_bounded() -> None:
     assert all(x["flow"] is None or 25.0 <= x["flow"] <= 45.0 for x in p.hours)
 
 
-def test_low_and_even_caps_flow_at_curve() -> None:
-    """Lavt og jævnt: fremløbet holdes på varmepumpens egen kurve, så varmen spredes over flere timer."""
-    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, emission_kw_k=0.283, curve_c0=34.5, curve_slope=-0.6)
+def test_low_and_even_caps_flow_at_learned_flow() -> None:
+    """Lavt og jævnt: fremløbet holdes på det lærte fremløb, så varmen spredes over flere timer."""
+    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, emission_kw_k=0.283, flow_c0=34.5, flow_slope=-0.6)
     hs = hours(24, price=lambda i: 1.0 if i < 6 else 3.0, t_out=lambda i: 1.0)
     free = make_plan(hs, m, [], 20.0)
-    even = make_plan(hs, m, [], 20.0, flow_over_curve=0.0)
+    even = make_plan(hs, m, [], 20.0, flow_margin=0.0)
     on = lambda p: sum(1 for x in p.hours if x["heat_kw"] > 0)
     assert max(x["flow"] or 0 for x in even.hours) <= 34.5 - 0.6 + 0.25
     assert on(even) > on(free) and abs(even.heat_kwh - free.heat_kwh) < 2.0

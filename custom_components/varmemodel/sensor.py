@@ -16,7 +16,7 @@ from .coordinator import SourceState, VarmemodelCoordinator
 from .entity import VarmemodelEntity
 
 PRECISION = {"heat_loss": 0, "cop": 2, "cop_steady": 2, "cop_loss": 1, "emission": 3, "max_power": 2, "min_power": 2,
-             "curve": 1, "defrost": 2, "cooling": 0, "wind_effect": 1}
+             "flow_learned": 1, "defrost": 2, "cooling": 0, "wind_effect": 1}
 
 
 def _ts_local(ts: float | None) -> str | None:
@@ -32,7 +32,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
             ents += [FitSensor(c, s, k) for k in FIT_KEYS]
             ents += [DailyCopSensor(c, s, "yesterday"), DailyCopSensor(c, s, "week"), CopTodaySensor(c, s)]
             ents += [PlanNowSensor(c, s), CommandSensor(c, s), PlanValueSensor(c, s, "plan_flow", "flow", "°C", 1),
-                     PlanValueSensor(c, s, "plan_shift", "shift", None, 0), PlanCostSensor(c, s)]
+                     PlanCostSensor(c, s)]
         else:
             # Luft-luft: el pr. døgn og en plan med anbefalet styring (el pr. time, gulv og loft pr. rum)
             ents += [DailyElSensor(c, s, "yesterday"), DailyElSensor(c, s, "week"),
@@ -362,7 +362,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
         nxt_off = next((x["ts"] for x in hrs if x["heat_kw"] == 0 and x["ts"] > (h.get("ts") or 0)), None)
         upd = m.get("updated")
         return {
-            "heat_kw": h.get("heat_kw"), "flow": h.get("flow"), "shift": h.get("shift"), "price": h.get("price"),
+            "heat_kw": h.get("heat_kw"), "flow": h.get("flow"), "price": h.get("price"),
             "t_out": h.get("t_out"), "cop": h.get("cop"),
             "reason": p.get("reason"), "warnings": p.get("warnings") or None, "target": p.get("target"),
             "boost": p.get("boost"), "rooms_skipped": p.get("rooms_skipped") or None, "rooms_held": p.get("rooms_held") or None,
@@ -371,7 +371,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "next_on": _ts_local(nxt_on), "next_off": _ts_local(nxt_off),
             "updated": _ts_local(upd), "valid_until": _ts_local(upd + 2700) if upd else None,
             "inputs_ok": m.get("inputs_ok"), "missing": m.get("missing") or None, "horizon_h": m.get("horizon_h"),
-            "plan": [{"t": _ts_local(x["ts"]), **{k: x.get(k) for k in ("heat_kw", "flow", "shift", "price", "t_out", "blocked", "cost")},
+            "plan": [{"t": _ts_local(x["ts"]), **{k: x.get(k) for k in ("heat_kw", "flow", "price", "t_out", "blocked", "cost")},
                       **({"setpoint": x["setpoint"]} if x.get("setpoint") is not None else {}),
                       **({"preload": x["preload"]} if x.get("preload") else {})} for x in hrs],
             "kind": p.get("kind") or "hydronic", "caps": p.get("caps") or None, "e_min": p.get("e_min"), "e_max": p.get("e_max"),
@@ -391,7 +391,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
 
 
 class PlanValueSensor(SourceEntity, SensorEntity):
-    """Planens fremløb eller kurve-forskydning i denne time (tom når planen ikke varmer)."""
+    """Planens fremløb i denne time (tom når planen ikke varmer)."""
 
     _attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -511,9 +511,8 @@ class CommandSensor(SourceEntity, SensorEntity):
         c = self._c
         since = c.get("since_onoff")
         return {
-            # Vandbåren: fremløbsmålet (heat-tilstand, ingen kurve). Luft-luft: setpunkt.
-            "flow_setpoint": c.get("shift") if self.src.kind == SOURCE_HYDRONIC else None,
-            "shift": None if self.src.kind == SOURCE_HYDRONIC else c.get("shift"),
+            # Vandbåren: fremløbsmålet. Luft-luft: setpunkt.
+            "flow_setpoint": c.get("flow") if self.src.kind == SOURCE_HYDRONIC else None,
             "setpoint": c.get("setpoint"), "reason": c.get("reason"),
             "since": _ts_local(since) if since and since > 0 else None,
             "writes_today": c.get("writes", 0), "switches_today": c.get("flips", 0), "heat_in_blocked_today": c.get("blocked_on", 0),

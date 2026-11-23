@@ -9,7 +9,7 @@ from custom_components.varmemodel.calibration import (
     Hour,
     calibrate,
     fit_cooling,
-    fit_curve,
+    fit_flow,
     fit_heat_loss,
     guard,
     quantile,
@@ -35,7 +35,7 @@ def synth(days: int = 50, seed: int = 1) -> list[Hour]:
         t_flow = C0 + C1 * t_out + offset
         cop = A + B * t_out + C * t_flow + rnd.gauss(0, 0.05)
         hours.append(Hour(ts=1_700_000_000 + i * 3600, q=q, e=q / cop, t_out=t_out, t_in=t_in, t_flow=t_flow,
-                          comp=60, dhw=0, defrost=0, setpoint=t_flow, offset=offset))
+                          comp=60, dhw=0, defrost=0))
     return hours
 
 
@@ -66,9 +66,17 @@ def test_heat_loss_assumes_typical_indoor_when_missing() -> None:
     assert f.source == "fit" and f.extra["hours_with_assumed_indoor"] > 0
 
 
-def test_curve_removes_offset() -> None:
-    f = fit_curve(synth())
-    assert abs(f.value - C0) < 0.1 and abs(f.extra["slope"] - C1) < 0.02
+def test_flow_learned_from_measured_flow() -> None:
+    """Det lærte fremløb: målt fremløb ved ren rumvarme mod udetemperatur (medianen af de tilfældige tillæg er 1)."""
+    hs = synth()
+    for h in hs:
+        h.t_flow = C0 + C1 * h.t_out + (1.0 if h.ts % 7200 else 0.0)
+    f = fit_flow(hs)
+    assert abs(f.value - (C0 + 1.0)) < 0.2 and abs(f.extra["slope"] - C1) < 0.05
+    # Varmt vand og korte kørsler tæller ikke med
+    for h in hs:
+        h.dhw = 10
+    assert fit_flow(hs).value is None
 
 
 def test_cooling_time_constant() -> None:
@@ -85,7 +93,7 @@ def test_cooling_time_constant() -> None:
 
 def test_calibrate_returns_all_keys() -> None:
     res = calibrate(synth())
-    assert set(res) == {"heat_loss", "emission", "max_power", "min_power", "curve", "defrost", "cooling", "wind_effect"}
+    assert set(res) == {"heat_loss", "emission", "max_power", "min_power", "flow_learned", "defrost", "cooling", "wind_effect"}
     assert res["emission"].value is not None
 
 

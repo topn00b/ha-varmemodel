@@ -73,7 +73,7 @@ async def test_unload(ha: HomeAssistant, entry: MockConfigEntry) -> None:
 async def test_migrate_from_version_1(ha: HomeAssistant) -> None:
     """Version 1 (én varmepumpe) flyttes til huset med varmepumpen som varmekilde. Entitets-id'er og data bevares."""
     v1 = {"name": "Luft-vand", "electricity_energy": "sensor.vp_el", "heat_energy": "sensor.vp_varme", "outdoor_temp": "sensor.ude",
-          "indoor_temps": ["sensor.rum_1"], "compressor": "binary_sensor.kompressor", "curve_offset_zero": 17}
+          "indoor_temps": ["sensor.rum_1"], "compressor": "binary_sensor.kompressor", "defrost": "binary_sensor.afrim"}
     e = MockConfigEntry(domain=DOMAIN, data=v1, title="Luft-vand", version=1,
                         subentries_data=[_sub({"name": "Stue", "temperature": "sensor.rum_1"}, "room")])
     e.add_to_hass(ha)
@@ -90,7 +90,7 @@ async def test_migrate_from_version_1(ha: HomeAssistant) -> None:
     assert e.version == 2 and e.title == "Hus"
     src = [s for s in e.subentries.values() if s.subentry_type == "source"]
     assert len(src) == 1 and src[0].data["source_type"] == "hydronic" and src[0].data["legacy_ids"] is True
-    assert src[0].data["curve_offset_zero"] == 17 and "electricity_energy" not in e.data
+    assert src[0].data["defrost"] == "binary_sensor.afrim" and "electricity_energy" not in e.data
     assert e.data["outdoor_temp"] == "sensor.ude"
     # Samme entitet (samme entitets-id), nu på varmekildens underpunkt
     new = reg.async_get(old.entity_id)
@@ -108,8 +108,7 @@ async def test_collect_with_weather_and_setpoint(ha: HomeAssistant) -> None:
     ha.states.async_set("climate.vand", "heat", {"temperature": 35})
     ha.states.async_set("climate.vp", "auto", {"temperature": 19})
     await async_wait_recording_done(ha)
-    hyd = {**HYD, "flow_setpoint": "climate.vand", "flow_setpoint_attribute": "temperature", "curve_offset": "climate.vp",
-           "curve_offset_attribute": "temperature", "curve_offset_zero": 17}
+    hyd = dict(HYD)
     e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "weather": "weather.hjem"}, subentries_data=[_sub(hyd, "source")])
     e.add_to_hass(ha)
     assert await ha.config_entries.async_setup(e.entry_id)
@@ -120,7 +119,7 @@ async def test_collect_with_weather_and_setpoint(ha: HomeAssistant) -> None:
     nxt = int(h0 + 3600)
     assert house[nxt]["ws"] == 5.0
     sid = next(iter(per))
-    assert per[sid][nxt]["sp"] == 35.0 and per[sid][nxt]["off"] == 2.0
+    assert "sp" not in per[sid].get(nxt, {}) and "off" not in per[sid].get(nxt, {})
     await c.async_calibrate()
     assert c.status != "error", c.status_note
 

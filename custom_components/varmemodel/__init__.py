@@ -115,10 +115,14 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 def _remove_retired(hass: HomeAssistant, entry: VarmemodelConfigEntry) -> None:
-    """Fjern entiteter, som integrationen ikke længere laver (0.7.0: timemodellen for COP)."""
+    """Fjern entiteter, som integrationen ikke længere laver.
+
+    0.7.0: timemodellen for COP. 0.8.0: LG's varmekurve, planens kurve-forskydning og »fremløb over kurven«.
+    """
     reg = er.async_get(hass)
     for e in er.async_entries_for_config_entry(reg, entry.entry_id):
-        if e.domain == "sensor" and e.unique_id.endswith("_cop"):
+        if (e.domain == "sensor" and e.unique_id.endswith(("_cop", "_curve", "_plan_shift"))) or (
+                e.domain == "number" and e.unique_id.endswith("_flow_over_curve")):
             reg.async_remove(e.entity_id)
 
 

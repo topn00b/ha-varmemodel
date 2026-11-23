@@ -11,7 +11,7 @@ Rene funktioner uden Home Assistant. Alle tal kommer fra kalibreringen:
 3. Hvert rum forudsiges time for time med sin rummodel. Kommer et rum under
    sin min. + usikkerhed, lægges der varme i den billigste time før.
 4. Pauser længere end den valgte grænse brydes med den billigste time i pausen.
-5. Fremløb = mål + effekt ÷ gulvets afgivelse; kurve-forskydning = fremløb − kurven.
+5. Fremløb = mål + effekt ÷ gulvets afgivelse.
 """
 
 from __future__ import annotations
@@ -54,10 +54,8 @@ class SourceModel:
     p_min: float = 2.0  # kW varme – laveste stabile
     cop: tuple[float, float, float, float] = (3.0, 0.15, -0.04, 0.0)  # a, b, c, d
     emission_kw_k: float = 0.25  # gulvets afgivelse
-    curve_c0: float = 34.0  # kurven ved 0 °C uden forskydning
-    curve_slope: float = -0.6
-    shift_min: int = -5
-    shift_max: int = 5
+    flow_c0: float = 34.0  # lært fremløb ved 0 °C ude (ren rumvarme)
+    flow_slope: float = -0.6  # lært fremløb: ændring pr. °C ude
 
 
 @dataclass
@@ -159,7 +157,7 @@ def estimate_room(r: PlanRoom, t0: float, ts0: float, end: float, q5: dict[int, 
 def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
-              red_allowance: float = 0.0, preload: float = 0.0, flow_over_curve: float | None = None) -> Plan:
+              red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None) -> Plan:
     """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra.
 
     ``boost`` (»jeg fryser«) hæver målet og rummenes min. i de første ``boost_hours`` timer.
@@ -190,12 +188,12 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
     q = [0.0] * n
     free = [i for i, h in enumerate(hours) if not h.blocked]
 
-    # Lavt og jævnt: fremløbet må højst ligge ``flow_over_curve`` °C over varmepumpens egen kurve ved timens
+    # Lavt og jævnt: fremløbet må højst ligge ``flow_margin`` °C over det lærte fremløb ved timens
     # udetemperatur. Det begrænser effekten pr. time, så varmen spredes over flere timer (højere COP, færre afrimninger).
     pcap = [model.p_max] * n
-    if flow_over_curve is not None and model.emission_kw_k > 0:
+    if flow_margin is not None and model.emission_kw_k > 0:
         for i, h in enumerate(hours):
-            fmax = model.curve_c0 + model.curve_slope * h.t_out + flow_over_curve
+            fmax = model.flow_c0 + model.flow_slope * h.t_out + flow_margin
             pcap[i] = min(model.p_max, max(model.p_min, (fmax - target) * model.emission_kw_k))
 
     def add_cost(i: int, amount: float) -> float:
@@ -287,13 +285,9 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
     for i, h in enumerate(hours):
         p = round(q[i], 2)
         flow = flow_for(model, p, target) if p > 0 else None
-        shift = None
-        if p > 0:
-            shift = round(flow - (model.curve_c0 + model.curve_slope * h.t_out))
-            shift = max(model.shift_min, min(model.shift_max, shift))
         cop = _cop(model, h.t_out, p, target) if p > 0 else None
         el = p / cop if cop else 0.0
-        plan.hours.append({"ts": h.ts, "heat_kw": p, "flow": flow, "shift": shift,
+        plan.hours.append({"ts": h.ts, "heat_kw": p, "flow": flow,
                            "price": round(h.price, 3), "t_out": round(h.t_out, 1), "blocked": h.blocked,
                            "cop": round(cop, 2) if cop else None, "cost": round(el * h.price, 2),
                            "preload": round(pq[i], 2)})
@@ -392,7 +386,7 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
         setpoint = None
         if e > 0:
             setpoint = sp if sp is not None else round(2 * (max((need(r, i) for r in planned), default=21.0) + 1.0)) / 2
-        plan.hours.append({"ts": h.ts, "heat_kw": e, "el_kw": e, "flow": None, "shift": None, "setpoint": setpoint,
+        plan.hours.append({"ts": h.ts, "heat_kw": e, "el_kw": e, "flow": None, "setpoint": setpoint,
                            "price": round(h.price, 3), "t_out": round(h.t_out, 1), "blocked": h.blocked, "cop": None,
                            "cost": round(e * h.price, 2), "preload": round(pq[i], 2)})
         plan.el_kwh += e

@@ -87,9 +87,6 @@
       "min_power": {
         "name": "Lowest measured power"
       },
-      "curve": {
-        "name": "Heating curve at 0 °C"
-      },
       "defrost": {
         "name": "Defrosts per compressor hour"
       },
@@ -152,9 +149,6 @@
       "plan_flow": {
         "name": "Plan flow temperature"
       },
-      "plan_shift": {
-        "name": "Plan curve offset"
-      },
       "plan_cost": {
         "name": "Plan cost"
       },
@@ -176,6 +170,9 @@
       },
       "cop_today": {
         "name": "COP today"
+      },
+      "flow_learned": {
+        "name": "Learned flow at 0 °C outdoor"
       }
     },
     "button": {
@@ -214,8 +211,8 @@
       "preload": {
         "name": "Preload per 6 h of blocking"
       },
-      "flow_over_curve": {
-        "name": "Max flow above the heating curve"
+      "flow_margin": {
+        "name": "Max flow above the learned flow"
       }
     },
     "binary_sensor": {
@@ -249,19 +246,12 @@
             "compressor": "Compressor running",
             "defrost": "Defrost",
             "dhw": "Domestic hot water",
-            "flow_setpoint": "Flow setpoint (entity)",
-            "flow_setpoint_attribute": "Flow setpoint: attribute (empty = state)",
-            "curve_offset": "Curve offset (entity)",
-            "curve_offset_attribute": "Curve offset: attribute (empty = state)",
-            "curve_offset_zero": "Curve offset: value meaning 0",
             "electricity_backup": "Additional electricity meter (e.g. cloud)"
           },
           "data_description": {
             "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
             "compressor": "Used for full running hours, starts and splitting heat between rooms.",
             "dhw": "Hours with hot water are excluded from space heating.",
-            "flow_setpoint": "E.g. the water setpoint. Used to fit the heating curve.",
-            "curve_offset_zero": "E.g. 17 if a target of 17 means curve 0.",
             "electricity_backup": "Used for hours where the main meter has no data, e.g. before it was installed. Scaled automatically to the main meter using the hours where both have data."
           }
         },

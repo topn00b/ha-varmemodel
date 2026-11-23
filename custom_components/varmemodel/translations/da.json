@@ -87,9 +87,6 @@
       "min_power": {
         "name": "Laveste målte effekt"
       },
-      "curve": {
-        "name": "Varmekurve ved 0 °C"
-      },
       "defrost": {
         "name": "Afrimninger pr. kompressortime"
       },
@@ -152,9 +149,6 @@
       "plan_flow": {
         "name": "Plan fremløb"
       },
-      "plan_shift": {
-        "name": "Plan kurve-forskydning"
-      },
       "plan_cost": {
         "name": "Plan pris"
       },
@@ -176,6 +170,9 @@
       },
       "cop_today": {
         "name": "COP i dag"
+      },
+      "flow_learned": {
+        "name": "Lært fremløb ved 0 °C ude"
       }
     },
     "button": {
@@ -214,8 +211,8 @@
       "preload": {
         "name": "Forvarm pr. 6 timers blokering"
       },
-      "flow_over_curve": {
-        "name": "Maks. fremløb over varmekurven"
+      "flow_margin": {
+        "name": "Maks. fremløb over det lærte"
       }
     },
     "binary_sensor": {
@@ -249,19 +246,12 @@
             "compressor": "Kompressor kører",
             "defrost": "Afrimning",
             "dhw": "Varmt vand",
-            "flow_setpoint": "Fremløbs-setpunkt (entitet)",
-            "flow_setpoint_attribute": "Fremløbs-setpunkt: attribut (tom = tilstand)",
-            "curve_offset": "Kurve-forskydning (entitet)",
-            "curve_offset_attribute": "Kurve-forskydning: attribut (tom = tilstand)",
-            "curve_offset_zero": "Kurve-forskydning: værdi der betyder 0",
             "electricity_backup": "Supplerende elmåler (fx skyen)"
           },
           "data_description": {
             "heat_energy": "Uden den kan COP, varmetab og gulvets afgivelse ikke regnes ud.",
             "compressor": "Bruges til fulde driftstimer, starter og fordeling af varmen på rummene.",
             "dhw": "Timer med varmt vand holdes ude af rumopvarmningen.",
-            "flow_setpoint": "Fx varmepumpens vand-setpunkt. Bruges til at finde varmekurven.",
-            "curve_offset_zero": "Fx 17, hvis måltemperaturen 17 betyder kurve 0.",
             "electricity_backup": "Bruges i timer, hvor hovedmåleren ikke har data – fx før den blev sat op. Skaleres automatisk til hovedmålerens niveau ud fra de timer, hvor begge har data."
           }
         },

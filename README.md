@@ -15,7 +15,7 @@ Integrationen **styrer ingenting**. Den udgiver tal som sensorer, og hvert tal v
 | COP i går / seneste 7 døgn | varme ÷ el | Det rå regnestykke: kWh varme delt med kWh el. Attributterne viser også COP uden varmt vand, hvad den stabile COP-model forventede for samme vejr og fremløb, og de seneste 14 døgn. |
 | Gulvets afgivelse | kW pr. grad fremløb over rum | 25 %-fraktilen af varme ÷ (fremløb − rum) i driftstimer. |
 | Maks. effekt / laveste målte effekt | kW | 90 %-fraktilen af varmen i fulde driftstimer / 10 %-fraktilen i timer, hvor kompressoren kørte hele timen. Kan kun blive lav, hvis varmepumpen faktisk har kørt lavt. |
-| Varmekurve ved 0 °C | °C, plus hældning | Setpunkt minus kurve-forskydning mod udetemperatur. |
+| Lært fremløb ved 0 °C ude | °C, plus hældning | Målt fremløb ved ren rumvarme mod udetemperatur. |
 | Afrimninger pr. kompressortime | i alt og pr. udetemperatur og effekt | Talt time for time. Kun rapport. |
 | Vind: ekstra varmetab pr. m/s | % | Varmetab med vind og sol: varme = H·ΔT·(1 + w·vind) − G − S·sol over 48-timers blokke. Attributterne viser solens gratis varme ved klar himmel, varmetabet i stille vejr og afkølingen i pauser pr. vindretning. Kræver vejr-entitet og ca. 30 dages opsamlede vejrdata. |
 | Afkølingstid | timer | Hvor hurtigt rummene falder i pauser uden varme. |
@@ -52,7 +52,6 @@ Opbygningen er **huset** med **varmekilder** og **rum** som underpunkter. Rummen
 | Varme leveret (kWh, samlet) | anbefalet | – |
 | Fremløb / retur | valgfrit | – |
 | Kompressor / afrimning / varmt vand | valgfrit | kompressor / afrimning valgfrit |
-| Fremløbs-setpunkt og kurve-forskydning | valgfrit (varmekurven) | – |
 | Enhedens egen føler (entitet + attribut) | – | valgfrit, fx `current_temperature` |
 
 En luft-vand-kilde får alle kalibreringstallene herunder. En luft-luft-kilde uden varmemåler får el pr. døgn, og rummene lærer, hvor mange grader de får pr. kWh el.
@@ -99,7 +98,7 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 2. Varmen lægges i portioner i de timer, hvor den koster mindst el (pris ÷ COP). COP falder med fremløbet, så jævn, lav drift vinder, når priserne er nogenlunde ens. Hver time med varme får mindst den laveste effekt, varmepumpen kan holde.
 3. **Rummene forudsiges** time for time med rummodellerne (varme nu og forsinket, afkøling, gratis varme, nabozoner). Kommer et rum under min. + sin usikkerhed, lægges der varme i den billigste time før. Den forsinkede del af de første 6 timer kommer fra den målte varme i de seneste 6 timer, fordi gulvet afgiver den med forsinkelse.
 4. For lange pauser brydes med den billigste time.
-5. **Fremløbsmål** = mål + effekt ÷ gulvets typiske afgivelse (medianen), begrænset til 25–45 °C og rundet til 0,5 °C. Varmepumpen sættes i heat-tilstand og får fremløbsmålet direkte, så der er ingen omregning via varmekurven. Kurve-forskydningen (fremløb − varmekurven) vises kun til orientering. Den anbefalede styring giver fremløbsmålet (`flow_setpoint`); det ændres højst én gang i timen og med mindst 1 °C.
+5. **Fremløbsmål** = mål + effekt ÷ gulvets typiske afgivelse (medianen), begrænset til 25–45 °C og rundet til 0,5 °C. Varmepumpen sættes i heat-tilstand og får fremløbsmålet direkte. Den anbefalede styring giver fremløbsmålet (`flow_setpoint`); det ændres højst én gang i timen og med mindst 1 °C.
 
 **Indstillinger (tal-entiteter på huset):** *Maks. pause uden gulvvarme*, *Komfort over min.*, *»Jeg fryser« hæver målet*, *»Jeg fryser« gælder højst* (timer), *Må falde under min. i blokerede timer*, *Forsigtighed ved kulde* (%) og *Forvarm pr. 6 timers blokering* (°C). De påvirker kun planen.
 
@@ -109,7 +108,7 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 
 **Varmecentral (valgfri):** vælg rumføleren i et uopvarmet rum (kælder/teknikrum), som kun varmes af tab fra varmeinstallationen. Rummets tab til jorden, *varmetab (W/K)* × (rum − jordtemperatur), er spildvarme, som varmemåleren tæller med. Det trækkes fra, før husets eget varmetab fittes, og planen lægger det til behovet med rummets snit de seneste 7 døgn. Tabet holdes fast (sæt det ud fra U·A for vægge, gulv og dør), fordi det ikke kan skilles fra husets tab med få data. Et frit fit af begge vises som diagnose (`plant_room_free_fit`) og markeres brugbart først ved ≥ 40 blokke, ≥ 3 K spredning og |korrelation| < 0,7. Et varmere teknikrum betyder mere tab; bedre isolerede rør og beholdere sænker det.
 
-**Lavt og jævnt (standard):** fremløbet må højst ligge *Maks. fremløb over varmekurven* over varmepumpens egen kurve ved timens udetemperatur (standard 0 °C, altså højst kurven). Det begrænser effekten pr. time, så varmen spredes over flere timer ved lavere effekt. Det giver lavere fremløb, højere COP, færre afrimninger og færre start/stop. Sæt den højere, hvis planen må koncentrere varmen mere i de billigste timer.
+**Lavt og jævnt (standard):** fremløbet må højst ligge *Maks. fremløb over det lærte* over det fremløb, modellen har lært huset bruger ved timens udetemperatur (standard 0 °C). Det begrænser effekten pr. time, så varmen spredes over flere timer ved lavere effekt. Det giver lavere fremløb, højere COP, færre afrimninger og færre start/stop. Sæt den højere, hvis planen må koncentrere varmen mere i de billigste timer.
 
 **Forvarmning før blokeringer:** gulvvarme, der skal være slukket i mange timer (fx dyr el), skal lades op før. I blokerede timer hæves rummenes krav med *Forvarm pr. 6 timers blokering* for hver 6 timer inde i blokeringen, dog højst 1 °C. Med standarden 0,3 °C skal rummene stå 0,2 °C højere sidst i en blokering på 4 timer og 0,35 °C højere sidst i en på 7 timer. Planen lægger derfor mere varme før lange blokeringer, mens *Komfort over min.* kan holdes lav resten af tiden. Begrundelsen viser, hvor meget der forvarmes til den næste blokering på mindst 3 timer. 0 slår det fra.
 
@@ -126,7 +125,7 @@ Reglerne:
 - aldrig varme i blokerede timer; slukker straks
 - mindst 60 min. tændt og 30 min. slukket
 - højst én ændring pr. 15 min.
-- kurve-forskydningen holdes mindst 1 time og ændres med mindst 1 K
+- fremløbsmålet holdes mindst 1 time og ændres med mindst 1 °C
 
 Attributterne tæller pr. døgn skrivninger, tænd/sluk-skift og varme i blokerede timer. *within_limits* er sand, når der er højst 20 skrivninger, højst 8 skift og ingen varme i blokerede timer.
 
@@ -165,7 +164,7 @@ Attributterne tæller pr. døgn skrivninger, tænd/sluk-skift og varme i blokere
 
 **Energitiltag:** Vælg en kalender under *Konfigurer*. Hver begivenhed er et tiltag. Ved kalibreringen regnes varmetabet for sig før og efter datoen (dagen selv udelades). Det kræver ca. 16 døgn på hver side. Resultatet ses på sensoren *Energitiltag*.
 
-**Sensorer pr. varmekilde:** *Plan nu* (varme / slukket / blokeret, med effekt, fremløb, forskydning, pris, grund, næste start/stop, hele planen og rummenes forudsigelse i attributterne), *Plan fremløb*, *Plan kurve-forskydning* og *Plan pris* (forventet elpris for perioden).
+**Sensorer pr. varmekilde:** *Plan nu* (varme / slukket / blokeret, med effekt, fremløb, pris, grund, næste start/stop, hele planen og rummenes forudsigelse i attributterne), *Plan fremløb* og *Plan pris* (forventet elpris for perioden).
 
 Til planlægning bruges COP-formlen fra *COP i stabil drift*, men højere effekt eller fremløb må aldrig gøre COP bedre: et positivt effektled holdes fast ved referenceeffekten (det skyldes typisk koldt gulv efter pauser, ikke effekten selv).
 
@@ -219,7 +218,7 @@ sources:
     el_power: sensor.heat_pump_power    # eleffekt nu (kW eller W)
     flow_rate: sensor.flow_rate         # L/min
     tank: sensor.hot_water_temperature
-    pump: input_select.pump_curve       # cirkulationspumpe efter kortslutningen
+    pump: input_select.pump_speed       # cirkulationspumpe efter kortslutningen
     pump_running: binary_sensor.pump_running
     a: sensor.pipe_heat_pump_out        # følere: A varmepumpe ud, B manifold ind,
     b: sensor.pipe_manifold_in          #         C manifold retur, D varmepumpe ind
@@ -304,7 +303,7 @@ Hver sensor har attributter, der viser datagrundlaget:
 | **COP i går** / **seneste 7 døgn** | – | Det rå regnestykke: kWh varme ÷ kWh el. Attributterne viser COP uden varmt vand og `forventet_stabil_cop`. `forskel_fra_stabil_pct` = hvor meget dårligere dagen var end stabil drift. `seneste_14_døgn` er en liste til grafer. | 2–5 |
 | **Gulvets afgivelse** | kW/K | Hvor mange kW gulvet afgiver pr. grad fremløb over rumtemperaturen. Højt = gulvet kan klare sig med lavt fremløb. | 0,1–0,5 |
 | **Maks. effekt** / **Laveste målte effekt** | kW | Største og mindste varmeeffekt, varmepumpen har leveret i fulde driftstimer. Den laveste viser, hvor lavt den kan modulere, før den begynder at starte og stoppe. | |
-| **Varmekurve ved 0 °C** | °C | Fremløbet ved 0 °C ude uden kurve-forskydning. `slope` = ændring pr. grad ude (negativ). | 30–40 °C |
+| **Lært fremløb ved 0 °C ude** | °C | Det fremløb, huset har brugt ved ren rumvarme (kompressoren hele timen, ikke varmt vand), ved 0 °C ude. `slope` = ændring pr. grad ude (negativ). Bruges som loft i »lavt og jævnt«. | 30–40 °C |
 | **Afrimninger pr. kompressortime** | – | Gennemsnit. `per_bin` viser det fordelt på udetemperatur og høj/lav effekt – lav effekt afrimer typisk sjældnere. | 0–1,5 |
 | **Afkølingstid** | timer | Husets tidskonstant: hvor længe det tager at tabe varmen uden opvarmning. Lang = tungt hus med stor varmekapacitet. | 50–500 t |
 | **Vind: ekstra varmetab pr. m/s** | % | Hvor mange % varmetabet stiger pr. m/s vind. `sun_kw_clear` = solens gratis varme ved klar himmel. `sectors` = afkøling pr. vindretning – hvilken side af huset er mest utæt. Kræver ca. 30 dages vejrdata. | 1–5 %/(m/s) |

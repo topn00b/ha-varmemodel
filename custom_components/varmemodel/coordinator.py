@@ -59,9 +59,6 @@ from .const import (
     CONF_INDOOR,
     CONF_LEGACY_IDS,
     CONF_MIGRATED_SOURCE,
-    CONF_OFFSET,
-    CONF_OFFSET_ATTR,
-    CONF_OFFSET_ZERO,
     CONF_OUTDOOR,
     CONF_RETURN,
     CONF_ROOM_ALWAYS_OPEN,
@@ -76,8 +73,6 @@ from .const import (
     CONF_ROOM_TEMP,
     CONF_ROOM_VALVE,
     CONF_ROOM_WEIGHT,
-    CONF_SETPOINT,
-    CONF_SETPOINT_ATTR,
     CONF_SOURCE_NAME,
     CONF_SOURCE_TYPE,
     CONF_UNIT_TEMP,
@@ -97,7 +92,7 @@ from .const import (
     CONF_RED_ALLOWANCE,
     CONF_COLD_CAUTION,
     CONF_PRELOAD,
-    CONF_FLOW_OVER_CURVE,
+    CONF_FLOW_MARGIN,
     CONF_MEASURES_CALENDAR,
     CONF_PLANT_ROOM,
     CONF_PLANT_LOSS,
@@ -124,7 +119,7 @@ STORE_VERSION = 1
 HOLD_S = 30 * 60
 EST_MARGIN_MAX = 1.0  # forudsagte rum: usikkerheden vokser med rummets præcision pr. 6 timer uden måling, højst 1 °C
 STARTUP_GRACE_S = 10 * 60  # ingen »Mangler data« de første 10 min. efter start (forudsigelsen bruges dog)
-SOURCE_FIELDS = ("comp", "comp_n", "dhw", "dhw_n", "df", "df_n", "sp", "off", "ut")
+SOURCE_FIELDS = ("comp", "comp_n", "dhw", "dhw_n", "df", "df_n", "ut")
 
 
 def _ts(v: Any) -> float:
@@ -169,9 +164,10 @@ class SourceState:
         self.fits = d.get("fits", {})
         self.slots = d.get("slots", {})
         self.daily = d.get("daily", {})
-        # 0.7.0: timemodellen for COP er fjernet
-        self.accepted.pop("cop", None)
-        self.fits.pop("cop", None)
+        # 0.7.0: timemodellen for COP er fjernet; 0.8.0: LG's varmekurve er erstattet af det lærte fremløb
+        for k in ("cop", "curve"):
+            self.accepted.pop(k, None)
+            self.fits.pop(k, None)
 
 
 class VarmemodelCoordinator:
@@ -278,6 +274,8 @@ class VarmemodelCoordinator:
         self.rooms = data.get("rooms", {})
         self.room_heat = data.get("room_heat", {})
         self.settings = data.get("settings", {})
+        if "flow_over_curve" in self.settings:  # 0.8.0: omdøbt
+            self.settings.setdefault("flow_margin", self.settings.pop("flow_over_curve"))
         self.plan_log = data.get("plan_log", {})
         self.fc_log = data.get("fc_log", {})
         self.yesterday = data.get("yesterday", {})
@@ -430,7 +428,7 @@ class VarmemodelCoordinator:
 
     # ------------------------------------------------------------ opsamling
     async def async_collect(self) -> None:
-        """Opsummér time for time: varmekildernes kompressor, varmt vand, afrimning, kurve og
+        """Opsummér time for time: varmekildernes kompressor, varmt vand, afrimning og
         enhedstemperatur samt husets vejr, udluftning og telestater. Hentes fra HA's historik,
         så huller efter en genstart fyldes op igen (historikken gemmes typisk 10–14 dage)."""
         now = time.time()
@@ -494,13 +492,6 @@ class VarmemodelCoordinator:
                         out[h][short + "_n"] = n
                     if key == CONF_COMPRESSOR and hyd is not None and sid == hyd.sid:
                         comp_iv_hyd = agg.intervals(ch, end)
-            if eid := src.eid(CONF_SETPOINT):
-                for h, v in agg.step_mean(attr_series(eid, src.conf.get(CONF_SETPOINT_ATTR) or None, 0.0, False), start, end).items():
-                    out[h]["sp"] = v
-            if eid := src.eid(CONF_OFFSET):
-                zero = float(src.conf.get(CONF_OFFSET_ZERO) or 0)
-                for h, v in agg.step_mean(attr_series(eid, src.conf.get(CONF_OFFSET_ATTR) or None, zero, True), start, end).items():
-                    out[h]["off"] = v
             if eid := src.eid(CONF_UNIT_TEMP):
                 for h, v in agg.step_mean(attr_series(eid, src.conf.get(CONF_UNIT_TEMP_ATTR) or None, 0.0, False), start, end).items():
                     out[h]["ut"] = v
@@ -735,7 +726,7 @@ class VarmemodelCoordinator:
                     ts=ts, q=val(s.eid(CONF_HEAT), "change"), e=e, t_out=val(outdoor, "mean"),
                     t_in=sum(tin) / len(tin) if tin and len(tin) >= max(1, len(indoor) // 2) else None,
                     t_flow=val(s.eid(CONF_FLOW), "mean"), t_ret=val(s.eid(CONF_RETURN), "mean"),
-                    comp=sc.get("comp"), dhw=sc.get("dhw"), defrost=sc.get("df_n"), setpoint=sc.get("sp"), offset=sc.get("off"),
+                    comp=sc.get("comp"), dhw=sc.get("dhw"), defrost=sc.get("df_n"), 
                     wind=c.get("ws"), wind_u=c.get("wu"), wind_v=c.get("wv"), cloud=c.get("cc"), uv=c.get("uv"), humidity=c.get("rh"),
                     t_plant=val(plant, "mean"),
                 ))
@@ -1278,8 +1269,8 @@ class VarmemodelCoordinator:
                                            min(float(st_extra.get("c", -0.04)), 0.0), min(float(st_extra.get("d", 0.0)), 0.0))),
                 # Gulvets typiske afgivelse (median) – 25 %-fraktilen gav et urealistisk højt fremløb
                 emission_kw_k=float(((a.get("emission") or {}).get("extra") or {}).get("median") or v("emission", 0.25)),
-                curve_c0=v("curve", 34.0),
-                curve_slope=float(((a.get("curve") or {}).get("extra") or {}).get("slope", -0.6)),
+                flow_c0=v("flow_learned", 34.0),
+                flow_slope=float(((a.get("flow_learned") or {}).get("extra") or {}).get("slope", -0.6)),
             )
             rooms: list[PlanRoom] = []  # rum med komfortgulv: styrer planen
             show: list[PlanRoom] = []  # alle varmekildens rum: forudsiges og vises
@@ -1316,13 +1307,13 @@ class VarmemodelCoordinator:
             p = await self.hass.async_add_executor_job(
                 partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), past_q=past_q, label=_clock,
                         boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE),
-                        preload=self.setting(CONF_PRELOAD), flow_over_curve=self.setting(CONF_FLOW_OVER_CURVE)))
+                        preload=self.setting(CONF_PRELOAD), flow_margin=self.setting(CONF_FLOW_MARGIN)))
             # Log: det planlagte for timen (første plan i timen) og rummenes forudsigelse – til »i går« og »!«
             log = self.plan_log.setdefault(sid, {})
             if p.hours and p.hours[0]["ts"] == h0 and str(h0) not in log:
                 x = p.hours[0]
                 log[str(h0)] = {"p": x["heat_kw"], "e": round(x["heat_kw"] / x["cop"], 2) if x["cop"] else 0.0,
-                                "pr": x["price"], "b": x["blocked"], "s": x["shift"]}
+                                "pr": x["price"], "b": x["blocked"], "f": x["flow"]}
             for k in [k for k in log if int(k) < h0 - 3 * 86400]:
                 del log[k]
             # Forudsigelse for alle rum: varmekildens rum med planens varme, luft-luft-kilders rum med

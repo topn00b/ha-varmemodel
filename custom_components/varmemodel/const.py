@@ -15,11 +15,6 @@ CONF_RETURN = "return_temp"
 CONF_COMPRESSOR = "compressor"
 CONF_DEFROST = "defrost"
 CONF_DHW = "dhw"
-CONF_SETPOINT = "flow_setpoint"
-CONF_SETPOINT_ATTR = "flow_setpoint_attribute"
-CONF_OFFSET = "curve_offset"
-CONF_OFFSET_ATTR = "curve_offset_attribute"
-CONF_OFFSET_ZERO = "curve_offset_zero"
 CONF_WINDOW_DAYS = "window_days"
 CONF_WEATHER = "weather"
 
@@ -39,7 +34,7 @@ FIT_KEYS: dict[str, str | None] = {
     "emission": "kW/K",
     "max_power": "kW",
     "min_power": "kW",
-    "curve": "°C",
+    "flow_learned": "°C",
     "defrost": None,
     "cooling": "h",
     "wind_effect": "%",
@@ -80,7 +75,6 @@ CONF_MIGRATED_SOURCE = "migrated_source"
 # Felter der hører til en vandbåren varmekilde (flyttes fra huset ved opgradering fra version 1)
 HYDRONIC_KEYS = (
     "electricity_energy", "heat_energy", "flow_temp", "return_temp", "compressor", "defrost", "dhw",
-    "flow_setpoint", "flow_setpoint_attribute", "curve_offset", "curve_offset_attribute", "curve_offset_zero",
 )
 
 # Planlægger (huset)
@@ -97,7 +91,7 @@ CONF_BOOST_HOURS = "boost_hours"
 CONF_RED_ALLOWANCE = "red_allowance"
 CONF_COLD_CAUTION = "cold_caution"
 CONF_PRELOAD = "preload"
-CONF_FLOW_OVER_CURVE = "flow_over_curve"
+CONF_FLOW_MARGIN = "flow_margin"
 CONF_MEASURES_CALENDAR = "measures_calendar"
 CONF_PLANT_ROOM = "plant_room"
 CONF_PLANT_LOSS = "plant_room_loss"
@@ -115,6 +109,6 @@ SETTINGS = (
     ("cold_caution", 0, 30, 1, "%", 10),
     # Bevidst forvarmning før blokeringer: rummenes krav stiger så mange °C pr. 6 timer inde i blokeringen; 0 = slået fra
     ("preload", 0, 1, 0.1, "°C", 0.3),
-    # Lavt og jævnt: højst så mange °C fremløb over varmepumpens egen kurve (effekten pr. time begrænses tilsvarende)
-    ("flow_over_curve", -5, 5, 0.5, "°C", 0.0),
+    # Lavt og jævnt: højst så mange °C over det fremløb, modellen har lært huset bruger ved timens udetemperatur
+    ("flow_margin", -5, 5, 0.5, "°C", 0.0),
 )

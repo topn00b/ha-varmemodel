@@ -28,9 +28,6 @@ from .const import (
     CONF_HEAT,
     CONF_INDOOR,
     CONF_NAME,
-    CONF_OFFSET,
-    CONF_OFFSET_ATTR,
-    CONF_OFFSET_ZERO,
     CONF_OUTDOOR,
     CONF_RETURN,
     CONF_ROOM_ALWAYS_OPEN,
@@ -45,8 +42,6 @@ from .const import (
     CONF_ROOM_TEMP,
     CONF_ROOM_VALVE,
     CONF_ROOM_WEIGHT,
-    CONF_SETPOINT,
-    CONF_SETPOINT_ATTR,
     CONF_SOURCE_NAME,
     CONF_SOURCE_TYPE,
     CONF_UNIT_TEMP,
@@ -77,9 +72,7 @@ TEMP = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", de
 TEMPS = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class="temperature", multiple=True))
 WEATHER = selector.EntitySelector(selector.EntitySelectorConfig(domain="weather"))
 BINARY = selector.EntitySelector(selector.EntitySelectorConfig(domain="binary_sensor"))
-ANY = selector.EntitySelector(selector.EntitySelectorConfig(domain=["climate", "sensor", "number", "input_number", "water_heater"]))
 TEXT = selector.TextSelector()
-ZERO = selector.NumberSelector(selector.NumberSelectorConfig(min=-50, max=100, step=0.5, mode=selector.NumberSelectorMode.BOX))
 DAYS = selector.NumberSelector(selector.NumberSelectorConfig(min=14, max=365, step=1, mode=selector.NumberSelectorMode.BOX))
 TYPE = selector.SelectSelector(
     selector.SelectSelectorConfig(options=[SOURCE_HYDRONIC, SOURCE_AIR_AIR], translation_key="source_type", mode=selector.SelectSelectorMode.LIST)
@@ -122,11 +115,6 @@ HYDRONIC_SCHEMA = vol.Schema({
     vol.Optional(CONF_COMPRESSOR): BINARY,
     vol.Optional(CONF_DEFROST): BINARY,
     vol.Optional(CONF_DHW): BINARY,
-    vol.Optional(CONF_SETPOINT): ANY,
-    vol.Optional(CONF_SETPOINT_ATTR): TEXT,
-    vol.Optional(CONF_OFFSET): ANY,
-    vol.Optional(CONF_OFFSET_ATTR): TEXT,
-    vol.Optional(CONF_OFFSET_ZERO, default=0): ZERO,
 })
 
 AIR_AIR_SCHEMA = vol.Schema({

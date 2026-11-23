@@ -12,8 +12,6 @@ En time (``Hour``) indeholder det, der er målt i den time:
   comp     minutter kompressoren kørte (valgfri, fra opsamleren)
   dhw      minutter med varmt vand (valgfri)
   defrost  antal afrimninger der startede (valgfri)
-  setpoint LG's fremløbs-setpunkt, middel (valgfri)
-  offset   kurve-forskydning, middel (valgfri)
 
 Alle tal kommer ud som ``Fit`` med værdi, datagrundlag (n), hvor godt det
 passer (r2), og hvilket udetemperatur-område det er målt i. Er der for få
@@ -44,8 +42,6 @@ class Hour:
     comp: float | None = None
     dhw: float | None = None
     defrost: float | None = None
-    setpoint: float | None = None
-    offset: float | None = None
     wind: float | None = None  # m/s, middel
     wind_u: float | None = None  # vindvektor øst-vest (m/s), til middelretning
     wind_v: float | None = None  # vindvektor nord-syd (m/s)
@@ -360,12 +356,16 @@ def fit_power(hours: list[Hour], min_n: int = 20) -> tuple[Fit, Fit]:
     return pmax, pmin
 
 
-# ---------------------------------------------------------------- kurve
-def fit_curve(hours: list[Hour], min_n: int = 24, min_spread: float = 3.0) -> Fit:
-    """LG's kurve uden forskydning: setpunkt − forskydning = C0 + C1·ude."""
-    s = [h for h in hours if None not in (h.setpoint, h.offset, h.t_out) and (h.comp is None or h.comp >= 30)]
+# ---------------------------------------------------------------- lært fremløb
+def fit_flow(hours: list[Hour], min_n: int = 24, min_spread: float = 3.0) -> Fit:
+    """Det fremløb, huset faktisk har brugt til rumvarme: fremløb = værdi (ved 0 °C ude) + hældning·ude.
+
+    Kun timer med ren rumopvarmning (kompressoren kørte hele timen, ikke varmt vand). Planen bruger det som
+    loft for fremløbet (lavt og jævnt) – modellens egen linje lært af målinger.
+    """
+    s = [h for h in hours if h.t_flow is not None and h.t_out is not None and _space_heating(h)]
     x = [h.t_out for h in s]
-    y = [h.setpoint - h.offset for h in s]
+    y = [h.t_flow for h in s]
     lo, hi = _range(x)
     if len(s) < min_n or (max(x) - min(x) if x else 0) < min_spread:
         return Fit(None, len(s), t_out_min=lo, t_out_max=hi, note="for få timer eller for lille spredning i udetemperatur")
@@ -375,7 +375,7 @@ def fit_curve(hours: list[Hour], min_n: int = 24, min_spread: float = 3.0) -> Fi
     a, b = ab
     r2, rmse = _r2_rmse(y, [a + b * v for v in x])
     return Fit(round(a, 2), len(s), r2, rmse and round(rmse, 2), lo, hi, "fit",
-               {"slope": round(b, 3), "formula": "fremløb uden forskydning = værdi + hældning·ude"})
+               {"slope": round(b, 3), "formula": "fremløb = værdi + hældning·ude (målt ved ren rumvarme)"})
 
 
 # ---------------------------------------------------------------- afrimning
@@ -447,7 +447,7 @@ def calibrate(hours: list[Hour], plant_w_k: float = 0.0, ground: float = DEFAULT
         "emission": fit_emission(hours),
         "max_power": pmax,
         "min_power": pmin,
-        "curve": fit_curve(hours),
+        "flow_learned": fit_flow(hours),
         "defrost": fit_defrost(hours),
         "cooling": fit_cooling(hours),
     }

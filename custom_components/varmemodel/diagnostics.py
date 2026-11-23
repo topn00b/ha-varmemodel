@@ -35,7 +35,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: Varmemo
             "hours": [
                 {"h": (h.ts - t0) // 3600, "q": r(h.q), "e": r(h.e), "t_out": r(h.t_out, 1), "t_in": r(h.t_in, 1),
                  "t_flow": r(h.t_flow, 1), "t_ret": r(h.t_ret, 1), "comp": r(h.comp, 0), "dhw": r(h.dhw, 0),
-                 "defrost": h.defrost, "setpoint": r(h.setpoint, 1), "offset": r(h.offset, 1)}
+                 "defrost": h.defrost}
                 for h in s.last_hours
             ],
         }
