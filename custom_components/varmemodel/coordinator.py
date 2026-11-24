@@ -226,6 +226,7 @@ class SourceState:
     slots: dict[str, list[float]] = field(default_factory=dict)
     daily: dict[str, Any] = field(default_factory=dict)
     today: dict[str, Any] = field(default_factory=dict)  # dagens COP, regnes hver time
+    health: dict[str, Any] = field(default_factory=dict)  # dagens driftstal (starter, korte kørsler, afrimninger …)
     last_hours: list[Hour] = field(default_factory=list)
     el_backup: dict[str, Any] = field(default_factory=dict)  # faktor og timer for den supplerende elmåler
 
@@ -234,7 +235,7 @@ class SourceState:
 
     def as_store(self) -> dict[str, Any]:
         return {"collected": self.collected, "accepted": self.accepted, "fits": self.fits, "slots": self.slots, "daily": self.daily,
-                "today": {"t": round(time.time()), "v": self.today}}
+                "today": {"t": round(time.time()), "v": self.today, "h": self.health}}
 
     def load(self, d: dict[str, Any]) -> None:
         self.collected = d.get("collected", {})
@@ -244,8 +245,9 @@ class SourceState:
         self.daily = d.get("daily", {})
         # Dagens tal vises straks efter en genstart eller genindlæsning (regnes ellers først efter halvandet minut)
         td = d.get("today") or {}
-        if td.get("v") and dt_util.as_local(dt_util.utc_from_timestamp(float(td.get("t") or 0))).date() == dt_util.now().date():
-            self.today = td["v"]
+        if (td.get("v") or td.get("h")) and dt_util.as_local(dt_util.utc_from_timestamp(float(td.get("t") or 0))).date() == dt_util.now().date():
+            self.today = td.get("v") or {}
+            self.health = td.get("h") or {}
         # 0.7.0: timemodellen for COP er fjernet; 0.8.0: LG's varmekurve er erstattet af det lærte fremløb
         for k in ("cop", "curve"):
             self.accepted.pop(k, None)
@@ -478,7 +480,29 @@ class VarmemodelCoordinator:
                 s.today = await get_instance(self.hass).async_add_executor_job(self._today_sync, s) or {}
             except Exception:  # noqa: BLE001 – en diagnose må ikke vælte resten
                 _LOGGER.exception("COP i dag fejlede")
+            try:
+                s.health = await get_instance(self.hass).async_add_executor_job(self._health_sync, s) or {}
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Dagens driftstal fejlede")
         self._notify()
+
+    def _health_sync(self, s: SourceState) -> dict[str, Any] | None:
+        """Dagens driftstal for en vandbåren kilde: fra historikken (``day_health``) plus Varmemodels egne tællere."""
+        comp, dhw, df = s.eid(CONF_COMPRESSOR), s.eid(CONF_DHW), s.eid(CONF_DEFROST)
+        if not comp:
+            return None
+        since = dt_util.start_of_local_day().timestamp()
+        ids = [e for e in (comp, dhw, df) if e]
+        res = history.get_significant_states(self.hass, dt_util.utc_from_timestamp(since - 1800), dt_util.utcnow(), ids,
+                                             include_start_time_state=True, significant_changes_only=False, no_attributes=True)
+        rows = {e: [(z.last_updated.timestamp(), z.state) for z in res.get(e, [])] for e in ids}
+        d = day_health(rows, comp, dhw, df, since, time.time())
+        day = dt_util.now().date().isoformat()
+        hs, fl = self.air.get(f"hydro:{s.sid}") or {}, self.air.get(f"flow:{s.sid}") or {}
+        d.update({"date": day, "tænd_sluk_skrevet": hs.get("flips") if hs.get("day") == day else 0,
+                  "fremløb_skrevet": fl.get("writes") if fl.get("day") == day else 0,
+                  "plan_frisk_pct": self.plan_stats.get("pct") if self.plan_stats.get("day") == day else None})
+        return d
 
     def _today_sync(self, s: SourceState) -> dict[str, Any] | None:
         heat, el, flow, comp_id = s.eid(CONF_HEAT), s.eid(CONF_ELECTRICITY), s.eid(CONF_FLOW), s.eid(CONF_COMPRESSOR)
@@ -3273,6 +3297,39 @@ def comp_stops(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | N
             on_t = None
         st[e] = v
     return out
+
+
+def day_health(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | None, df: str | None, since: float,
+               now: float) -> dict[str, Any]:
+    """Dagens driftstal fra historikken (fra ``since``): kompressorstarter, stop og korte kørsler (stop inden for
+    START_PHASE_S efter en start eller afrimning – uden ventilskift, afrimning og varmt vand, se ``comp_stops``),
+    afrimninger, varmt vand-kørsler og kompressorens driftstid. Første række pr. entitet er tilstanden ved datastart og
+    er intet skift; utilgængelig/ukendt springes over."""
+    def real(e: str | None) -> list[tuple[float, str | None, str]]:
+        out, prev = [], None
+        for t, v in sorted(rows.get(e) or [] if e else [], key=lambda r: r[0]):
+            if v in ("unavailable", "unknown") or v == prev:
+                continue
+            out.append((t, prev, v))
+            prev = v
+        return out
+
+    def turned_on(e: str | None) -> int | None:
+        return sum(1 for t, p, v in real(e) if p is not None and v == "on" and t >= since) if e else None
+
+    on_s, t_on = 0.0, None
+    for t, _p, v in real(comp):
+        if v == "on":
+            t_on = max(t, since)
+        elif t_on is not None:
+            on_s += max(0.0, t - t_on) if t > since else 0.0
+            t_on = None
+    if t_on is not None:
+        on_s += max(0.0, now - t_on)
+    stops = comp_stops(rows, comp, dhw, df, since)
+    return {"starter": turned_on(comp), "stop": len(stops),
+            "korte_kørsler": sum(1 for x in stops if x["run"] is not None and x["run"] <= START_PHASE_S),
+            "afrimninger": turned_on(df), "varmt_vand": turned_on(dhw), "drift_min": round(on_s / 60)}
 
 
 def learn_start_k(k: float, short: list[dict[str, Any]], k_min: float, k_max: float = START_K_MAX) -> float:

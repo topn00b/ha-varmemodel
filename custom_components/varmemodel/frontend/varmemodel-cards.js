@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.23.0';
+  const VERSION = '0.24.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -911,6 +911,16 @@
       p.vdag = [fmt(num(ca.kwh_varme)), ct]; p.edag = [fmt(num(ca.kwh_el)), ct];
       p.copd = [fmt(sv(h, ct), 2), ct];
       p.igaar = `i dag u. varmt vand ${fmt(num(ca.cop_uden_varmt_vand), 2)} · stabil drift ${fmt(num(ca.cop_stabil_drift), 2)}`;
+      // Dagens driftstal: starter og korte kørsler slider på kompressoren – korte kørsler fremhæves
+      const dr = ca.drift;
+      if (dr) {
+        const tm = dr.drift_min != null ? `${Math.floor(dr.drift_min / 60)} t ${dr.drift_min % 60} min` : null;
+        const ko = dr['korte_kørsler'] ?? 0;
+        const n = (v, en, fl) => (v === null || v === undefined ? `– ${fl}` : `${v} ${v === 1 ? en : fl}`);
+        p.drift = { kort: `i dag: ${n(dr.starter, 'start', 'starter')} · ${ko} ${ko === 1 ? 'kort' : 'korte'} · ${n(dr.afrimninger, 'afrimn.', 'afrimn.')}`,
+          lang: `i dag: ${n(dr.starter, 'start', 'starter')} · ${n(ko, 'kort kørsel', 'korte kørsler')} · ${n(dr.afrimninger, 'afrimning', 'afrimninger')}${tm ? ' · drift ' + tm : ''}`,
+          ex: ` data-e="${esc(ct)}"${ko > 0 ? ` style="fill:${OR};font-weight:700"` : ''}` };
+      }
       const P2 = (v, e) => (v === null ? null : [`${fmt(v)} °C`, e]);
       p.a = P2(D.A_, cfg.a); p.b = P2(D.B_, cfg.b); p.c = P2(D.C_, cfg.c); p.d = P2(D.D_, cfg.d);
       p.dthus = D.B_ !== null && D.C_ !== null ? [`ΔT hus ${fmt(D.B_ - D.C_)} K`, cfg.c, { cls: D.pumpOn === false ? 'usikker' : '' }]
@@ -996,6 +1006,7 @@
         g += P(150, 211, 236, p.status, 30) + TX(150, 241, p.plan, 'm c', D.differs ? ` style="fill:${YE};font-weight:700"` : '');
         // ud ud for fremløbet (y 260), ind ud for returen (y 470)
         g += P(150, 260, 236, p.ud) + P(150, 330, 236, p.cop) + P(150, 400, 236, p.flow) + P(150, 470, 236, p.ind);
+        if (p.drift) g += TX(150, 524, p.drift.kort, 'm c', p.drift.ex);
         // Øverste række ved siden af »Ude«: varmt vand og energi i dag (jævner skærmen ud på bred skærm)
         if (D.f.dhw || p.tank) {
           g += BOX(300, 20, 260, 116, 'Varmt vand') + TX(370, 64, 'beholder', 'm c') + TX(495, 64, 'laver nu', 'm c');
@@ -1389,6 +1400,7 @@
         // Nederste række: varmepumpens egne ind/ud over sine rør (retur til venstre, fremløb til højre),
         // lodret over følerne D og A, så de to målinger af samme rør står over for hinanden
         g += P(385, 180, 230, p.cop) + P(260, 250, 230, p.flow) + P(135, 320, 230, p.ind) + P(385, 320, 230, p.ud);
+        if (p.drift) g += TX(260, 353, p.drift.lang, 'm c', p.drift.ex);
         const bp = !!c.bypass, bf = !!c.buffer;
         g += PATH('M440 360 V776', 'hot', true) + PATH('M80 780 V364', 'cold', true);
         if (bp) {

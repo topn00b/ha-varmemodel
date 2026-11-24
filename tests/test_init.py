@@ -1461,3 +1461,23 @@ async def test_diagnostics_has_replayable_plan_input(ha: HomeAssistant) -> None:
     assert "sensor." not in json.dumps(pi) and pi["hours"][0]["h"] == 0 and len(pi["hours"]) == 24
     p = plan_from_dump(pi)
     assert [x["heat_kw"] for x in p.hours] == [x["heat_kw"] for x in c.plans[sid]["hours"]]
+
+
+def test_day_health_counts_starts_short_runs_and_defrosts() -> None:
+    """Dagens driftstal: starter, korte kørsler (stop inden for 20 min. efter start), afrimninger og driftstid."""
+    from custom_components.varmemodel.coordinator import day_health
+
+    t0 = 1_000_000.0  # midnat
+    rows = {
+        "c": [(t0 - 1800, "on"),            # kørte allerede ved midnat (ingen start i dag)
+              (t0 + 3600, "off"),            # stop efter lang drift (starten ligger før data: længden er ukendt)
+              (t0 + 7200, "on"), (t0 + 7200 + 300, "off"),   # start + kort kørsel (5 min.)
+              (t0 + 9000, "unavailable"), (t0 + 9060, "off"),  # Modbus-udfald: intet skift
+              (t0 + 10800, "on")],           # start, kører stadig
+        "d": [(t0 - 1800, "off"), (t0 + 12000, "on"), (t0 + 12300, "off")],
+        "v": [(t0 - 1800, "off")],
+    }
+    h = day_health(rows, "c", "v", "d", t0, t0 + 14400)
+    assert h["starter"] == 2 and h["stop"] == 2 and h["korte_kørsler"] == 1 and h["afrimninger"] == 1 and h["varmt_vand"] == 0
+    assert h["drift_min"] == round((3600 + 300 + 3600) / 60)
+    assert day_health(rows, "c", None, None, t0, t0 + 14400)["afrimninger"] is None

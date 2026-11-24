@@ -160,6 +160,8 @@ class CopTodaySensor(SourceEntity, SensorEntity):
             "cop_stabil_drift": d.get("cop_steady"), "minutter_stabil_drift": d.get("steady_minutes"),
             "ekstra_el_opstart_afrimning_standby_pct": d.get("loss_start_defrost_pct"),
             "varmt_vand_traek_pct": d.get("dhw_effect_pct"),
+            # Dagens driftstal: starter, korte kørsler, afrimninger, driftstid og Varmemodels egne skrivninger
+            "drift": ({k: v for k, v in h.items() if k != "date"} if (h := self.src.health or {}).get("date") == dt_util.now().date().isoformat() else None),
             "stabil_cop_ifølge_model": d.get("expected_steady"), "stabil_mod_model_pct": d.get("steady_vs_model_pct"),
             "metode": "5-minutters portioner siden midnat; stabil drift = fra 10 min efter start/afrimning til afrimning, varmt vand eller stop",
             "opdateret": d.get("updated"),
