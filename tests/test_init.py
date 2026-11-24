@@ -1481,3 +1481,27 @@ def test_day_health_counts_starts_short_runs_and_defrosts() -> None:
     assert h["starter"] == 2 and h["stop"] == 2 and h["korte_kørsler"] == 1 and h["afrimninger"] == 1 and h["varmt_vand"] == 0
     assert h["drift_min"] == round((3600 + 300 + 3600) / 60)
     assert day_health(rows, "c", None, None, t0, t0 + 14400)["afrimninger"] is None
+
+
+async def test_low_flow_learns_only_when_its_own_target_is_written(ha: HomeAssistant) -> None:
+    """Laveste fungerende fremløb læres kun, når søgningens eget mål er det, der står i varmepumpen – ikke mens planens
+    forvarmning eller et værn (opstart/stopværn) holder det skrevne mål højere."""
+    c, s = await _lv_entry(ha)
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    hs = c.air.setdefault(f"hydro:{s.sid}", {})
+    rooms = [{"navn": "Gang", "margen": 0.3, "tendens": 0.0, "om_3t": 0.3}]
+    c._low_rooms_sync = lambda _s: [dict(x) for x in rooms]  # noqa: SLF001
+    assert await c._low_flow(s, hs, 35.0) == 24.0
+    hs["low_hold_since"] -= 4 * 3600
+    hs["low_raise"] = 11.0  # planen forvarmer: det skrevne mål er 35, ikke 24
+    await c._low_flow(s, hs, 35.0)
+    assert not hs.get("low_learned") and time.time() - hs["low_hold_since"] < 5
+    hs["low_raise"] = 0.0
+    hs["guard"] = {"mål": 27.0, "grund": "stopværn"}
+    hs["low_hold_since"] -= 4 * 3600
+    await c._low_flow(s, hs, 35.0)
+    assert not hs.get("low_learned")
+    hs["guard"] = None
+    hs["low_hold_since"] -= 4 * 3600
+    await c._low_flow(s, hs, 35.0)
+    assert list((hs.get("low_learned") or {}).values()) == [24.0]

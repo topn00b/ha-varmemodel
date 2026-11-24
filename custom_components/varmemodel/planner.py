@@ -243,6 +243,11 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
                 and max(best.deficit - p.deficit, gain) >= 0.1 * (k - kb)):
             best, kb = p, k
             best.flow_raise = float(k)
+        elif [x["heat_kw"] for x in p.hours] == [x["heat_kw"] for x in best.hours]:
+            # Graden ændrede intet i planen: grænsen ligger under det fremløb, varmepumpens laveste ydelse alligevel giver
+            # (fx når en søgning efter laveste fremløb lige er startet lavt). De grader koster intet og tæller ikke med i
+            # kravet til de næste – ellers kunne planen aldrig forvarme fra et lavt udgangspunkt (24/11-2026).
+            kb = k
         if p.deficit <= 0.05:
             break
     if best.flow_raise:

@@ -466,3 +466,17 @@ def test_plan_input_dump_roundtrip_is_anonymous_and_replayable() -> None:
     assert [x["heat_kw"] for x in q.hours] == [x["heat_kw"] for x in p.hours]
     assert q.rooms["rum_1"] == p.rooms["Stuen hos familien"]
     assert plan_from_dump(d, flow_raise_max=0).flow_raise == 0
+
+
+def test_plan_raises_from_a_low_start_through_the_dead_zone() -> None:
+    """Ligger grænsen langt under det fremløb, varmepumpens laveste ydelse alligevel giver (søgningen er lige startet lavt),
+    ændrer de første grader intet i planen. De tæller ikke med i kravet – planen forvarmer stadig, når den må hæve nok."""
+    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, emission_kw_k=0.283, flow_c0=26.0, flow_slope=-0.6)
+    hs = hours(20, t_out=lambda i: -3.0, blocked=lambda i: 6 <= i <= 15)
+    room = PlanRoom(name="Rum A", t_now=20.3, t_min=20.0, heat_now=0.08, heat_delayed=0.05, cool_per_hk=0.006, margin=0.2)
+    ref = make_plan(hs, m, [room], 20.0, flow_margin=0.0)  # hæver 2 °C fra den lærte linje
+    low = make_plan(hs, m, [room], 20.0, flow_margin=-10.0, flow_raise_max=12)  # samme sted, startet 10 °C lavere
+    assert ref.flow_raise == 2 and low.flow_raise == 12 and low.deficit <= 0.05
+    assert [x["heat_kw"] for x in low.hours] == [x["heat_kw"] for x in ref.hours]
+    # Må den ikke hæve nok til at komme ud af den døde zone, ændrer den intet
+    assert make_plan(hs, m, [room], 20.0, flow_margin=-10.0, flow_raise_max=5).flow_raise == 0

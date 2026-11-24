@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from functools import partial
 import logging
+import math
 from math import ceil, cos, radians, sin
 import asyncio
 import re
@@ -2298,6 +2299,10 @@ class VarmemodelCoordinator:
             hs.update(low=new, low_t=now, low_why=why, low_hold_since=now, low_step=new - low)  # det nye mål skal holde 3 t, før det læres
             self._low_log(hs, now, new, plan, why)
         hs["low_status"] = status
+        if hs.get("low_raise") or hs.get("guard"):
+            # Det skrevne mål ligger over søgningens (planens forvarmning eller et værn): så er det ikke søgningens mål,
+            # der holder rummene, og det må ikke læres som laveste fungerende fremløb
+            hs["low_hold_since"] = now
         # Lært: målet har holdt alle rum over gulvet i 3 timer uden at hæve – laveste fungerende fremløb i dette ude-bånd
         if rooms and all(x["margen"] >= 0 for x in rooms) and now - (hs.get("low_hold_since") or now) >= LOW_LEARN_HOLD:
             lr = hs.setdefault("low_learned", {})
@@ -3054,9 +3059,11 @@ class VarmemodelCoordinator:
                 low_cap = self._low_cap(s, hs, t0)
                 if low_cap is not None:
                     low_cap = min(low_cap, hs["low_loft"])
-                    # Planen må stadig hæve (højst FLOW_BOOST_MAX), når flere timer ved søgningens mål ikke kan holde
-                    # rummene – fx gennem en lang blokering (forvarmning går forud for søgningen)
+                    # Planen må stadig hæve – helt op til loftet – når flere timer ved søgningens mål ikke kan holde rummene,
+                    # fx gennem en lang blokering (forvarmning går forud for søgningen). Før var grænsen 5 °C over
+                    # søgningens mål: lige efter en start (retur + 3 °C) kunne planen så slet ikke forvarme (24/11-2026).
                     fm = low_cap - base_f
+                    raise_max = max(0, math.ceil(hs["low_loft"] - low_cap))
             else:
                 hs.pop("low_loft", None)
             plan_kw = {"past_q": past_q, "boost": boost, "boost_hours": boost_h, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
