@@ -76,6 +76,7 @@ from .const import (
     CONF_ASSIST_SPEED,
     CONF_CLIMATE,
     CONF_FLOW_TARGET,
+    CONF_ONOFF_FALLBACK,
     CONF_ONOFF_TARGET,
     HYDRO_MAX_FLIPS,
     HYDRO_SWITCH,
@@ -191,6 +192,10 @@ STORE_VERSION = 1
 HOLD_S = 30 * 60
 EST_MARGIN_MAX = 1.0  # forudsagte rum: usikkerheden vokser med rummets præcision pr. 6 timer uden måling, højst 1 °C
 STARTUP_GRACE_S = 10 * 60  # ingen »Mangler data« de første 10 min. efter start (forudsigelsen bruges dog)
+START_INPUT_WAIT_S = 120  # efter start: så længe ventes der på pris- og blokeringsentiteterne, før der planlægges uden dem
+ONOFF_VERIFY_S = 180  # så længe efter en tænd/sluk tjekkes det, at varmepumpen står som ønsket (ellers den anden entitet)
+ONOFF_RETRY_S = 60  # ingen tænd/sluk-entitet svarer under en blokering: prøv igen efter så længe
+PLAN_FAIL_MSG_S = 15 * 60  # planlægningen har fejlet så længe: én besked
 SOURCE_FIELDS = ("comp", "comp_n", "dhw", "dhw_n", "df", "df_n", "ut")
 
 
@@ -284,6 +289,9 @@ class VarmemodelCoordinator:
         self._stopped = False  # sat ved afmelding/genindlæsning: denne instans styrer og gemmer ikke mere
         self._unsubs: list[CALLBACK_TYPE] = []
         self._replan_lock = asyncio.Lock()
+        self._plan_fail_since: float | None = None
+        self._hydro_pending: dict[str, Any] = {}  # ventende tjek af tænd/sluk pr. kilde (afmeldes ved stop)
+        self._input_wait: Any = None
         self._refresh_pending: set[str] = set()  # vandbårne kilder, hvor fremløbet skrives om lidt (efter et skift)
         self._air_rise: dict[str, dict[str, float]] = {}  # luft-luft: rummenes målte stigning (°C/t) seneste 30 min.  # én planlægning ad gangen (planlagt og »blokering lige nu«)
         self._build_sources()
@@ -415,9 +423,10 @@ class VarmemodelCoordinator:
         # Først flaget: en planlægning, der stadig kører i denne instans, må ikke tænde/slukke eller skrive bagefter
         # (24/11: en gammel instans tændte luft-vand efter en genindlæsning, mens den nye var slået fra)
         self._stopped = True
-        for u in self._unsubs:
+        for u in [*self._unsubs, *self._hydro_pending.values()]:
             u()
         self._unsubs.clear()
+        self._hydro_pending.clear()
         self._sync_issues({})
         await self._save(force=True)
 
@@ -1501,8 +1510,60 @@ class VarmemodelCoordinator:
                 await self.async_replan()
         except Exception as err:  # noqa: BLE001 – planen må aldrig vælte integrationen
             _LOGGER.exception("Planlægning fejlede")
-            self.plan_meta = {"updated": time.time(), "inputs_ok": False, "missing": [f"fejl: {err}"]}
+            # »updated« bevares fra den seneste gode plan, så det kan ses udefra, hvor gammel planen er
+            self.plan_meta = {**self.plan_meta, "inputs_ok": False, "missing": [f"fejl: {err}"]}
+            await self._control_without_plan(str(err))
             self._notify()
+        else:
+            self._plan_fail_since = None
+            self._drift_clear("plan")
+
+    async def _control_without_plan(self, err: str) -> None:
+        """Planlægningen fejlede: styr videre efter den seneste gode plan (dens timer rækker et døgn eller mere), så en
+        blokering stadig slukker, og varmen stadig tændes til tiden. Dækker planen ikke timen nu, håndhæves kun blokeringen
+        – varmepumpen står ellers, som den stod. Har det varet PLAN_FAIL_MSG_S, sendes én besked."""
+        now = time.time()
+        if self._plan_fail_since is None:
+            self._plan_fail_since = now
+        h0 = int(now // 3600 * 3600)
+        for sid, s in self.sources.items():
+            if s.kind != SOURCE_HYDRONIC:
+                continue
+            hours = (self.plans.get(sid) or {}).get("hours") or []
+            try:
+                async with self._replan_lock:
+                    if any(x.get("ts") == h0 for x in hours):
+                        await self._control_hydro(s, hours, now, h0)
+                    elif self.live_blocked() and s.conf.get(CONF_ONOFF_TARGET) and self.settings.get(f"{sid}.{HYDRO_SWITCH}"):
+                        await self._hydro_apply(s, False, True, hours)
+            except Exception:  # noqa: BLE001 – nødstyringen må heller aldrig vælte integrationen
+                _LOGGER.exception("%s: styring uden frisk plan fejlede", s.name)
+        if now - self._plan_fail_since >= PLAN_FAIL_MSG_S:
+            self._drift_msg("plan", "Varme: planlægningen fejler",
+                            "Varmemodel kan ikke lave en ny plan og styrer efter den seneste.",
+                            f"Planlægningen har fejlet siden {_clock_hm(self._plan_fail_since)}. Varmemodel styrer efter den seneste "
+                            f"gode plan, og en blokering slukker stadig varmen.\n\nFejl: {err}")
+
+    def _drift_msg(self, key: str, titel: str, kort: str, tekst: str) -> None:
+        """Én driftsbesked pr. hændelse: samme nøgle sender først igen, når fejlen har været væk (``_drift_clear``)."""
+        g = self.air.setdefault("varsel", {}).setdefault("drift", {})
+        if g.get(key):
+            return
+        g[key] = round(time.time())
+        self.hass.bus.async_fire(EVENT_VARSEL, {"titel": titel, "type": "drift", "kort": kort, "tekst": tekst, "kilde": "Varmemodel",
+                                                "nye": [], "værre": [], "problemer": [], "blokeret": []})
+
+    def _drift_clear(self, key: str) -> None:
+        ((self.air.get("varsel") or {}).get("drift") or {}).pop(key, None)
+
+    def _inputs_pending(self) -> list[str]:
+        """Pris- og blokeringsentiteter uden tilstand – lige efter en genstart er de måske ikke gendannet endnu."""
+        out = []
+        for key in (CONF_PRICE_ENTITY, CONF_BLOCK_ENTITY, CONF_BLOCK_NOW_ENTITY, CONF_BLOCK_QUARTERS_ENTITY):
+            eid = self._id(key)
+            if eid and ((st := self.hass.states.get(eid)) is None or st.state in ("unavailable", "unknown")):
+                out.append(eid)
+        return out
 
     def _parse_local(self, s: str) -> datetime | None:
         d = dt_util.parse_datetime(s)
@@ -1873,23 +1934,111 @@ class VarmemodelCoordinator:
         except Exception:  # noqa: BLE001
             _LOGGER.exception("%s: kunne ikke skrive fremløbet", s.name)
 
-    async def _hydro_apply(self, s: SourceState, want_on: bool, blocked: bool, hours: list[dict[str, Any]]) -> None:
+    async def _control_hydro(self, s: SourceState, hours: list[dict[str, Any]], now: float, h0: int) -> None:
+        """Anbefalet styring for en vandbåren kilde: planens ønske for timen nu omsat efter reglerne, der skåner varmepumpen
+        (command.py), og skrevet til varmepumpen, når Varmemodel styrer den. ``hours`` er planens timer – en frisk plan eller
+        den seneste gode, når planlægningen fejler."""
+        sid = s.sid
+        cur = next((x for x in hours if x.get("ts") == h0), None)
+        blocked = bool(cur and cur["blocked"]) or self.live_blocked()
+        cmd = step(Command.load(self.commands.get(sid)), now, dt_util.now().date().isoformat(),
+                   bool(cur and cur["heat_kw"] > 0), (round(cur["flow"]) if cur and cur.get("flow") is not None else None), blocked)
+        self.commands[sid] = cmd.dump()
+        full = bool(s.conf.get(CONF_ONOFF_TARGET) and self.settings.get(f"{sid}.{HYDRO_SWITCH}"))
+        if full:
+            await self._hydro_apply(s, cmd.on, blocked, hours)
+        if s.conf.get(CONF_FLOW_TARGET) and (full or self.settings.get(f"{sid}.{FLOW_SWITCH}")):
+            await self._flow_apply(s, hours, blocked)
+
+    def _onoff_states(self, s: SourceState) -> dict[str, bool]:
+        """Tænd/sluk-entiteterne, der svarer lige nu (den primære først, så reserven): entitet → tændt."""
+        out: dict[str, bool] = {}
+        for eid in (s.conf.get(CONF_ONOFF_TARGET), s.conf.get(CONF_ONOFF_FALLBACK)):
+            st = self.hass.states.get(eid) if eid else None
+            if st is not None and st.state not in ("unavailable", "unknown"):
+                out[eid] = st.state != "off"
+        return out
+
+    def _wrong_mode(self, eid: str) -> bool:
+        """Tændt, men ikke i varme-tilstand (fx »auto« efter en reserve-styring eller betjening på varmepumpen): fremløbsmålet
+        gælder kun i varme-tilstand, så den skal tilbage dertil. Kun for entiteter, der har tilstanden »heat«."""
+        st = self.hass.states.get(eid)
+        return bool(st and st.state not in ("heat", "off", "unavailable", "unknown") and "heat" in (st.attributes.get("hvac_modes") or []))
+
+    def _hydro_later(self, s: SourceState, delay: float) -> None:
+        """Styr kilden igen om lidt efter den gældende kommando: tjek, at en tænd/sluk slog igennem, eller prøv igen, når
+        ingen tænd/sluk-entitet svarede under en blokering. Højst ét ventende tjek pr. kilde."""
+        sid = s.sid
+        if self._stopped or self._hydro_pending.get(sid):
+            return
+
+        async def _again(_now: Any) -> None:
+            self._hydro_pending.pop(sid, None)
+            if self._stopped or not self.settings.get(f"{sid}.{HYDRO_SWITCH}"):
+                return
+            try:
+                async with self._replan_lock:
+                    now = time.time()
+                    hours = (self.plans.get(sid) or {}).get("hours") or []
+                    cur = next((x for x in hours if x.get("ts") == int(now // 3600 * 3600)), None)
+                    blocked = bool(cur and cur.get("blocked")) or self.live_blocked()
+                    await self._hydro_apply(s, bool((self.commands.get(sid) or {}).get("on")), blocked, hours, recheck=True)
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("%s: tjek af tænd/sluk fejlede", s.name, exc_info=True)
+
+        self._hydro_pending[sid] = async_call_later(self.hass, delay, _again)
+
+    async def _hydro_apply(self, s: SourceState, want_on: bool, blocked: bool, hours: list[dict[str, Any]],
+                           recheck: bool = False) -> None:
         """Tænd (varme) og sluk den vandbårne varmepumpe efter den anbefalede styring (mindst 60 min. tændt, 30 min. slukket,
-        højst én ændring pr. 15 min. – reglerne i command.py). Blokeret: sluk straks. Højst HYDRO_MAX_FLIPS skift pr. døgn."""
+        højst én ændring pr. 15 min. – reglerne i command.py). Blokeret: sluk straks. Højst HYDRO_MAX_FLIPS skift pr. døgn.
+
+        Er der to tænd/sluk-entiteter (fx lokal Modbus og producentens sky), skrives der til den første, der svarer. Efter
+        ONOFF_VERIFY_S tjekkes det (``recheck``), at varmepumpen står som ønsket; viser en af dem det modsatte, får den
+        kommandoen direkte – så en sky, der er nede, ikke kan holde varmen kørende under en blokering."""
         if self._stopped:
             return
-        eid = s.conf.get(CONF_ONOFF_TARGET)
-        st = self.hass.states.get(eid) if eid else None
-        if st is None or st.state in ("unavailable", "unknown"):
-            return
+        states = self._onoff_states(s)
         h = self.air.setdefault(f"hydro:{s.sid}", {})
+        if not states:
+            # Ingen tænd/sluk-entitet svarer. Under en blokering skal varmepumpen stoppes, så snart en af dem svarer igen
+            # – ikke først ved næste planlægning
+            if blocked:
+                self._hydro_later(s, ONOFF_RETRY_S)
+            return
         day = dt_util.now().date().isoformat()
         if h.get("day") != day:
             h["day"], h["flips"] = day, 0
-        is_on = st.state != "off"
         if blocked:
             want_on = False
-        if want_on == is_on:
+        wrong = [e for e, on in states.items() if on != want_on or (want_on and self._wrong_mode(e))]
+        if not wrong:
+            if recheck:
+                h["recheck_n"] = 0
+                self._drift_clear(f"onoff:{s.sid}")
+            return
+        eid, is_on = next(iter(states.items()))  # den primære, hvis den svarer – ellers reserven
+        if recheck or is_on == want_on:
+            # Kommandoen er givet, men en af entiteterne viser stadig det modsatte (fx nåede skyen ikke varmepumpen):
+            # skriv direkte til den. Det er ikke et nyt skift – ingen ny start og intet nyt skift i dagens tælling.
+            for e in wrong:
+                try:
+                    await self.hass.services.async_call("climate", "set_hvac_mode",
+                                                        {"entity_id": e, "hvac_mode": "heat" if want_on else "off"}, blocking=True)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.warning("%s: kunne ikke skrive til %s", s.name, e, exc_info=True)
+            txt = "tændt" if want_on else "slukket"
+            _LOGGER.warning("%s: %s stod ikke som ønsket (%s) – skrevet direkte", s.name, ", ".join(wrong), txt)
+            h["fallback"] = {"t": round(time.time()), "entiteter": wrong, "on": want_on}
+            if recheck:
+                h["recheck_n"] = (h.get("recheck_n") or 0) + 1
+                if h["recheck_n"] >= 3:
+                    self._drift_msg(f"onoff:{s.sid}", "Varme: varmepumpen følger ikke tænd/sluk",
+                                    f"{s.name} står ikke {txt} efter {h['recheck_n']} forsøg.",
+                                    f"{s.name} skulle være {txt}, men {', '.join(wrong)} viser det modsatte efter "
+                                    f"{h['recheck_n']} forsøg. Tjek varmepumpen og forbindelsen til den.")
+                    return
+            self._hydro_later(s, ONOFF_VERIFY_S)
             return
         if h["flips"] >= HYDRO_MAX_FLIPS and not want_on and not blocked:
             # Loftet skåner kompressoren mod mange korte kørsler: efter loftet slukker Varmemodel kun ved blokering – men
@@ -1914,6 +2063,8 @@ class VarmemodelCoordinator:
                                                 blocking=True)
             h["flips"] += 1
             h["last"] = {"t": time.time(), "on": want_on}
+            h["recheck_n"] = 0
+            self._hydro_later(s, ONOFF_VERIFY_S)
             self._notify()
             if want_on:
                 if mode == "test":
@@ -2143,8 +2294,8 @@ class VarmemodelCoordinator:
         nxt = (hs.get("low_t") or 0) + holds.get(status, 0)
         nxt_txt = dt_util.as_local(dt_util.utc_from_timestamp(nxt)).strftime("%H:%M") if status in holds and nxt > now else None
         bind = min(rooms, key=lambda x: x["om_3t"]) if rooms else None
-        st = self.hass.states.get(s.conf.get(CONF_ONOFF_TARGET) or "")
-        off = st is not None and st.state == "off"
+        sts = self._onoff_states(s)
+        off = bool(sts) and not next(iter(sts.values()))
         low = hs.get("low")
         cap = low if low is not None else self._low_cap(s, hs, self._state_num(self._id(CONF_OUTDOOR)))
         # Næste planlagte start (første varmetime, der ikke er blokeret)
@@ -2701,6 +2852,19 @@ class VarmemodelCoordinator:
             return
         missing: list[str] = []
         now = time.time()
+        if now - self._started < START_INPUT_WAIT_S and (pending := self._inputs_pending()):
+            # Lige efter en genstart er pris- og blokeringsentiteterne måske ikke gendannet. En plan uden dem (nødplan, intet
+            # blokeret) må hverken styre, logges eller give beskeder – vent, og prøv igen om lidt (24/11-2026: en nødplan
+            # efter hver genstart, ca. 40 s før den rigtige)
+            self.plan_meta = {**self.plan_meta, "inputs_ok": False, "missing": ["venter efter start på " + ", ".join(pending)]}
+            if self._input_wait is None:
+                async def _again(_now: Any) -> None:
+                    self._input_wait = None
+                    await self._on_replan(dt_util.now())
+                self._input_wait = async_call_later(self.hass, 15, _again)
+                self._unsubs.append(lambda: self._input_wait and self._input_wait())
+            self._notify()
+            return
         h0 = int(now // 3600 * 3600)
         price_eid = self._id(CONF_PRICE_ENTITY)
         prices: dict[int, float] = {}
@@ -2955,13 +3119,6 @@ class VarmemodelCoordinator:
                           "boost": boost_on, "boost_until": boost_note,
                           "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
                           "preload_window": p.preload, "flow_boost": fb if fb["k"] or fb["rooms"] else None, "flow_raise": p.flow_raise or None, "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
-            # Anbefalet styring: planens ønske nu omsat efter reglerne, der skåner varmepumpen
-            cur = p.hours[0] if p.hours and p.hours[0]["ts"] == h0 else None
-            cmd = step(Command.load(self.commands.get(sid)), now, dt_util.now().date().isoformat(),
-                       bool(cur and cur["heat_kw"] > 0), (round(cur["flow"]) if cur and cur.get("flow") is not None else None),
-                       (bool(cur and cur["blocked"]) or self.live_blocked()))
-            self.commands[sid] = cmd.dump()
-            full = bool(s.conf.get(CONF_ONOFF_TARGET) and self.settings.get(f"{sid}.{HYDRO_SWITCH}"))
             hst = self.air.setdefault(f"hydro:{sid}", {})
             try:
                 # Kompressoren kører siden … (fra historikken – en genstart nulstiller last_changed, så COP ellers skjules)
@@ -2974,10 +3131,7 @@ class VarmemodelCoordinator:
                     await get_instance(self.hass).async_add_executor_job(self._soft_eval_sync, s, hst["starts"])
                 except Exception:  # noqa: BLE001
                     _LOGGER.debug("Vurdering af blød start fejlede", exc_info=True)
-            if full:
-                await self._hydro_apply(s, cmd.on, (bool(cur and cur["blocked"]) or self.live_blocked()), p.hours)
-            if s.conf.get(CONF_FLOW_TARGET) and (full or self.settings.get(f"{sid}.{FLOW_SWITCH}")):
-                await self._flow_apply(s, p.hours, (bool(cur and cur["blocked"]) or self.live_blocked()))
+            await self._control_hydro(s, p.hours, now, h0)
         self.plans = plans
         today = dt_util.now().date().isoformat()
         for sid, pl in plans.items():
@@ -3010,6 +3164,11 @@ class VarmemodelCoordinator:
                           "blocked_known": bool(blocks), "fresh_pct_today": ps["pct"], "safety": safety}
         self.store.async_delay_save(self._data, 600)
         self._notify()
+
+
+def _clock_hm(ts: float) -> str:
+    """Lokalt klokkeslæt med minutter, fx '13:47'."""
+    return dt_util.as_local(dt_util.utc_from_timestamp(ts)).strftime("%H:%M")
 
 
 def _clock(ts: int) -> str:

@@ -1240,3 +1240,182 @@ def test_usual_margin() -> None:
 
     assert usual_margin([19.0, 18.8, 19.2, 19.4, 18.5, 19.1], 19.5) == -0.7
     assert usual_margin([19.0, 18.8, 19.2, 19.4], 19.5) is None and usual_margin([19.0] * 6, None) is None
+
+
+def _price_items(h0: int, n: int = 24) -> list[dict]:
+    from datetime import datetime as _dt
+
+    loc = dt_util.get_default_time_zone()
+    return [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(n)]
+
+
+async def test_replan_waits_for_inputs_after_start(ha: HomeAssistant) -> None:
+    """Lige efter en genstart er pris- og blokeringsentiteterne måske ikke gendannet: ingen nødplan, før de er der."""
+    h0 = int(time.time() // 3600 * 3600)
+    ha.states.async_set("sensor.ude", "-2.0", {"state_class": "measurement"})
+    ha.states.async_set("climate.vp_onoff", "heat", {})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2,
+                        data={**HOUSE, "price_entity": "sensor.pris", "block_now_entity": "sensor.zone_nu", "block_now_states": "rød"},
+                        subentries_data=[_sub({**HYD, "onoff_target": "climate.vp_onoff"}, "source")])
+    e.add_to_hass(ha)
+    calls: list = []
+    ha.services.async_register("climate", "set_hvac_mode", lambda call: calls.append(call.data["hvac_mode"]))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c._recent_sync = lambda s, a, b: ({}, {})
+    sid = next(iter(c.sources))
+    c.settings[f"{sid}.hydro_control"] = True
+    await c.async_replan()
+    assert not c.plans and calls == []
+    assert c.plan_meta["inputs_ok"] is False and c.plan_meta["missing"][0].startswith("venter efter start på sensor.pris")
+    assert c._input_wait is not None  # prøver igen om lidt
+    # Blokeringen dukker op først (som ved en genstart): stadig ingen plan uden priser
+    ha.states.async_set("sensor.zone_nu", "rød", {})
+    await ha.async_block_till_done()
+    assert not c.plans and calls == []
+    ha.states.async_set("sensor.pris", "1.0", {"timer": _price_items(h0)})
+    await c.async_replan()
+    assert c.plans and c.plan_meta["inputs_ok"] and not c.plan_meta["safety"]
+    assert calls == ["off"]  # blokeret nu: varmepumpen slukkes af den rigtige plan
+    # Efter ventetiden planlægges der som før uden priser (nødplan)
+    ha.states.async_remove("sensor.pris")
+    c._started = time.time() - 300
+    await c.async_replan()
+    assert c.plan_meta["safety"] and c.plan_meta["missing"] == ["priser"]
+    c._input_wait and c._input_wait()
+
+
+@pytest.mark.parametrize("expected_lingering_timers", [True])
+async def test_replan_failure_follows_last_plan(ha: HomeAssistant) -> None:
+    """Fejler planlægningen, styres der videre efter den seneste plan: en blokering slukker stadig, og der kommer én besked."""
+    from pytest_homeassistant_custom_component.common import async_capture_events
+
+    h0 = int(time.time() // 3600 * 3600)
+    ha.states.async_set("sensor.pris", "1.0", {"timer": _price_items(h0)})
+    ha.states.async_set("sensor.ude", "-2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.zone_nu", "grøn", {})
+    ha.states.async_set("climate.vp_onoff", "heat", {})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2,
+                        data={**HOUSE, "price_entity": "sensor.pris", "block_now_entity": "sensor.zone_nu", "block_now_states": "rød"},
+                        subentries_data=[_sub({**HYD, "onoff_target": "climate.vp_onoff"}, "source")])
+    e.add_to_hass(ha)
+    calls: list = []
+    ha.services.async_register("climate", "set_hvac_mode", lambda call: calls.append(call.data["hvac_mode"]))
+    events = async_capture_events(ha, "varmemodel_varsel")
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c._recent_sync = lambda s, a, b: ({}, {})
+    sid = next(iter(c.sources))
+    c.settings[f"{sid}.hydro_control"] = True
+    await c._on_replan(dt_util.now())
+    assert c.plans[sid]["hours"] and c.plan_meta["inputs_ok"]
+    updated = c.plan_meta["updated"]
+    calls.clear()
+
+    async def boom() -> None:
+        raise RuntimeError("regnefejl")
+
+    c.async_replan = boom
+    ha.states.async_set("sensor.zone_nu", "rød", {})  # blokeringen udløser en planlægning, som fejler
+    await ha.async_block_till_done()
+    assert calls == ["off"]
+    assert c.plan_meta["updated"] == updated and c.plan_meta["missing"] == ["fejl: regnefejl"] and not c.plan_meta["inputs_ok"]
+    assert not events  # en enkelt fejl giver ingen besked
+    c._plan_fail_since = time.time() - 1000
+    await c._on_replan(dt_util.now())
+    await c._on_replan(dt_util.now())
+    await ha.async_block_till_done()
+    assert len(events) == 1 and events[0].data["type"] == "drift" and "seneste" in events[0].data["kort"]
+    # Planen virker igen: hændelsen er slut, og en ny fejl kan give en ny besked
+    del c.async_replan
+    await c._on_replan(dt_util.now())
+    assert c._plan_fail_since is None and not c.air["varsel"]["drift"]
+
+
+@pytest.mark.parametrize("expected_lingering_timers", [True])
+async def test_onoff_fallback_and_recheck(ha: HomeAssistant) -> None:
+    """To tænd/sluk-entiteter: der skrives til den første, der svarer, og en entitet, der stadig viser det modsatte ved
+    tjekket, får kommandoen direkte. Svarer ingen under en blokering, prøves der igen."""
+    from pytest_homeassistant_custom_component.common import async_capture_events
+
+    h0 = int(time.time() // 3600 * 3600)
+    ha.states.async_set("sensor.pris", "1.0", {"timer": _price_items(h0)})
+    ha.states.async_set("sensor.ude", "-2.0", {"state_class": "measurement"})
+    ha.states.async_set("climate.vp_sky", "heat", {})
+    ha.states.async_set("climate.vp_lokal", "heat", {})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub({**HYD, "onoff_target": "climate.vp_sky", "onoff_fallback": "climate.vp_lokal"}, "source")])
+    e.add_to_hass(ha)
+    calls: list = []
+    ha.services.async_register("climate", "set_hvac_mode", lambda call: calls.append((call.data["entity_id"], call.data["hvac_mode"])))
+    events = async_capture_events(ha, "varmemodel_varsel")
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    sid = next(iter(c.sources))
+    s = c.sources[sid]
+    c.settings[f"{sid}.hydro_control"] = True
+    # 1) Blokeret: sluk via den primære, og et tjek er sat op
+    await c._hydro_apply(s, True, True, [])
+    assert calls == [("climate.vp_sky", "off")] and sid in c._hydro_pending
+    flips = c.air[f"hydro:{sid}"]["flips"]
+    # 2) Skyen viser slukket, men varmepumpen kører stadig (lokalt): tjekket skriver direkte til den lokale – intet nyt skift
+    ha.states.async_set("climate.vp_sky", "off", {})
+    calls.clear()
+    c._hydro_pending.pop(sid)()
+    await c._hydro_apply(s, False, True, [], recheck=True)
+    assert calls == [("climate.vp_lokal", "off")] and c.air[f"hydro:{sid}"]["flips"] == flips
+    assert c.air[f"hydro:{sid}"]["fallback"]["entiteter"] == ["climate.vp_lokal"]
+    # 3) Tredje forgæves tjek giver én besked
+    await c._hydro_apply(s, False, True, [], recheck=True)
+    assert not events
+    await c._hydro_apply(s, False, True, [], recheck=True)
+    await c._hydro_apply(s, False, True, [], recheck=True)
+    await ha.async_block_till_done()
+    assert len(events) == 1 and events[0].data["type"] == "drift" and "tænd/sluk" in events[0].data["titel"]
+    # 4) Nu står begge som ønsket: hændelsen er slut
+    ha.states.async_set("climate.vp_lokal", "off", {})
+    await c._hydro_apply(s, False, True, [], recheck=True)
+    assert c.air[f"hydro:{sid}"]["recheck_n"] == 0 and not c.air["varsel"]["drift"]
+    # 5) Den primære svarer ikke: tænd via reserven
+    ha.states.async_set("climate.vp_sky", "unavailable", {})
+    calls.clear()
+    await c._hydro_apply(s, True, False, [])
+    assert calls == [("climate.vp_lokal", "heat")]
+    # 6) Ingen svarer under en blokering: prøv igen om lidt
+    ha.states.async_set("climate.vp_lokal", "unknown", {})
+    c._hydro_pending.pop(sid, lambda: None)()
+    calls.clear()
+    await c._hydro_apply(s, True, True, [])
+    assert calls == [] and sid in c._hydro_pending
+    c._hydro_pending.pop(sid)()
+
+
+@pytest.mark.parametrize("expected_lingering_timers", [True])
+async def test_hydro_returns_to_heat_mode(ha: HomeAssistant) -> None:
+    """Står varmepumpen tændt i en anden tilstand end varme (fx »auto« efter en reserve-styring), sættes den tilbage til
+    varme – fremløbsmålet gælder kun dér. Det tæller ikke som et skift."""
+    h0 = int(time.time() // 3600 * 3600)
+    ha.states.async_set("sensor.pris", "1.0", {"timer": _price_items(h0)})
+    ha.states.async_set("sensor.ude", "-2.0", {"state_class": "measurement"})
+    ha.states.async_set("climate.vp", "auto", {"hvac_modes": ["off", "auto", "heat", "cool"]})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub({**HYD, "onoff_target": "climate.vp"}, "source")])
+    e.add_to_hass(ha)
+    calls: list = []
+    ha.services.async_register("climate", "set_hvac_mode", lambda call: calls.append(call.data["hvac_mode"]))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    sid = next(iter(c.sources))
+    s = c.sources[sid]
+    await c._hydro_apply(s, True, False, [])
+    assert calls == ["heat"] and not c.air[f"hydro:{sid}"].get("flips")
+    c._hydro_pending.pop(sid)()
+    # En entitet uden »heat« blandt sine tilstande røres ikke
+    ha.states.async_set("climate.vp", "auto", {"hvac_modes": ["off", "auto"]})
+    calls.clear()
+    await c._hydro_apply(s, True, False, [])
+    assert calls == []

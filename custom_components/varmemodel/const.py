@@ -172,6 +172,7 @@ CONF_FLOW_TARGET = "flow_target"  # vandbåren: entiteten Varmemodel skriver fre
 FLOW_SWITCH = "flow_control"  # vandbåren: Varmemodel styrer fremløbet (tænd/sluk og termostater styres stadig andetsteds)
 FLOW_MAX_WRITES = 96  # sikring mod en løbsk løkke; justering af fremløbet skåner ikke noget – tænd/sluk gør
 CONF_ONOFF_TARGET = "onoff_target"  # vandbåren: entiteten Varmemodel tænder (varme) og slukker (fx varmepumpens climate)
+CONF_ONOFF_FALLBACK = "onoff_fallback"  # vandbåren: reserve for tænd/sluk (fx producentens sky, når den primære er lokal – eller omvendt)
 HYDRO_SWITCH = "hydro_control"  # vandbåren: Varmemodel styrer tænd/sluk og fremløb
 HYDRO_MAX_FLIPS = 10
 SOFT_START = "soft_start"  # vandbåren: blød start – fremløbsmålet løftes gradvist efter tænding (fra / til / test)

@@ -316,7 +316,8 @@
             "dhw": "Domestic hot water",
             "electricity_backup": "Additional electricity meter (e.g. cloud)",
             "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)",
-            "onoff_target": "On/off target (climate Varmemodel switches to heat / off)"
+            "onoff_target": "On/off target (climate Varmemodel switches to heat / off)",
+            "onoff_fallback": "On/off fallback (another climate entity for the same heat pump)"
           },
           "data_description": {
             "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
@@ -324,7 +325,8 @@
             "dhw": "Hours with hot water are excluded from space heating.",
             "electricity_backup": "Used for hours where the main meter has no data, e.g. before it was installed. Scaled automatically to the main meter using the hours where both have data.",
             "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)",
-            "onoff_target": "On/off target (climate Varmemodel switches to heat / off)"
+            "onoff_target": "On/off target (climate Varmemodel switches to heat / off)",
+            "onoff_fallback": "Used when the primary does not respond, or when the heat pump is not in the wanted state 90 seconds after switching – e.g. local Modbus as primary and the vendor cloud as fallback."
           }
         },
         "air_air": {
