@@ -108,6 +108,11 @@ START_K_DECAY = 0.25  # en start, der kommer igennem opstarten, sænker det lær
 ANTI_STOP_GAP = 2.0  # stopværn: mens kompressoren kører, holdes målet højst så meget under fremløbet (stop ved ca. målet + 4 °C)
 DF_VALVE_S = 120  # et stop så kort efter en afrimning er 4-vejsventilens skift – intet rigtigt stop
 DHW_AFTER_S = 600  # efter varmt vand er kredsen varm og fremløbet ustabilt: intet opstartsløft eller stopværn så længe
+# Besked forud: hændelsen »varmemodel_varsel«, når planen forudser et rum under sin grænse (fx en lang blokering)
+EVENT_VARSEL = "varmemodel_varsel"
+VARSEL_MIN = 0.2  # varsles, når et rum forudsiges mindst så meget under grænsen
+VARSEL_WORSE = 0.3  # og igen, hvis det bliver så meget værre end sidst varslet
+VARSEL_CLEAR = 0.1  # under så lidt (eller ikke under) er problemet væk – et nyt varsles igen
 CONF_MAX_PAUSE = "max_pause"
 CONF_COMFORT_OFFSET = "comfort_offset"
 CONF_BOOST_ENTITY = "boost_entity"

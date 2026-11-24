@@ -415,3 +415,15 @@ def test_preload_window_shows_red_with_quarters() -> None:
     w = p.preload
     assert w and w["to"] == 9 * 3600 and w["block_from"] == 8 * 3600 + 1800 and w["block_to"] == 17 * 3600 + 900
     assert "før blokeringen 08:30–17:15" in p.reason
+
+
+def test_plan_problems_structured() -> None:
+    """Rum under grænsen står også i en struktureret liste (til besked forud): laveste temperatur og tid, grænse, hvor meget
+    under og første time under – samme rum som advarslerne."""
+    hs = hours(24, t_out=lambda i: 8.0)
+    mk = lambda n, t, hn, sh: PlanRoom(name=n, t_now=t, t_min=20.0, heat_now=hn, heat_delayed=0.0, cool_per_hk=0.003, margin=0.2,  # noqa: E731
+                                       share=sh, t_close=None)
+    p = make_plan(hs, M, [mk("Svag", 19.9, 0.015, None), mk("Stærk", 20.8, 0.04, None)], 20.0)
+    assert p.problems and {x["rum"] for x in p.problems} == {w.split(":")[0] for w in p.warnings if "under planens grænse" in w}
+    x = p.problems[0]
+    assert x["under"] > 0 and x["temp"] < x["grænse"] and x["fra_ts"] <= x["ts"] and isinstance(x["blokeret"], bool)

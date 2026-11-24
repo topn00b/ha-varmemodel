@@ -1114,3 +1114,38 @@ def test_red_spans_with_quarters() -> None:
     assert spans == [(t(6, 30), t(10, 15))]
     assert after_red(t(10, 0), spans) == t(10, 15) and after_red(t(10, 15), spans) == t(10, 15) and after_red(t(6, 0), spans) == t(6, 0)
     assert spans_from_quarters(set()) == []
+
+
+async def test_varsel_event_once_and_when_worse(ha: HomeAssistant) -> None:
+    """Besked forud: hændelsen fyres første gang et rum forudsiges mindst 0,2 °C under grænsen, igen når det bliver 0,3 °C
+    værre, ikke ved gentagelser; er problemet væk (under 0,1), varsles et nyt igen. Teksten nævner blokeringen og planen."""
+    c, s = await _lv_entry(ha)
+    events: list = []
+    ha.bus.async_listen("varmemodel_varsel", lambda e: events.append(e.data))
+    now = time.time()
+    h = int(now // 3600 * 3600)
+    prob = {"rum": "Gang", "ts": h + 7 * 3600, "temp": 19.7, "grænse": 20.0, "under": 0.3, "fra_ts": h + 5 * 3600, "blokeret": True}
+    plan = {"problems": [dict(prob)], "warnings": ["behovet kan ikke dækkes i de frie timer"], "flow_raise": 5.0}
+    c.red_spans = [(h + 3600, h + 8 * 3600)]
+    c._varsel(s, plan, now)  # noqa: SLF001
+    await ha.async_block_till_done()
+    assert len(events) == 1 and events[0]["nye"] == ["Gang"] and events[0]["kilde"] == "Luft-vand"
+    t = events[0]["tekst"]
+    assert "Gang 19,7 °C" in t and "grænse 20,0" in t and "under fra" in t and "Blokeret" in t and "hæver allerede fremløbet 5 °C" in t
+    c._varsel(s, plan, now)  # noqa: SLF001
+    await ha.async_block_till_done()
+    assert len(events) == 1  # samme problem: ingen ny besked
+    plan["problems"][0].update(under=0.65, temp=19.35)
+    c._varsel(s, plan, now)  # noqa: SLF001
+    await ha.async_block_till_done()
+    assert len(events) == 2 and events[1]["værre"] == ["Gang"] and events[1]["nye"] == []
+    plan["problems"] = [dict(prob, under=0.05)]  # næsten væk: glemmes
+    c._varsel(s, plan, now)  # noqa: SLF001
+    plan["problems"] = [dict(prob, under=0.25)]
+    c._varsel(s, plan, now)  # noqa: SLF001
+    await ha.async_block_till_done()
+    assert len(events) == 3 and events[2]["nye"] == ["Gang"]
+    plan["problems"] = [dict(prob, under=0.25), dict(prob, rum="Stue", under=0.15)]  # Stue under 0,2: ingen besked
+    c._varsel(s, plan, now)  # noqa: SLF001
+    await ha.async_block_till_done()
+    assert len(events) == 3

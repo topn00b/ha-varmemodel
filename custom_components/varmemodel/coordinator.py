@@ -144,6 +144,10 @@ from .const import (
     ANTI_STOP_GAP,
     DF_VALVE_S,
     DHW_AFTER_S,
+    EVENT_VARSEL,
+    VARSEL_CLEAR,
+    VARSEL_MIN,
+    VARSEL_WORSE,
     START_K_DECAY,
     START_K_MAX,
     START_PHASE_S,
@@ -1297,6 +1301,50 @@ class VarmemodelCoordinator:
             self._notify()
         except Exception:  # noqa: BLE001
             _LOGGER.debug("%s: fremløbet kunne ikke opdateres efter et skift", s.name, exc_info=True)
+
+    def _varsel(self, s: SourceState, plan: dict[str, Any], now: float) -> None:
+        """Besked forud: fyr EVENT_VARSEL, når planen forudser et rum mindst VARSEL_MIN °C under sin grænse – første gang og
+        igen, hvis det bliver mindst VARSEL_WORSE °C værre end sidst varslet. Et rum, der ikke længere er et problem (under
+        VARSEL_CLEAR), glemmes, så et nyt problem senere varsles igen. Hændelsen bærer en færdig tekst (dansk) og data, så en
+        automation kan sende den videre (fx til telefonen)."""
+        probs = plan.get("problems") or []
+        st = self.air.setdefault(f"varsel:{s.sid}", {})
+        known: dict[str, float] = st.setdefault("rum", {})
+        by_room = {x["rum"]: x for x in probs}
+        for name in list(known):
+            if name not in by_room or by_room[name]["under"] < VARSEL_CLEAR:
+                known.pop(name)
+        cur = {n: x for n, x in by_room.items() if x["under"] >= VARSEL_MIN}
+        new = [n for n in cur if n not in known]
+        worse = [n for n in cur if n in known and cur[n]["under"] >= known[n] + VARSEL_WORSE]
+        if not new and not worse:
+            return
+        for n in new + worse:
+            known[n] = cur[n]["under"]
+        rows = sorted(cur.values(), key=lambda x: (x["fra_ts"], -x["under"]))
+        parts = []
+        for x in rows:
+            parts.append(f"{x['rum']} {x['temp']:.1f} °C {_clock(x['ts'])} (grænse {x['grænse']:.1f}"
+                         + (f", under fra {_clock(x['fra_ts'])}" if x["fra_ts"] < x["ts"] else "") + ")")
+        last = max(x["ts"] for x in rows) + 3600
+        reds = [(a, b) for a, b in self.red_spans if b > now and a < last]
+        red_txt = ", ".join(f"{_clock(a)}–{dt_util.as_local(dt_util.utc_from_timestamp(b)).strftime('%H:%M')}" for a, b in reds)
+        warn = plan.get("warnings") or []
+        extra = []
+        if reds:
+            extra.append(f"Blokeret {red_txt}.")
+        if any("kan ikke dækkes" in w for w in warn):
+            extra.append("Planen kan ikke dække behovet i de frie timer.")
+        if plan.get("flow_raise"):
+            extra.append(f"Planen hæver allerede fremløbet {plan['flow_raise']:.0f} °C.")
+        text = _dk_txt(f"{s.name}: " + "; ".join(parts) + ". " + " ".join(extra)).strip()
+        st["sidst"] = {"t": round(now), "tekst": text}
+        self.hass.bus.async_fire(EVENT_VARSEL, {
+            "kilde": s.name, "nye": new, "værre": worse, "tekst": text,
+            "problemer": [{"rum": x["rum"], "kl": _ts_local_iso(x["ts"]), "fra": _ts_local_iso(x["fra_ts"]), "temp": x["temp"],
+                           "grænse": x["grænse"], "under": x["under"], "blokeret": x["blokeret"]} for x in rows],
+            "blokeret": [{"fra": _ts_local_iso(a), "til": _ts_local_iso(b)} for a, b in reds],
+        })
 
     def _guard_value(self, s: SourceState, hs: dict[str, Any]) -> tuple[float | None, str | None]:
         """Varmemodel bestemmer start og stop – varmepumpens egen termostat skal ikke nå at stoppe kompressoren:
@@ -2479,7 +2527,7 @@ class VarmemodelCoordinator:
         if (eco := self.setting(CONF_ECONOMY)) > 0:
             p.reason += f" – økonomi: rummene må gå {eco:.2f} °C under gulvet"
         plan = {"kind": "air_air", "hours": p.hours, "rooms": p.rooms, "rooms_planned": [r.name for r in show if r.t_min > -50],
-                "reason": p.reason, "warnings": p.warnings, "el_kwh": p.el_kwh, "heat_kwh": p.heat_kwh, "cost_kr": p.cost_kr,
+                "reason": p.reason, "warnings": p.warnings, "problems": p.problems, "el_kwh": p.el_kwh, "heat_kwh": p.heat_kwh, "cost_kr": p.cost_kr,
                 "demand_kwh": None, "target": None, "rooms_skipped": skipped,
                 "rooms_held": sorted({r.name for r in show if r.held and not r.estimated}),
                 "rooms_estimated": {r.name: {"forudsagt": round(r.t_now, 2), "sidste_måling": _ts_local_iso(float(e["since"])),
@@ -2778,7 +2826,7 @@ class VarmemodelCoordinator:
             plans[sid] = {"hours": p.hours, "rooms": fc_all, "rooms_planned": [r.name for r in rooms], "cautious": cold, "safety": safety,
                           "rooms_band": {r.name: round(r.margin, 2) for r in show}, "demand_kwh": p.demand_kwh, "heat_kwh": p.heat_kwh,
                           "el_kwh": p.el_kwh, "cost_kr": p.cost_kr, "reason": p.reason, "warnings": p.warnings,
-                          "target": round(target, 1), "rooms_skipped": skipped,
+                          "problems": p.problems, "target": round(target, 1), "rooms_skipped": skipped,
                           "rooms_held": sorted({r.name for r in show if r.held and not r.estimated}),
                           "rooms_estimated": {r.name: {"forudsagt": round(r.t_now, 2), "sidste_måling": _ts_local_iso(float(e["since"])),
                                                        "minutter": round((now - float(e["since"])) / 60), "usikkerhed": round(r.margin, 2)}
@@ -2811,6 +2859,12 @@ class VarmemodelCoordinator:
             if s.conf.get(CONF_FLOW_TARGET) and (full or self.settings.get(f"{sid}.{FLOW_SWITCH}")):
                 await self._flow_apply(s, p.hours, (bool(cur and cur["blocked"]) or self.live_blocked()))
         self.plans = plans
+        for sid, pl in plans.items():
+            if (src := self.sources.get(sid)) is not None:
+                try:
+                    self._varsel(src, pl, now)
+                except Exception:  # noqa: BLE001 – en besked må aldrig vælte planlægningen
+                    _LOGGER.debug("%s: besked forud kunne ikke laves", src.name, exc_info=True)
         self._flag_missing(now, out_flag)
         if len(hours) < 6:
             missing.append("for få timer med pris")

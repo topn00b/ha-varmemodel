@@ -339,7 +339,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["heat", "off", "blocked", "unknown"]
-    _unrecorded_attributes = frozenset({"plan", "rooms_forecast", "history", "rooms_check", "rooms_band", "røde_perioder"})
+    _unrecorded_attributes = frozenset({"plan", "rooms_forecast", "history", "rooms_check", "rooms_band", "røde_perioder", "problemer"})
 
     def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
         super().__init__(coordinator, s, "plan_now")
@@ -370,6 +370,9 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "heat_kw": h.get("heat_kw"), "flow": h.get("flow"), "price": h.get("price"),
             "t_out": h.get("t_out"), "cop": h.get("cop"),
             "reason": p.get("reason"), "warnings": p.get("warnings") or None, "target": p.get("target"),
+            # Rum, der forudsiges under grænsen (besked forud): laveste temperatur og tid, og hvornår det kommer under
+            "problemer": [{"rum": x["rum"], "kl": _ts_local(x["ts"]), "fra": _ts_local(x["fra_ts"]), "temp": x["temp"],
+                           "grænse": x["grænse"], "under": x["under"], "blokeret": x["blokeret"]} for x in p.get("problems") or []] or None,
             "boost": p.get("boost"), "rooms_skipped": p.get("rooms_skipped") or None, "rooms_held": p.get("rooms_held") or None,
             "rooms_estimated": p.get("rooms_estimated") or None,
             "demand_kwh": p.get("demand_kwh"), "heat_kwh": p.get("heat_kwh"), "el_kwh": p.get("el_kwh"), "cost_kr": p.get("cost_kr"),

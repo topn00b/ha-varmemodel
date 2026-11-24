@@ -72,6 +72,8 @@ class Plan:
     warnings: list[str] = field(default_factory=list)
     preload: dict[str, Any] | None = None
     deficit: float = 0.0  # største forudsagte manko under planens grænse (°C, 0 = alle rum holder)
+    # Rum, der forudsiges under grænsen (til besked forud): rum, ts (laveste), temp, grænse, under, fra_ts (første time under), blokeret
+    problems: list[dict[str, Any]] = field(default_factory=list)
     trimmed_kwh: float = 0.0  # varme skåret fra husets behov, fordi rummene forudsiges at holde uden
     flow_raise: float = 0.0  # så mange °C er fremløbsgrænsen hævet, fordi rummene ellers forudsiges under grænsen  # første forvarmning: fra/til, blokeringen den dækker og mængden
 
@@ -391,6 +393,9 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
         if s[k] < limit(r, k):
             plan.warnings.append(f"{r.name}: {s[k]:.1f} °C {lab(hours[k].ts)} er under planens grænse ({limit(r, k):.1f})")
             plan.deficit = max(plan.deficit, round(limit(r, k) - s[k], 2))
+            first = next((j for j in range(n) if s[j] < limit(r, j)), k)
+            plan.problems.append({"rum": r.name, "ts": hours[k].ts, "temp": round(s[k], 1), "grænse": round(limit(r, k), 1),
+                                  "under": round(limit(r, k) - s[k], 2), "fra_ts": hours[first].ts, "blokeret": bool(hours[k].blocked)})
     pq, plan.preload, pre_txt = _preload_window(hours, q, lab, red_spans)
     for i, h in enumerate(hours):
         p = round(q[i], 2)
@@ -527,6 +532,9 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
         if s[k] < floor_at(r, k):
             plan.warnings.append(f"{r.name}: {s[k]:.1f} °C {lab(hours[k].ts)} er under gulvet ({r.t_min:.1f}"
                                  + (f", må gå {red_allowance:.1f} under i rød)" if red_allowance and hours[k].blocked else ")"))
+            first = next((j for j in range(n) if s[j] < floor_at(r, j)), k)
+            plan.problems.append({"rum": r.name, "ts": hours[k].ts, "temp": round(s[k], 1), "grænse": round(floor_at(r, k), 1),
+                                  "under": round(floor_at(r, k) - s[k], 2), "fra_ts": hours[first].ts, "blokeret": bool(hours[k].blocked)})
     notes: list[str] = []
     for r in capped:
         if r.t_now > r.t_max:

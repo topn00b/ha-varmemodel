@@ -120,6 +120,21 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 
 **Søg laveste fremløb (0.16.0):** vælg *Fremløb efter start* = *søg laveste fremløb* på den vandbårne kilde. Varmepumpen starter ved retur + 3 °C (mindst 20 °C) og holder målet lavt, så længe rummene holder sig over gulvet. Målet ændres stille og roligt efter rummenes margen og målte tendens (2 timer): +1 °C pr. time, når et rum er på vej under gulvet inden for 3 timer; +2 °C pr. halve time, når et rum er under gulvet og ikke på vej op; +1 °C, når kompressoren stopper (målet er under varmepumpens laveste ydelse); −1 °C hver anden time, når alle rum er mindst 0,5 °C over gulvet og stabile – aldrig over loftet (det lærte fremløb + margen). **Planen regner med søgningens mål** (én sandhed): forudsigelser, »ventet«, banner og anlægsboks passer med det, der faktisk kører, og planen lægger flere timer med lavt fremløb. **Forvarmning går forud:** kan flere timer ved søgningens mål ikke holde rummene gennem en blokering, hæver planen fremløbet (højst 5 °C over målet, aldrig over loftet) – vist som »forvarmer«; søgningen fortsætter bagefter. Et mål, der har holdt alle rum over gulvet i 3 timer, gemmes som *lært laveste fremløb* for udetemperaturen (5 °C-bånd). Anlæg-kortet viser status i klart sprog, mål/målt/loft, en graf 12 timer tilbage og frem (målt fremløb og retur, målet, planens timer, kompressor i drift, blokerede timer), det lærte og »Sådan virker det«; i rumlisten viser en pil rummets tendens, og ◆ markerer rummet, der bestemmer.
 
+**Besked forud (0.19.0):** når planen forudser, at et rum kommer mindst 0,2 °C under sin grænse (fx gennem en lang blokering, hvor prisloftet gør mange timer røde), fyrer Varmemodel hændelsen `varmemodel_varsel` – første gang og igen, hvis det bliver mindst 0,3 °C værre; er problemet væk (under 0,1 °C), varsles et nyt igen. Ingen gentagelser for det samme problem. Hændelsen har en færdig tekst (`tekst`: rum, laveste temperatur og tidspunkt, grænse, hvornår rummet kommer under, blokeringerne frem til da, om planen kan dække behovet, og om den allerede hæver fremløbet) og data (`kilde`, `nye`, `værre`, `problemer`, `blokeret`). Plan-sensoren har attributten `problemer` (samme rum som advarslerne). Send beskeden videre med en automation:
+
+```yaml
+- alias: Varmemodel – besked forud
+  triggers:
+    - trigger: event
+      event_type: varmemodel_varsel
+  actions:
+    - action: notify.notify
+      data:
+        title: "Varme: {{ trigger.event.data.kilde }} – problem forude"
+        message: "{{ trigger.event.data.tekst }}"
+  mode: queued
+```
+
 **Varmemodel bestemmer start og stop (0.17.3–0.18.0):** start/stop slider på kompressoren, så varmepumpens egen termostat skal ikke nå at stoppe den – kun Varmemodels plan tænder og slukker. Nogle varmepumper kører lavt flow i opstarten (fx i fast flow-tilstand: ca. 9 L/min de første 7 min., fuldt flow efter ca. 17 min. – ved hver start, efter hver afrimning og efter et stop). Så skyder fremløbet 7–8 °C over returen, og kompressoren stopper ved målet + sin egen margen (ca. 4 °C) efter 4–6 min. – en kort kørsel fulgt af en pause. To værn lægges oven på søgningens mål (søgningens mål er stadig det laveste, der holder rummene, og det er det, planen regner med):
 - *Opstartsløft:* når kompressoren står i varme, de første 20 min. efter en start og under og 20 min. efter en afrimning skrives mindst retur + *startløftet* (rundet op). Startløftet læres af korte kørsler (stop inden for 20 min. efter en start eller afrimning): målet, der stod i varmepumpen dengang, minus returen ved starten + 1 °C (mindst 3, højst 10 °C). En start, der kommer igennem opstarten, sænker det 0,25 °C, så det prøver lavere igen (fx efter en ændring af varmepumpens flow).
 - *Stopværn:* mens kompressoren kører (ikke under eller lige efter afrimning eller varmt vand), holdes målet højst 2 °C under fremløbet, så fremløbet aldrig når stopgrænsen – heller ikke på laveste effekt, hvor huset ikke kan tage hele ydelsen. Målet følger kun fremløbet op, aldrig over loftet.
