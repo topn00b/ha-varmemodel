@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.20.1';
+  const VERSION = '0.20.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -1208,7 +1208,8 @@
       const today = rows ? rows.filter((r) => r.t >= t0).reduce((a, r) => a + r.v, 0) : null;
       const days = []; for (let i = 6; i >= 0; i--) { const a = t0 - i * 864e5; days.push({ a, v: rows ? rows.filter((r) => r.t >= a && r.t < a + 864e5).reduce((x, r) => x + r.v, 0) : null }); }
       const dm = Math.max(0.5, ...days.map((x) => x.v || 0));
-      const dbar = days.map((x, i) => `<div class="db"><i style="height:${Math.round((48 * (x.v || 0)) / dm)}px${i === 6 ? ';background:' + OR : ''}"></i><span>${fmt(x.v, 1)}</span><span class="mut">${i === 6 ? 'i dag' : new Date(x.a).toLocaleDateString('da-DK', { weekday: 'short' }).replace('.', '')}</span></div>`).join('');
+      // Samme farve alle dage (orange forveksles med »dyr« i forklaringen; »i dag« står under søjlen)
+      const dbar = days.map((x, i) => `<div class="db"><i style="height:${Math.round((48 * (x.v || 0)) / dm)}px"></i><span>${fmt(x.v, 1)}</span><span class="mut">${i === 6 ? 'i dag' : new Date(x.a).toLocaleDateString('da-DK', { weekday: 'short' }).replace('.', '')}</span></div>`).join('');
       let K = '', S = '';
       K += `<div class="b"><div class="pvh">kWh el<span class="mut sm"> · pr. time, 24 t tilbage og planen 12 t frem</span></div>${rows ? svg : '<div class="mut sm">henter …</div>'}`
         + `<div class="sm"><span class="sw" style="background:${GR}"></span>billig <span class="sw" style="background:${YE}"></span>middel <span class="sw" style="background:${OR}"></span>dyr <span class="sw" style="background:${RE}"></span>rød · stiplet = plan</div>`
