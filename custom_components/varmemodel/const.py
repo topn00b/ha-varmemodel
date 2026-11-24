@@ -98,6 +98,12 @@ LOW_DOWN_HOLD = 7200  # alle rum med god margen og stabile: −1 K højst hver a
 LOW_DOWN_MARGIN = 0.5  # °C over gulvet, alle rum skal have, før der sænkes
 LOW_RESERVE = 0.1  # °C over gulvet, rummet skal holde om 3 timer (målt tendens)
 LOW_LEARN_HOLD = 10800  # målet har holdt rummene i 3 timer uden at hæve: lært som laveste fungerende fremløb
+# Startløft: nogle varmepumper kører lavt flow de første minutter efter kompressorstart (fx fast flow-tilstand), så
+# fremløbet skyder over målet + varmepumpens egen margen, og kompressoren stopper efter få minutter. Løftet over returen,
+# som starten skal have, læres af de korte kørsler (målet − returen ved kompressorstart + 1 K)
+START_PHASE_S = 1200  # et stop inden for så mange sekunder efter kompressorstart er en kort kørsel (opstarten)
+START_K_MAX = 10.0  # højst så meget lært startløft over returen
+START_K_DECAY = 0.25  # en start, der kommer igennem opstarten, sænker det lærte løft så meget (prøver lavere igen)
 CONF_MAX_PAUSE = "max_pause"
 CONF_COMFORT_OFFSET = "comfort_offset"
 CONF_BOOST_ENTITY = "boost_entity"

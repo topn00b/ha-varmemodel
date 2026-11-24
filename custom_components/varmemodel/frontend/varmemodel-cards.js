@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.17.2';
+  const VERSION = '0.17.3';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -1310,9 +1310,10 @@
         + `<div style="margin:4px 0 6px;font-size:14px">${esc(fs.tekst || '')}</div>` + nums + this.flowChart(h, main, fs, f)
         + `<div class="sm" style="margin-top:6px"><b>Lært laveste fremløb</b> ${lært ? `<div class="wrap"><table>${lært}</table></div>` : '<span class="mut">– endnu intet (læres, når målet har holdt alle rum over gulvet i 3 timer)</span>'}</div>`
         + `<details id="fsHow"${this._open && this._open.has('fsHow') ? ' open' : ''}><summary class="sm">Sådan virker det</summary><div class="sm mut" style="margin-top:4px">`
-        + `Luft-vand starter ved retur + 3 °C og holder målet lavt. Planen regner med samme mål, så forudsigelser og »ventet« passer med det, der kører, og den lægger flere timer med lavt fremløb.<br>`
+        + `Luft-vand starter ved retur + startløftet (${fmt(fs.startløft ?? 3, 1)} °C${(fs.startløft ?? 3) > 3 ? ', lært af varmepumpens opstart' : ''}) og holder målet lavt. Planen regner med samme mål, så forudsigelser og »ventet« passer med det, der kører, og den lægger flere timer med lavt fremløb.<br>`
         + `• +1 °C pr. time, når et rum er på vej under gulvet inden for 3 timer (målt tendens over 2 timer)<br>• +2 °C pr. halve time, når et rum er under gulvet og ikke på vej op<br>`
-        + `• +1 °C, når kompressoren stopper (målet er under varmepumpens laveste ydelse)<br>• −1 °C hver anden time, når alle rum er mindst 0,5 °C over gulvet og stabile<br>`
+        + `• kort kørsel (kompressoren stopper inden for 20 min. efter start): opstarten skød fremløbet over målet – startløftet læres (målet − returen ved start + 1 °C), og målet hæves straks til retur + løftet. En start, der kommer igennem opstarten, sænker løftet 0,25 °C, så det prøver lavere igen<br>`
+        + `• +1 °C, når kompressoren stopper efter længere drift (målet er under varmepumpens laveste ydelse)<br>• −1 °C hver anden time, når alle rum er mindst 0,5 °C over gulvet og stabile<br>`
         + `• forvarmning: kan flere timer ved søgningens mål ikke holde rummene gennem en blokering, hæver planen fremløbet (højst 5 °C) – vist som »forvarmer«<br>`
         + `• aldrig over loftet (det lærte fremløb + margen). Rummet, der bestemmer, er markeret med ◆ i rumlisten; pilen viser rummets tendens.</div></details></div>`;
       return `<div class="pv2">${box}${set}</div>`;

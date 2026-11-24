@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from functools import partial
 import logging
-from math import cos, radians, sin
+from math import ceil, cos, radians, sin
 import asyncio
 import re
 import time
@@ -141,6 +141,9 @@ from .const import (
     LOW_RESERVE,
     LOW_UP_HOLD,
     LOW_URGENT_HOLD,
+    START_K_DECAY,
+    START_K_MAX,
+    START_PHASE_S,
     CONF_MAX_PAUSE,
     CONF_COMFORT_OFFSET,
     CONF_BOOST_ENTITY,
@@ -1627,7 +1630,7 @@ class VarmemodelCoordinator:
             # fremløbsmål FØR tænding, så varmepumpen ikke de første minutter går mod et gammelt mål
             mode = self.settings.get(f"{s.sid}.{SOFT_START}", "test")
             soft = mode in ("til", "lavest") or (mode == "test" and not h.get("last_soft", False))
-            h.update(start_t=time.time(), soft=soft, ramp0=None, soft_now=None, low=None, low_t=None)
+            h.update(start_t=time.time(), soft=soft, ramp0=None, soft_now=None, low=None, low_t=None, start_short=0, start_ok=False)
             if soft and s.conf.get(CONF_FLOW_TARGET):
                 try:
                     await self._flow_apply(s, hours, False, pre_start=True)
@@ -1701,8 +1704,19 @@ class VarmemodelCoordinator:
             return float(lr)
         if hs.get("low_last") is not None:
             return float(hs["low_last"])
-        ret = self._state_num(s.eid(CONF_RETURN))
-        return float(round(max(ret + SOFT_OVER_RETURN_K, SOFT_FLOOR))) if ret is not None else None
+        return start_flow(self._state_num(s.eid(CONF_RETURN)), self._start_k(hs), SOFT_OVER_RETURN_K, SOFT_FLOOR)
+
+    @staticmethod
+    def _start_k(hs: dict[str, Any]) -> float:
+        """Startløftet over returen: det lærte (korte kørsler i opstarten), aldrig under standarden."""
+        return max(_num(hs.get("start_k")) or SOFT_OVER_RETURN_K, SOFT_OVER_RETURN_K)
+
+    def _target_now(self, s: SourceState) -> float | None:
+        """Fremløbsmålet, der står i varmepumpen nu (climate: attributten temperature; number: tilstanden)."""
+        st = self.hass.states.get(s.conf.get(CONF_FLOW_TARGET) or "")
+        if st is None:
+            return None
+        return _num(st.attributes.get("temperature")) if st.domain == "climate" else _num(st.state)
 
     def _comp_on_since_sync(self, s: SourceState) -> float | None:
         """Hvornår kompressoren sidst gik fra slukket til tændt (de seneste 8 timer); None, når den er slukket.
@@ -1723,30 +1737,17 @@ class VarmemodelCoordinator:
             last = z.state
         return since if last == "on" else None
 
-    def _comp_stops_sync(self, s: SourceState, since: float) -> int:
-        """Kompressorstop (on → off) siden ``since`` uden varmt vand eller afrimning – tegn på, at fremløbsmålet er under
-        varmepumpens laveste ydelse (den når målet, slukker og starter igen)."""
-        comp, dhw, df = s.eid(CONF_COMPRESSOR), s.eid(CONF_DHW), s.eid(CONF_DEFROST)
+    def _comp_stops_sync(self, s: SourceState, since: float) -> list[dict[str, Any]]:
+        """Kompressorstop siden ``since`` uden varmt vand eller afrimning (se ``comp_stops``) – historikken hentes fra 30 min.
+        før, så en afrimning eller kompressorstart lige før vinduet ses, og returen ved kompressorstart kan læses."""
+        comp, dhw, df, ret = s.eid(CONF_COMPRESSOR), s.eid(CONF_DHW), s.eid(CONF_DEFROST), s.eid(CONF_RETURN)
         if not comp:
-            return 0
-        start = dt_util.utc_from_timestamp(since)
-        ids = [e for e in (comp, dhw, df) if e]
-        res = history.get_significant_states(self.hass, start, dt_util.utcnow(), ids, include_start_time_state=True,
-                                             significant_changes_only=False, no_attributes=True)
-        ev = sorted([(z.last_updated.timestamp(), e, z.state) for e in ids for z in res.get(e, [])])
-        # Afrimning: kompressoren stopper kort ved start/slut (4-vejsventilen skifter) – stop fra 1 min. før en afrimning
-        # til 10 min. efter tæller ikke (ellers hævede hver afrimning målet)
-        df_on = [t for t, e, v in ev if e == df and v == "on"]
-        df_off = [t for t, e, v in ev if e == df and v == "off"]
-        st: dict[str, str] = {}
-        stops = 0
-        for t, e, v in ev:
-            if e == comp and st.get(comp) == "on" and v == "off" and st.get(dhw) != "on" and st.get(df) != "on":
-                near_df = any(-60 <= x - t <= 300 for x in df_on) or any(0 <= t - x <= 600 for x in df_off)
-                if not near_df:
-                    stops += 1
-            st[e] = v
-        return stops
+            return []
+        ids = [e for e in (comp, dhw, df, ret) if e]
+        res = history.get_significant_states(self.hass, dt_util.utc_from_timestamp(since - 1800), dt_util.utcnow(), ids,
+                                             include_start_time_state=True, significant_changes_only=False, no_attributes=True)
+        rows = {e: [(z.last_updated.timestamp(), z.state) for z in res.get(e, [])] for e in ids}
+        return comp_stops(rows, comp, dhw, df, since, ret)
 
     async def _low_flow(self, s: SourceState, hs: dict[str, Any], plan: float, pre_start: bool = False) -> float:
         """Søg laveste fremløb: start ved retur + 4 °C (mindst 20 °C) og ændr målet stille og roligt efter rummene –
@@ -1756,11 +1757,15 @@ class VarmemodelCoordinator:
         t_out = self._state_num(self._id(CONF_OUTDOOR))
         bk = band(t_out) or "?"
         learned = (hs.get("low_learned") or {}).get(bk)
+        k = self._start_k(hs)
         if hs.get("low") is None or pre_start:
             ret = self._state_num(s.eid(CONF_RETURN))
-            v = max((ret + SOFT_OVER_RETURN_K) if ret is not None else plan - 3 * SOFT_STEP_K, SOFT_FLOOR)
-            hs.update(low=float(round(v)), low_t=now, low_hold_since=now, start_t=hs.get("start_t") or now,
-                      low_status="start", low_why=f"start: retur + {SOFT_OVER_RETURN_K:.0f} °C"
+            v = start_flow(ret, k, SOFT_OVER_RETURN_K, SOFT_FLOOR)
+            if v is None:
+                v = float(round(max(plan - 3 * SOFT_STEP_K, SOFT_FLOOR)))
+            hs.update(low=v, low_t=now, low_hold_since=now, start_t=hs.get("start_t") or now, low_step=0.0,
+                      low_status="start", low_why=f"start: retur + {_k_txt(k)} °C"
+                      + (" (lært af varmepumpens opstart)" if k > SOFT_OVER_RETURN_K else "")
                       + (f" (lært laveste ved {_band_txt(bk)} ude: {learned:.0f} °C – løftes 2 °C pr. kvarter derop)" if learned else ""))
             self._low_log(hs, now, hs["low"], plan, hs["low_why"])
             return min(plan, hs["low"])
@@ -1776,13 +1781,34 @@ class VarmemodelCoordinator:
             stops = await get_instance(self.hass).async_add_executor_job(
                 self._comp_stops_sync, s, max(now - 1800, (hs.get("start_t") or now) + 300, hs.get("low_t") or 0))
         except Exception:  # noqa: BLE001
-            stops = 0
-        hs["low_stops"] = stops
+            _LOGGER.debug("Søg laveste fremløb: kompressorstop kunne ikke læses", exc_info=True)
+            stops = []
+        hs["low_stops"] = len(stops)
+        # Kort kørsel (stop i opstarten): varmepumpens opstart skød fremløbet over målet + dens egen margen, før flowet var
+        # oppe – lær løftet over returen, der skal til, og brug det straks (venter ikke en halv time)
+        short = [x for x in stops if x["run"] is not None and x["run"] <= START_PHASE_S]
+        if short:
+            tgt = self._target_now(s)
+            k = learn_start_k(k, short, tgt if tgt is not None else low, SOFT_OVER_RETURN_K)
+            hs["start_k"] = k
+            hs["start_short"] = (hs.get("start_short") or 0) + len(short)
+        elif (k > SOFT_OVER_RETURN_K and not hs.get("start_ok") and not hs.get("start_short") and hs.get("start_t")
+              and (cs := hs.get("comp_since")) and cs >= hs["start_t"] - 60 and now - cs >= START_PHASE_S):
+            # Starten kom igennem opstarten ved det lærte løft: sænk det lidt, så det prøver lavere igen (fx efter en ændring
+            # af varmepumpens flow) – en ny kort kørsel løfter det straks tilbage
+            k = hs["start_k"] = round(max(SOFT_OVER_RETURN_K, k - START_K_DECAY), 2)
+            hs["start_ok"] = True
         cold = [x for x in rooms if x["margen"] < 0 and x["tendens"] < 0.05]
         going = sorted((x for x in rooms if x["om_3t"] < LOW_RESERVE), key=lambda x: x["om_3t"])
         if stops and low < plan:
             status = "hæver"
-            if since >= LOW_URGENT_HOLD:
+            if short:
+                need = start_flow(self._state_num(s.eid(CONF_RETURN)), k, SOFT_OVER_RETURN_K, SOFT_FLOOR)
+                step = min(max(1.0, (need or 0.0) - low), 4.0)
+                run = min(x["run"] for x in short) / 60
+                why = (f"kort kørsel ({run:.0f} min.) – varmepumpens opstart skød fremløbet over målet; "
+                       f"startløft nu retur + {_k_txt(k)} °C")
+            elif since >= LOW_URGENT_HOLD:
                 step, why = 1.0, "kompressoren stoppede – målet var under varmepumpens laveste ydelse"
         elif learned and low < learned - 1 and hs.get("low_status") in ("start", "løfter") and not going and not cold:
             if since >= 900:
@@ -1804,8 +1830,9 @@ class VarmemodelCoordinator:
             if since >= LOW_DOWN_HOLD:
                 step, why = -1.0, f"alle rum mindst {LOW_DOWN_MARGIN:.1f} °C over gulvet og stabile"
         new = min(max(low + step, SOFT_FLOOR), plan)
+        hs["low_step"] = 0.0
         if step and new != low:
-            hs.update(low=new, low_t=now, low_why=why, low_hold_since=now)  # det nye mål skal holde 3 t, før det læres
+            hs.update(low=new, low_t=now, low_why=why, low_hold_since=now, low_step=new - low)  # det nye mål skal holde 3 t, før det læres
             self._low_log(hs, now, new, plan, why)
         hs["low_status"] = status
         # Lært: målet har holdt alle rum over gulvet i 3 timer uden at hæve – laveste fungerende fremløb i dette ude-bånd
@@ -1848,15 +1875,19 @@ class VarmemodelCoordinator:
                     break
         f = lambda v: f"{v:.0f}" if v is not None else "–"  # noqa: E731
         k = float(hs.get("low_raise") or 0.0)
+        sk = self._start_k(hs)
+        sk_txt = f"retur + {_k_txt(sk)} °C" + (", lært af varmepumpens opstart" if sk > SOFT_OVER_RETURN_K else "")
         eff = min((low if low is not None else cap or 0) + k, hs.get("low_loft") or 99) if k else None
         if off:
             when = dt_util.as_local(dt_util.utc_from_timestamp(start_at)).strftime("%H:%M") if start_at else None
             text = (f"Luft-vand er slukket. Næste start {'kl. ' + when if when else 'når planen varmer'} ved ca. {f(cap)} °C"
-                    f" (retur + {SOFT_OVER_RETURN_K:.0f} °C eller det sidst fundne mål).")
+                    f" ({sk_txt} – eller det sidst fundne mål).")
         elif status == "start":
-            text = f"Starter ved {f(low)} °C (retur + {SOFT_OVER_RETURN_K:.0f} °C) – rummene vurderes ved næste planlægning."
+            text = f"Starter ved {f(low)} °C ({sk_txt}) – rummene vurderes ved næste planlægning."
         elif status == "løfter":
             text = f"Løfter blødt mod det lærte laveste fremløb (+2 °C pr. kvarter). Nu {f(low)} °C."
+        elif status == "hæver" and hs.get("low_stops") and hs.get("low_step"):
+            text = f"Hævet til {f(low)} °C – {hs.get('low_why') or 'kompressoren stoppede'}."
         elif status == "hæver" and hs.get("low_stops"):
             text = f"Hæver til {f((low or 0) + 1)} °C{' kl. ' + nxt_txt if nxt_txt else ''} – kompressoren stoppede: målet var under varmepumpens laveste ydelse."
         elif status == "hæver" and cold:
@@ -1882,6 +1913,7 @@ class VarmemodelCoordinator:
             "plan": (self.commands.get(s.sid) or {}).get("flow"), "status": "slukket" if off else status,
             "tekst": _dk_txt(text), "grund": _dk_txt(hs.get("low_why") or ""), "næste_ændring": _ts_local_iso(nxt) if nxt_txt else None,
             "bestemmer": bind["navn"] if bind and not off else None, "kompressorstop": hs.get("low_stops") or 0,
+            "startløft": round(sk, 1), "korte_kørsler": hs.get("start_short") or 0,
             "næste_start": dt_util.as_local(dt_util.utc_from_timestamp(start_at)).strftime("%H:%M") if off and start_at else None,
             "rum": [{k: x.get(k) for k in ("navn", "t", "gulv", "margen", "tendens", "om_3t")} for x in rooms],
             "lært": hs.get("low_learned") or {}, "log": (hs.get("low_log") or [])[-48:],
@@ -2706,6 +2738,74 @@ def quarter_block_counts(items: list[Any], parse: Callable[[str], datetime | Non
             k = int(d.timestamp() // 3600 * 3600)
             cnt[k] = cnt.get(k, 0) + 1
     return cnt
+
+
+def comp_stops(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | None, df: str | None, since: float,
+               ret: str | None = None) -> list[dict[str, Any]]:
+    """Kompressorstop (tændt → slukket) fra ``since`` uden varmt vand eller afrimning – tegn på, at fremløbsmålet er under
+    varmepumpens laveste ydelse. Pr. stop: tidspunkt ``t``, hvor længe kompressoren havde kørt ``run`` (s; None når starten
+    ligger før data) og returen ved kompressorstart ``ret0`` (None uden data).
+
+    ``rows`` er historikken pr. entitet [(tid, tilstand)] – gerne fra 30 min. før ``since``. Første række pr. entitet er
+    tilstanden ved forespørgslens start (tidsstemplet = start) og er intet skift: før 0.17.3 blev en sådan »slukket« på
+    afrimningen læst som »afrimningen sluttede lige« og skjulte stop i vinduets første 10 min. Utilgængelig/ukendt springes
+    over (et Modbus-udfald er hverken stop eller afrimning)."""
+    ev: list[tuple[float, str, str | None, str]] = []
+    for e in (comp, dhw, df):
+        if not e:
+            continue
+        prev: str | None = None
+        for t, v in sorted(rows.get(e) or [], key=lambda r: r[0]):
+            if v in ("unavailable", "unknown") or v == prev:
+                continue
+            ev.append((t, e, prev, v))
+            prev = v
+    ev.sort(key=lambda r: r[0])
+    # Afrimning: kompressoren stopper kort ved start/slut (4-vejsventilen skifter) – stop fra 1 min. før en afrimning til
+    # 10 min. efter tæller ikke (ellers hævede hver afrimning målet). Varmt vand: skiftet tilbage til rumvarme (3 min.)
+    df_on = [t for t, e, p, v in ev if e == df and p is not None and v == "on"]
+    df_off = [t for t, e, p, v in ev if e == df and p == "on" and v == "off"]
+    dhw_off = [t for t, e, p, v in ev if e == dhw and p == "on" and v == "off"]
+    rv = sorted((t, x) for t, v in (rows.get(ret) or [] if ret else []) if (x := _num(v)) is not None)
+    st: dict[str, str] = {}
+    on_t: float | None = None
+    out: list[dict[str, Any]] = []
+    for t, e, p, v in ev:
+        if e == comp and v == "on":
+            on_t = t if p is not None else None  # tændt allerede ved datastart: længden er ukendt
+        elif e == comp and p == "on" and v == "off":
+            if t >= since and st.get(dhw or "") != "on" and st.get(df or "") != "on":
+                near_df = any(-60 <= x - t <= 300 for x in df_on) or any(0 <= t - x <= 600 for x in df_off)
+                if not near_df and not any(0 <= t - x <= 180 for x in dhw_off):
+                    r0 = [x for tt, x in rv if tt <= on_t] if on_t is not None else []
+                    out.append({"t": t, "run": (t - on_t) if on_t is not None else None, "ret0": r0[-1] if r0 else None})
+            on_t = None
+        st[e] = v
+    return out
+
+
+def learn_start_k(k: float, short: list[dict[str, Any]], target: float | None, k_min: float, k_max: float = START_K_MAX) -> float:
+    """Startløftet over returen, som opstarten kræver: en kort kørsel ved målet ``target`` med returen ``ret0`` ved
+    kompressorstart viser, at løftet skal være over target − ret0 – lær target − ret0 + 1 K (målets trin). Aldrig under
+    ``k_min`` eller over ``k_max``; et løft, der allerede er højere, beholdes."""
+    for x in short:
+        if target is not None and x.get("ret0") is not None:
+            k = max(k, target - x["ret0"] + 1.0)
+    return round(min(max(k, k_min), k_max), 2)
+
+
+def start_flow(ret: float | None, k: float, k_default: float, floor: float) -> float | None:
+    """Fremløbsmålet ved start: retur + startløftet, mindst ``floor``. Med et lært løft (over standarden) rundes op –
+    opstarten har vist, at en halv grad for lidt får kompressoren til at stoppe; standarden rundes som før."""
+    if ret is None:
+        return None
+    v = ret + k
+    return float(max(ceil(v - 1e-9) if k > k_default else round(v), floor))
+
+
+def _k_txt(k: float) -> str:
+    """Startløftet som tekst: hele grader uden decimal, ellers én decimal (dansk komma sættes af _dk_txt)."""
+    return f"{k:.0f}" if abs(k - round(k)) < 0.05 else f"{k:.1f}"
 
 
 def _dk_txt(t: str) -> str:

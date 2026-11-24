@@ -930,14 +930,82 @@ async def test_flip_cap_still_switches_on(ha: HomeAssistant) -> None:
     assert calls == ["off"]  # blokering slukker altid
 
 
-async def test_comp_stop_after_defrost_ignored(ha: HomeAssistant) -> None:
-    """Kompressorens korte stop efter en afrimning tæller ikke som »målet er for lavt«."""
-    import inspect
+def test_comp_stops_start_row_is_no_defrost_end() -> None:
+    """Historikkens første række (tilstanden ved forespørgslens start) er intet skift: en »slukket« afrimning dér skjuler
+    ikke et stop (før 0.17.3 blev stoppet 10:21 overset, fordi vinduet startede 10:20). Kørslens længde og returen ved
+    kompressorstart følger med."""
+    from custom_components.varmemodel.coordinator import comp_stops
 
-    from custom_components.varmemodel import coordinator as co
+    rows = {"c": [(0, "off"), (1780, "on"), (2060, "off")], "d": [(0, "off")], "w": [(0, "off")],
+            "r": [(0, "23.5"), (1700, "23.5"), (1900, "24.2")]}
+    assert comp_stops(rows, "c", "w", "d", 1800, "r") == [{"t": 2060, "run": 280, "ret0": 23.5}]
+    assert comp_stops(rows, "c", "w", "d", 2100, "r") == []  # før vinduet
 
-    src = inspect.getsource(co.VarmemodelCoordinator._comp_stops_sync)
-    assert "near_df" in src and "df_on" in src and "df_off" in src
+
+def test_comp_stops_defrost_dhw_and_dropouts() -> None:
+    """Stop lige efter en rigtig afrimning eller varmt vand tæller ikke; et Modbus-udfald er hverken stop eller start."""
+    from custom_components.varmemodel.coordinator import comp_stops
+
+    # Afrimning slutter 1740: ventilskiftet (1745) og stoppet 4 min. efter (1980) tæller ikke
+    rows = {"c": [(0, "on"), (1745, "off"), (1755, "on"), (1980, "off")], "d": [(0, "off"), (1500, "on"), (1740, "off")]}
+    assert comp_stops(rows, "c", None, "d", 1800) == []
+    # Varmt vand slutter 2000: stop 100 s efter tæller ikke, stop 300 s efter tæller (lang kørsel)
+    rows = {"c": [(0, "off"), (900, "on"), (2100, "off")], "w": [(0, "off"), (1000, "on"), (2000, "off")]}
+    assert comp_stops(rows, "c", "w", None, 1800) == []
+    rows["c"][2] = (2300, "off")
+    assert comp_stops(rows, "c", "w", None, 1800) == [{"t": 2300, "run": 1400, "ret0": None}]
+    # Udfald: »utilgængelig« → »tændt« er ingen ny start; længden er ukendt (tændt før data)
+    rows = {"c": [(0, "on"), (1900, "unavailable"), (1920, "on"), (2500, "off")], "d": [(0, "off"), (1900, "unavailable"), (1930, "off")]}
+    assert comp_stops(rows, "c", None, "d", 1800) == [{"t": 2500, "run": None, "ret0": None}]
+
+
+def test_start_lift_learning() -> None:
+    """Startløftet læres af korte kørsler (målet − returen ved start + 1 K) og rundes op ved start; standarden rundes som før."""
+    from custom_components.varmemodel.coordinator import learn_start_k, start_flow
+
+    k = learn_start_k(3.0, [{"ret0": 24.2}], 27.0, 3.0)  # 24/11 12:22: mål 27, retur 24,2 → stop efter 6 min.
+    assert k == 3.8
+    k = learn_start_k(k, [{"ret0": 24.2}], 28.0, 3.0)  # 12:33: mål 28 → stop igen
+    assert k == 4.8
+    assert learn_start_k(k, [{"ret0": None}], 28.0, 3.0) == 4.8 and learn_start_k(2.0, [], None, 3.0) == 3.0
+    assert learn_start_k(3.0, [{"ret0": 20.0}], 40.0, 3.0) == 10.0  # loft
+    assert start_flow(24.2, 4.8, 3.0, 20.0) == 29.0  # lært løft: 29,0 → 29 (rundes op)
+    assert start_flow(21.5, 3.0, 3.0, 20.0) == 24.0 and start_flow(23.5, 4.0, 3.0, 20.0) == 28.0  # standard: 24,5 → 24; lært: 27,5 → 28
+    assert start_flow(None, 4.8, 3.0, 20.0) is None and start_flow(10.0, 3.0, 3.0, 20.0) == 20.0
+
+
+async def test_low_flow_short_run_raises_and_learns(ha: HomeAssistant) -> None:
+    """Kort kørsel: målet hæves straks til retur + det lærte løft (venter ikke en halv time); næste start bruger løftet;
+    en start, der kommer igennem opstarten, sænker løftet 0,25."""
+    c, s = await _lv_entry(ha)
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    hs = c.air.setdefault(f"hydro:{s.sid}", {})
+    c._low_rooms_sync = lambda _s: [{"navn": "Gang", "margen": 0.2, "tendens": 0.0, "om_3t": 0.2}]  # noqa: SLF001
+    stops: list = []
+    c._comp_stops_sync = lambda _s, _since: list(stops)  # noqa: SLF001
+    assert await c._low_flow(s, hs, 35.0) == 24.0  # retur 21,5 + 3 = 24,5 → 24 (standarden rundes som før)
+    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 24, "min_temp": 20, "max_temp": 45})
+    stops[:] = [{"t": time.time() - 60, "run": 280.0, "ret0": 21.5}]
+    assert await c._low_flow(s, hs, 35.0) == 25.0  # løft 24 − 21,5 + 1 = 3,5 → 21,5 + 3,5 = 25
+    assert hs["start_k"] == 3.5 and "kort kørsel (5 min.)" in hs["low_why"] and hs["low_step"] == 1.0
+    v = c.flow_search(s)
+    assert v["startløft"] == 3.5 and v["korte_kørsler"] == 1 and v["tekst"].startswith("Hævet til 25 °C – kort kørsel")
+    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 25, "min_temp": 20, "max_temp": 45})
+    ha.states.async_set("sensor.retur", "22.0", {"state_class": "measurement"})
+    stops[:] = [{"t": time.time() - 60, "run": 300.0, "ret0": 22.0}]
+    assert await c._low_flow(s, hs, 35.0) == 26.0 and hs["start_k"] == 4.0  # 25 − 22 + 1 = 4 → 22 + 4 = 26
+    stops[:] = [{"t": time.time() - 60, "run": 3600.0, "ret0": 22.0}]  # stop efter lang drift: venter en halv time som før
+    assert await c._low_flow(s, hs, 35.0) == 26.0 and hs["low_status"] == "hæver" and hs["start_k"] == 4.0
+    # Ny start: retur 21,5 + 4 = 25,5 → 26 (lært løft rundes op)
+    ha.states.async_set("sensor.retur", "21.5", {"state_class": "measurement"})
+    stops[:] = []
+    hs.update(start_t=time.time() - 1500, start_short=0, start_ok=False)
+    assert await c._low_flow(s, hs, 35.0, pre_start=True) == 26.0 and "lært af varmepumpens opstart" in hs["low_why"]
+    hs["comp_since"] = time.time() - 1300  # kørt 21 min. siden starten uden kort kørsel
+    await c._low_flow(s, hs, 35.0)
+    assert hs["start_k"] == 3.75 and hs["start_ok"] is True
+    await c._low_flow(s, hs, 35.0)
+    assert hs["start_k"] == 3.75  # kun én gang pr. start
 
 
 def test_quarter_block_counts() -> None:
