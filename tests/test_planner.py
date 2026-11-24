@@ -428,7 +428,8 @@ def test_preload_window_shows_red_with_quarters() -> None:
 
     p = make_plan(hs, M, [room], 20.0, preload=0.3, label=lab, red_spans=[(8 * 3600 + 1800, 17 * 3600 + 900), (20 * 3600, 21 * 3600)])
     w = p.preload
-    assert w and w["to"] == 9 * 3600 and w["block_from"] == 8 * 3600 + 1800 and w["block_to"] == 17 * 3600 + 900
+    # opvarmningen slutter, når det røde begynder (08:30) – ikke ved timens slut
+    assert w and w["to"] == 8 * 3600 + 1800 and w["block_from"] == 8 * 3600 + 1800 and w["block_to"] == 17 * 3600 + 900
     assert "før blokeringen 08:30–17:15" in p.reason
 
 
@@ -480,3 +481,102 @@ def test_plan_raises_from_a_low_start_through_the_dead_zone() -> None:
     assert [x["heat_kw"] for x in low.hours] == [x["heat_kw"] for x in ref.hours]
     # Må den ikke hæve nok til at komme ud af den døde zone, ændrer den intet
     assert make_plan(hs, m, [room], 20.0, flow_margin=-10.0, flow_raise_max=5).flow_raise == 0
+
+
+def _lab(ts: int) -> str:
+    return f"kl. {ts // 3600:02d}" + (f":{ts // 60 % 60:02d}" if ts % 3600 else "")
+
+
+def _before_block(partial: bool, t_out: float = -8.0, price=lambda i: 2.0) -> list[PlanHour]:
+    """Blokeret kl. 6–20; med ``partial`` er time 6 delvist fri (rødt først fra 06:30)."""
+    out = hours(24, t_out=lambda i: t_out, blocked=lambda i: 6 <= i <= 20, price=price)
+    if partial:
+        out[6] = PlanHour(ts=6 * 3600, price=price(6), t_out=t_out, blocked=False, free=0.5)
+    return out
+
+
+def test_partial_hour_continues_the_run_up_to_the_block() -> None:
+    """Blokeringen begynder midt i en time (de frie kvarterer først): planen bruger den frie halvdel som fortsættelse af
+    timen før – halv mængde ved samme effekt og fremløb – i stedet for at stoppe en halv time for tidligt. Vinduet viser,
+    at opvarmningen slutter, når det røde begynder."""
+    room = PlanRoom(name="Stue", t_now=19.6, t_min=20.0, heat_now=0.02, heat_delayed=0.03, cool_per_hk=0.004, margin=0.2)
+    spans = [(6 * 3600 + 1800, 21 * 3600)]
+    old = make_plan(_before_block(False), M, [room], 20.0, past_q=[4.0] * 6, red_spans=spans, label=_lab)
+    new = make_plan(_before_block(True), M, [room], 20.0, past_q=[4.0] * 6, red_spans=spans, label=_lab)
+    assert old.hours[6]["heat_kw"] == 0 and old.hours[6]["blocked"]
+    h5, h6 = new.hours[5], new.hours[6]
+    assert h5["heat_kw"] == M.p_max and h6["heat_kw"] == M.p_max / 2 and not h6["blocked"] and h6["free"] == 0.5
+    assert h6["flow"] == h5["flow"] and h6["cop"] == h5["cop"]  # samme effekt, mens der varmes
+    assert abs(h6["cost"] - h5["cost"] / 2) < 0.02
+    assert "free" not in h5
+    assert [x["heat_kw"] for x in new.hours[:6]] == [x["heat_kw"] for x in old.hours[:6]] and new.heat_kwh >= old.heat_kwh + 2.9
+    assert new.preload["to"] == 6 * 3600 + 1800 and "opvarmer kl. 00–06:30 før blokeringen 06:30–21" in new.reason
+    # også uden de røde perioder kendes blokeringens start fra timens frie del
+    bare = make_plan(_before_block(True), M, [room], 20.0, past_q=[4.0] * 6, label=_lab)
+    assert bare.preload["to"] == bare.preload["block_from"] == 6 * 3600 + 1800
+    assert new.rooms["Stue"][20] > old.rooms["Stue"][20] + 0.1  # varmere sidst i blokeringen
+
+
+def test_partial_hour_is_never_used_alone() -> None:
+    """Den frie del af en delvist fri time bruges kun sammen med nabotimen på den frie side – ellers ville varmepumpen
+    starte for at blive stoppet af blokeringen kort efter. Gælder begge ender af en blokering og planens første time."""
+    cheap = lambda *on: (lambda i: 0.5 if i in on else 2.0)  # noqa: E731
+    # før blokeringen: time 6 er billigst, men time 5 er dyr og varmer ikke
+    p = make_plan(_before_block(True, 8.0, lambda i: 0.5 if i == 6 else (5.0 if i == 5 else 2.0)), M, [], 20.5)
+    assert p.hours[5]["heat_kw"] == 0 and p.hours[6]["heat_kw"] == 0 and abs(p.heat_kwh - p.demand_kwh) < 2.5
+    # en ubrugt delvist fri time hører til blokeringen: opvarmningen før vises stadig (til timens start)
+    p = make_plan(_before_block(True, 8.0, lambda i: 5.0 if i == 6 else (0.5 if i == 5 else 2.0)), M, [], 20.5,
+                  red_spans=[(6 * 3600 + 1800, 21 * 3600)], label=_lab)
+    assert p.hours[5]["heat_kw"] > 0 and p.hours[6]["heat_kw"] == 0
+    assert p.preload["to"] == 6 * 3600 and p.preload["block_from"] == 6 * 3600 + 1800 and "–06 før blokeringen 06:30–21" in p.reason
+    p = make_plan(_before_block(True, 8.0, cheap(5, 6)), M, [], 20.5)
+    assert p.hours[5]["heat_kw"] > 0 and 0 < p.hours[6]["heat_kw"] <= M.p_max / 2
+
+    # efter blokeringen: de frie kvarterer ligger sidst i time 21 og fortsætter ind i time 22
+    def after(price) -> list[PlanHour]:
+        out = hours(30, blocked=lambda i: 9 <= i <= 21, price=price)
+        out[21] = PlanHour(ts=21 * 3600, price=price(21), t_out=3.0, blocked=False, free=0.5, free_end=True)
+        return out
+
+    p = make_plan(after(cheap(21, 22)), M, [], 20.5)
+    assert p.hours[22]["heat_kw"] > 0 and 0 < p.hours[21]["heat_kw"] <= M.p_max / 2
+    p = make_plan(after(lambda i: 0.5 if i == 21 else (6.0 if i == 22 else 2.0)), M, [], 20.5)
+    assert p.hours[22]["heat_kw"] == 0 and p.hours[21]["heat_kw"] == 0
+
+    # planens første time: kun når varmen kørte i timen før (målt varme)
+    def first() -> list[PlanHour]:
+        out = hours(24, blocked=lambda i: 1 <= i <= 8, price=cheap(0))
+        out[0] = PlanHour(ts=0, price=0.5, t_out=3.0, blocked=False, free=0.5)
+        return out
+
+    assert make_plan(first(), M, [], 20.5, past_q=[0, 0, 0, 0, 3.0, 3.0]).hours[0]["heat_kw"] > 0
+    assert make_plan(first(), M, [], 20.5, past_q=[3.0, 3.0, 0, 0, 0, 0]).hours[0]["heat_kw"] == 0
+    assert make_plan(first(), M, [], 20.5).hours[0]["heat_kw"] == 0
+    # … eller når styringen ved, om kilden kører lige nu (går forud for den målte varme)
+    assert make_plan(first(), M, [], 20.5, running=True).hours[0]["heat_kw"] > 0
+    assert make_plan(first(), M, [], 20.5, past_q=[0, 0, 0, 0, 3.0, 3.0], running=False).hours[0]["heat_kw"] == 0
+
+
+def test_partial_hour_rules_hold_when_heat_is_trimmed() -> None:
+    """Også når overskud skæres væk (varme rum) og pauser brydes: en delvist fri time har aldrig varme uden nabotimen, højst
+    sin del af effekten og mindst sin del af den laveste ydelse."""
+    for t_now in (19.8, 20.3, 20.8, 21.5):
+        for k, price in enumerate((lambda i: 2.0, lambda i: 1.0 + (i % 7) * 0.3, lambda i: 3.0 - (i % 5) * 0.4, lambda i: 0.5 if i == 6 else 2.0)):
+            for t_out in (-6.0, 2.0, 9.0):
+                room = PlanRoom(name="Stue", t_now=t_now, t_min=20.0, heat_now=0.05, heat_delayed=0.05, cool_per_hk=0.006, margin=0.2)
+                p = make_plan(_before_block(True, t_out, price), M, [room], 20.5, max_pause=3 if k % 2 else 0)
+                h5, h6 = p.hours[5]["heat_kw"], p.hours[6]["heat_kw"]
+                assert h6 == 0 or (h5 > 0 and M.p_min / 2 - 1e-9 <= h6 <= M.p_max / 2 + 1e-9), (t_now, k, t_out, h5, h6)
+                assert all(x["heat_kw"] == 0 for x in p.hours if x["blocked"])
+
+
+def test_plan_input_dump_keeps_partial_hours() -> None:
+    """Diagnostikkens plan-input har de delvist frie timer med, så genkørslen giver samme plan."""
+    from custom_components.varmemodel.planner import plan_from_dump, plan_input_dump
+
+    hs = _before_block(True)
+    room = PlanRoom(name="Stue", t_now=19.6, t_min=20.0, heat_now=0.02, heat_delayed=0.03, cool_per_hk=0.004, margin=0.2)
+    d = plan_input_dump(hs, M, [room], 20.0, past_q=[4.0] * 6, max_pause=0)
+    assert d["hours"][6]["free"] == 0.5 and d["hours"][6]["free_end"] is False and "free" not in d["hours"][5]
+    a, b = make_plan(hs, M, [room], 20.0, past_q=[4.0] * 6), plan_from_dump(d)
+    assert [x["heat_kw"] for x in a.hours] == [x["heat_kw"] for x in b.hours] and b.hours[6]["heat_kw"] == 3.0

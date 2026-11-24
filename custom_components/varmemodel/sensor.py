@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
@@ -355,7 +356,8 @@ class PlanNowSensor(SourceEntity, SensorEntity):
         h = _now_hour(self._plan)
         if h is None:
             return "unknown"
-        return "blocked" if h["blocked"] else ("heat" if h["heat_kw"] > 0 else "off")
+        # En delvist fri time er blokeret, mens klokken ligger i dens røde kvarterer
+        return "blocked" if h["blocked"] or self.coordinator.in_red_part(h) else ("heat" if h["heat_kw"] > 0 else "off")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -367,6 +369,12 @@ class PlanNowSensor(SourceEntity, SensorEntity):
         spans = self.coordinator.red_spans
         if nxt_on is not None:
             nxt_on = after_red(nxt_on, spans)  # rød med kvarterer: fx 10:00–10:15 rødt → start 10:15
+        if nxt_off is not None:
+            # En delvist fri time før en blokering varmer kun, til dens røde kvarterer begynder (fx 06:30)
+            last = next((x for x in hrs if x["ts"] == nxt_off - 3600), None)
+            if last and last.get("free") is not None and last["heat_kw"] > 0:
+                red = min((a for a, _b in spans if last["ts"] < a < nxt_off and a > time.time()), default=None)
+                nxt_off = red if red is not None else nxt_off
         upd = m.get("updated")
         return {
             "heat_kw": h.get("heat_kw"), "flow": h.get("flow"), "price": h.get("price"),
@@ -382,6 +390,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
             "updated": _ts_local(upd), "valid_until": _ts_local(upd + 2700) if upd else None,
             "inputs_ok": m.get("inputs_ok"), "missing": m.get("missing") or None, "horizon_h": m.get("horizon_h"),
             "plan": [{"t": _ts_local(x["ts"]), **{k: x.get(k) for k in ("heat_kw", "flow", "price", "t_out", "blocked", "cost")},
+                      **({"free": x["free"]} if x.get("free") is not None else {}),
                       **({"setpoint": x["setpoint"]} if x.get("setpoint") is not None else {}),
                       **({"preload": x["preload"]} if x.get("preload") else {})} for x in hrs],
             "kind": p.get("kind") or "hydronic", "caps": p.get("caps") or None, "e_min": p.get("e_min"), "e_max": p.get("e_max"),

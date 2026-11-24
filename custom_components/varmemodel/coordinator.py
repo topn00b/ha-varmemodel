@@ -62,7 +62,7 @@ from .air_control import (
     preload_per_room,
 )
 from .command import FLOW_HOLD, MIN_GAP, SLACK, Command, step
-from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
+from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices, quarter_prices
 from .planner import FLOW_LOW_OPEN_S, FLOW_MAX as FLOW_MAX_C, PlanHour, PlanRoom, SourceModel, estimate_room, flow_boost_step, make_air_plan, make_plan, simulate_rooms
 from .const import (
     AIR_BOOST,
@@ -131,6 +131,7 @@ from .const import (
     CONF_BLOCK_NOW_ENTITY,
     CONF_BLOCK_QUARTERS_ENTITY,
     BLOCK_QUARTERS_MIN,
+    PARTIAL_FREE_MIN,
     LEARN_IGNORE_WORDS,
     AIR_EFF_BACKFILL_DAYS,
     AIR_EFF_BF_VERSION,
@@ -145,6 +146,7 @@ from .const import (
     LOW_URGENT_HOLD,
     ANTI_STOP_GAP,
     DF_VALVE_S,
+    RESTART_S,
     DHW_AFTER_S,
     EVENT_VARSEL,
     VARSEL_CLEAR,
@@ -1287,6 +1289,18 @@ class VarmemodelCoordinator:
         states = {x.strip().lower() for x in str(self.conf.get(CONF_BLOCK_NOW_STATES) or DEFAULT_BLOCK_NOW_STATES).split(",") if x.strip()}
         return str(st.state).strip().lower() in states
 
+    def in_red_part(self, cur: dict[str, Any] | None, now: float | None = None) -> bool:
+        """Klokken ligger i de røde kvarterer i en delvist fri time (planens time ``cur`` har en fri del)."""
+        if cur and cur.get("free") is not None:
+            t = time.time() if now is None else now
+            return any(a <= t < b for a, b in self.red_spans)
+        return False
+
+    def _blocked_now(self, cur: dict[str, Any] | None, now: float | None = None) -> bool:
+        """Blokeret lige nu for en vandbåren kilde: timen er blokeret i planen, »Blokering lige nu« siger det, eller klokken
+        ligger i de røde kvarterer i en delvist fri time (gælder også uden en »Blokering lige nu«-entitet)."""
+        return bool(cur and cur.get("blocked")) or self.live_blocked() or self.in_red_part(cur, now)
+
     async def _on_block_now(self, event: Any) -> None:
         new, old = event.data.get("new_state"), event.data.get("old_state")
         if new is None or (old is not None and old.state == new.state):
@@ -1343,7 +1357,7 @@ class VarmemodelCoordinator:
                 hours = (self.plans.get(sid) or {}).get("hours") or []
                 h0 = int(time.time() // 3600 * 3600)
                 cur = next((x for x in hours if x.get("ts") == h0), None)
-                await self._flow_apply(s, hours, bool(cur and cur.get("blocked")) or self.live_blocked())
+                await self._flow_apply(s, hours, self._blocked_now(cur))
             self._notify()
         except Exception:  # noqa: BLE001
             _LOGGER.debug("%s: fremløbet kunne ikke opdateres efter et skift", s.name, exc_info=True)
@@ -1971,7 +1985,7 @@ class VarmemodelCoordinator:
         den seneste gode, når planlægningen fejler."""
         sid = s.sid
         cur = next((x for x in hours if x.get("ts") == h0), None)
-        blocked = bool(cur and cur["blocked"]) or self.live_blocked()
+        blocked = self._blocked_now(cur, now)
         cmd = step(Command.load(self.commands.get(sid)), now, dt_util.now().date().isoformat(),
                    bool(cur and cur["heat_kw"] > 0), (round(cur["flow"]) if cur and cur.get("flow") is not None else None), blocked)
         self.commands[sid] = cmd.dump()
@@ -2012,7 +2026,7 @@ class VarmemodelCoordinator:
                     now = time.time()
                     hours = (self.plans.get(sid) or {}).get("hours") or []
                     cur = next((x for x in hours if x.get("ts") == int(now // 3600 * 3600)), None)
-                    blocked = bool(cur and cur.get("blocked")) or self.live_blocked()
+                    blocked = self._blocked_now(cur, now)
                     await self._hydro_apply(s, bool((self.commands.get(sid) or {}).get("on")), blocked, hours, recheck=True)
             except Exception:  # noqa: BLE001
                 _LOGGER.debug("%s: tjek af tænd/sluk fejlede", s.name, exc_info=True)
@@ -2903,8 +2917,10 @@ class VarmemodelCoordinator:
         h0 = int(now // 3600 * 3600)
         price_eid = self._id(CONF_PRICE_ENTITY)
         prices: dict[int, float] = {}
+        qprices: dict[int, float] = {}
         if price_eid and (st := self.hass.states.get(price_eid)):
             prices = hourly_prices(dict(st.attributes), self.conf.get(CONF_PRICE_ATTR) or None, self._parse_local)
+            qprices = quarter_prices(dict(st.attributes), self.conf.get(CONF_PRICE_ATTR) or None, self._parse_local)
             if h0 not in prices:
                 # Listen starter ofte med næste time: brug den nærmeste kendte pris for den aktuelle time
                 later = sorted(t for t in prices if t > h0)
@@ -2916,6 +2932,7 @@ class VarmemodelCoordinator:
             missing.append("priser")
         blocks: dict[int, bool] = {}
         red_q: set[int] = set()
+        part: dict[int, tuple[float, bool, float | None]] = {}  # delvist frie timer: fri del, fri sidst, prisen i den frie del
         if (beid := self._id(CONF_BLOCK_ENTITY)) and (bst := self.hass.states.get(beid)):
             codes = [c.strip() for c in str(self.conf.get(CONF_BLOCK_CODES) or "r").split(",") if c.strip()]
             blocks = blocked_hours(bst.state, dict(bst.attributes), codes, self._parse_local)
@@ -2924,10 +2941,17 @@ class VarmemodelCoordinator:
             # Blokerede kvarterer (fx over et prisloft): en time med mindst BLOCK_QUARTERS_MIN af dem planlægges som blokeret,
             # så varmen lægges før – i stedet for en kørsel, der klippes over midt i timen (24/11-2026)
             items = qst.attributes.get("kvarterer") or []
+            qs = quarter_starts(items, self._parse_local)
             for k, n in quarter_block_counts(items, self._parse_local).items():
                 if n >= BLOCK_QUARTERS_MIN:
+                    # Ligger de blokerede kvarterer samlet i den ene ende af en ellers fri time, er resten af timen fri for
+                    # vandbårne kilder – som fortsættelse af nabotimen, så kørslen ikke klippes en halv time for tidligt
+                    # (25/11-2026: rødt fra 06:30, planen stoppede 06:00 efter en hel nats forvarmning)
+                    if not blocks.get(k) and (pf := partial_hour(k, qs)):
+                        fq = [qprices.get(k + j * 900) for j in range(4) if k + j * 900 not in qs]
+                        part[k] = (*pf, sum(fq) / len(fq) if fq and all(x is not None for x in fq) else None)
                     blocks[k] = True
-            red_q |= quarter_starts(items, self._parse_local)
+            red_q |= qs
         # Røde perioder med kvarterer: fremtiden altid fra de friske data, fortiden (op til 13 t) huskes hen over midnat
         q_now = int(now // 900 * 900)
         self._red_q = {q for q in self._red_q if now - 13 * 3600 <= q < q_now} | {q for q in red_q if q >= now - 13 * 3600}
@@ -2983,6 +3007,9 @@ class VarmemodelCoordinator:
                     alog[str(h0)] = {"p": ah[0]["heat_kw"], "e": ah[0]["heat_kw"], "pr": ah[0]["price"], "b": ah[0]["blocked"]}
                 for k in [k for k in alog if int(k) < h0 - 3 * 86400]:
                     del alog[k]
+        # Vandbårne kilder: delvist frie timer er ikke blokerede, men rummer kun den frie del (luft-luft holder dem blokerede)
+        hh = [replace(h, blocked=False, free=pf[0], free_end=pf[1], price=pf[2] if pf[2] is not None else h.price)
+              if h.blocked and (pf := part.get(h.ts)) else h for h in hours]
         for sid, s in self.sources.items():
             if s.kind != SOURCE_HYDRONIC:
                 continue
@@ -3066,13 +3093,17 @@ class VarmemodelCoordinator:
                     raise_max = max(0, math.ceil(hs["low_loft"] - low_cap))
             else:
                 hs.pop("low_loft", None)
+            # Kører kilden nu? (kommandoen står på tændt, eller kompressoren kører) – en delvist fri første time bruges kun
+            # som fortsættelse af en kørsel, aldrig til en ny start lige før de røde kvarterer
+            comp_st = self.hass.states.get(s.eid(CONF_COMPRESSOR) or "")
+            running = bool((self.commands.get(sid) or {}).get("on")) or (comp_st is not None and comp_st.state == "on")
             plan_kw = {"past_q": past_q, "boost": boost, "boost_hours": boost_h, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
                        "economy": self.setting(CONF_ECONOMY), "comfort": offset, "flow_margin": fm, "red_spans": self.red_spans,
-                       **({"flow_raise_max": raise_max} if raise_max is not None else {})}
+                       "running": running, **({"flow_raise_max": raise_max} if raise_max is not None else {})}
             # Planens input gemmes (kun i hukommelsen) til diagnostikken, så planen kan genkøres uden for huset
-            self.plan_inputs[sid] = (hours, model, rooms, target, {**plan_kw, "max_pause": int(self.setting(CONF_MAX_PAUSE))})
+            self.plan_inputs[sid] = (hh, model, rooms, target, {**plan_kw, "max_pause": int(self.setting(CONF_MAX_PAUSE))})
             p = await self.hass.async_add_executor_job(
-                partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), label=_clock, **plan_kw))
+                partial(make_plan, hh, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), label=_clock, **plan_kw))
             if low_cap is not None:
                 k = float(p.flow_raise or 0.0)
                 hs["low_raise"] = k
@@ -3227,6 +3258,21 @@ def quarter_starts(items: list[Any], parse: Callable[[str], datetime | None]) ->
     return out
 
 
+def partial_hour(k: int, red_q: set[int]) -> tuple[float, bool] | None:
+    """Delvist fri time: de blokerede kvarterer i timen ``k`` ligger samlet i den ene ende, og mindst PARTIAL_FREE_MIN
+    kvarterer er frie. Giver (fri del af timen, den frie del ligger sidst) – rødt fra 06:30 → (0.5, False), rødt til 21:30 →
+    (0.5, True). None for hele timer, og når de frie kvarterer er for få eller ligger delt."""
+    b = [k + j * 900 in red_q for j in range(4)]
+    nfree = b.count(False)
+    if nfree < PARTIAL_FREE_MIN or nfree == 4:
+        return None
+    if not any(b[:nfree]):
+        return nfree / 4, False
+    if not any(b[4 - nfree:]):
+        return nfree / 4, True
+    return None
+
+
 def spans_from_quarters(quarters: set[int]) -> list[tuple[int, int]]:
     """Sammenhængende perioder [(fra, til)] af kvarterer, fx {06:30, 06:45, 07:00} → [(06:30, 07:15)]."""
     out: list[tuple[int, int]] = []
@@ -3258,7 +3304,7 @@ def quarter_block_counts(items: list[Any], parse: Callable[[str], datetime | Non
 
 
 def comp_stops(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | None, df: str | None, since: float,
-               ret: str | None = None) -> list[dict[str, Any]]:
+               ret: str | None = None, starts: list[float] | None = None) -> list[dict[str, Any]]:
     """Kompressorstop (tændt → slukket) fra ``since``. Pr. stop: tidspunkt ``t``; ``run`` = sekunder siden opstarten
     begyndte (kompressorstart eller afrimningens slut, det seneste – efter en afrimning kører varmepumpen opstart igen;
     None når starten ligger før data); ``ret0`` = returen ved den start (None uden data); ``df`` = »efter«, når stoppet kom
@@ -3270,7 +3316,10 @@ def comp_stops(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | N
     ``rows`` er historikken pr. entitet [(tid, tilstand)] – gerne fra 30 min. før ``since``. Første række pr. entitet er
     tilstanden ved forespørgslens start (tidsstemplet = start) og er intet skift: før 0.17.3 blev en sådan »slukket« på
     afrimningen læst som »afrimningen sluttede lige« og skjulte stop i vinduets første 10 min. Utilgængelig/ukendt springes
-    over (et Modbus-udfald er hverken stop eller afrimning)."""
+    over (et Modbus-udfald er hverken stop eller afrimning).
+
+    ``starts`` (en liste) fyldes med de rigtige kompressorstarter fra ``since``: en genstart inden for RESTART_S efter et stop,
+    der ikke tæller (ventilskift, afrimning, varmt vand), er samme kørsel og ikke en ny start."""
     ev: list[tuple[float, str, str | None, str]] = []
     for e in (comp, dhw, df):
         if not e:
@@ -3289,18 +3338,26 @@ def comp_stops(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | N
     st: dict[str, str] = {}
     on_t: float | None = None
     out: list[dict[str, Any]] = []
+    last_real: bool | None = None  # det seneste stop talte (None: intet stop i data endnu)
+    last_off = 0.0
     for t, e, p, v in ev:
         if e == comp and v == "on":
+            # En genstart kort efter et stop, der ikke tæller, er samme kørsel (ventilskift, afrimning, varmt vand)
+            if p is not None and starts is not None and t >= since and (last_real is not False or t - last_off > RESTART_S):
+                starts.append(t)
             on_t = t if p is not None else None  # tændt allerede ved datastart: længden er ukendt
         elif e == comp and p == "on" and v == "off":
-            if t >= since and st.get(dhw or "") != "on" and st.get(df or "") != "on":
+            last_real, last_off = False, t
+            if st.get(dhw or "") != "on" and st.get(df or "") != "on":
                 valve = any(-60 <= x - t <= 300 for x in df_on) or any(0 <= t - x <= DF_VALVE_S for x in df_off)
                 if not valve and not any(0 <= t - x <= 180 for x in dhw_off):
-                    dfe = [x for x in df_off if x <= t]
-                    t0 = max((x for x in (on_t, dfe[-1] if dfe else None) if x is not None), default=None)
-                    r0 = [x for tt, x in rv if tt <= t0] if t0 is not None else []
-                    out.append({"t": t, "run": (t - t0) if t0 is not None else None, "ret0": r0[-1] if r0 else None,
-                                "df": "efter" if dfe and t - dfe[-1] <= 600 else None})
+                    last_real = True
+                    if t >= since:
+                        dfe = [x for x in df_off if x <= t]
+                        t0 = max((x for x in (on_t, dfe[-1] if dfe else None) if x is not None), default=None)
+                        r0 = [x for tt, x in rv if tt <= t0] if t0 is not None else []
+                        out.append({"t": t, "run": (t - t0) if t0 is not None else None, "ret0": r0[-1] if r0 else None,
+                                    "df": "efter" if dfe and t - dfe[-1] <= 600 else None})
             on_t = None
         st[e] = v
     return out
@@ -3308,8 +3365,9 @@ def comp_stops(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | N
 
 def day_health(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | None, df: str | None, since: float,
                now: float) -> dict[str, Any]:
-    """Dagens driftstal fra historikken (fra ``since``): kompressorstarter, stop og korte kørsler (stop inden for
-    START_PHASE_S efter en start eller afrimning – uden ventilskift, afrimning og varmt vand, se ``comp_stops``),
+    """Dagens driftstal fra historikken (fra ``since``): kompressorstarter (uden genstarten efter et ventilskift, en afrimning
+    eller varmt vand), stop og korte kørsler (stop inden for START_PHASE_S efter en start eller afrimning – uden ventilskift,
+    afrimning og varmt vand, se ``comp_stops``),
     afrimninger, varmt vand-kørsler og kompressorens driftstid. Første række pr. entitet er tilstanden ved datastart og
     er intet skift; utilgængelig/ukendt springes over."""
     def real(e: str | None) -> list[tuple[float, str | None, str]]:
@@ -3333,8 +3391,9 @@ def day_health(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | N
             t_on = None
     if t_on is not None:
         on_s += max(0.0, now - t_on)
-    stops = comp_stops(rows, comp, dhw, df, since)
-    return {"starter": turned_on(comp), "stop": len(stops),
+    starts: list[float] = []
+    stops = comp_stops(rows, comp, dhw, df, since, starts=starts)
+    return {"starter": len(starts), "stop": len(stops),
             "korte_kørsler": sum(1 for x in stops if x["run"] is not None and x["run"] <= START_PHASE_S),
             "afrimninger": turned_on(df), "varmt_vand": turned_on(dhw), "drift_min": round(on_s / 60)}
 

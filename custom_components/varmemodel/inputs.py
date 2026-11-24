@@ -36,14 +36,14 @@ def parse_time(v: Any, parse_local: Callable[[str], datetime | None]) -> int | N
     return None
 
 
-def hourly_prices(attrs: dict[str, Any], attr: str | None, parse_local: Callable[[str], datetime | None]) -> dict[int, float]:
-    """Pris pr. hel time (snit af kvartersværdier). Finder selv listen og nøglerne."""
+def _price_items(attrs: dict[str, Any], attr: str | None, parse_local: Callable[[str], datetime | None]) -> list[tuple[int, float]]:
+    """Prislistens rækker som (unix-sekunder, pris). Finder selv listen og nøglerne."""
     lists: list[Any] = []
     if attr:
         lists = [attrs.get(attr)]
     else:
         lists = [attrs.get(k) for k in LIST_ATTRS if isinstance(attrs.get(k), list)]
-    acc: dict[int, list[float]] = {}
+    out: list[tuple[int, float]] = []
     for lst in lists:
         for item in lst or []:
             if not isinstance(item, dict):
@@ -55,8 +55,26 @@ def hourly_prices(attrs: dict[str, Any], attr: str | None, parse_local: Callable
             ts = parse_time(item[tk], parse_local)
             if ts is None:
                 continue
-            acc.setdefault(ts // 3600 * 3600, []).append(_num(item[vk]))
+            out.append((ts, _num(item[vk])))
+    return out
+
+
+def hourly_prices(attrs: dict[str, Any], attr: str | None, parse_local: Callable[[str], datetime | None]) -> dict[int, float]:
+    """Pris pr. hel time (snit af kvartersværdier). Finder selv listen og nøglerne."""
+    acc: dict[int, list[float]] = {}
+    for ts, v in _price_items(attrs, attr, parse_local):
+        acc.setdefault(ts // 3600 * 3600, []).append(v)
     return {h: sum(v) / len(v) for h, v in acc.items()}
+
+
+def quarter_prices(attrs: dict[str, Any], attr: str | None, parse_local: Callable[[str], datetime | None]) -> dict[int, float]:
+    """Pris pr. kvarter, når prislisten har kvartersværdier (flere rækker i samme time) – ellers tom."""
+    acc: dict[int, list[float]] = {}
+    for ts, v in _price_items(attrs, attr, parse_local):
+        acc.setdefault(ts // 900 * 900, []).append(v)
+    if len({q // 3600 for q in acc}) == len(acc):
+        return {}  # højst én række pr. time: timepriser
+    return {q: sum(v) / len(v) for q, v in acc.items()}
 
 
 def blocked_hours(state: str, attrs: dict[str, Any], codes: list[str], parse_local: Callable[[str], datetime | None]) -> dict[int, bool]:

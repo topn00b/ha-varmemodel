@@ -87,6 +87,9 @@ CONF_BLOCK_NOW_STATES = "block_now_states"  # entitetens tilstande, der blokerer
 DEFAULT_BLOCK_NOW_STATES = "rød, red, r, on"
 CONF_BLOCK_QUARTERS_ENTITY = "block_quarters_entity"  # blokerede kvarterer (attribut »kvarterer«: liste af starttider)
 BLOCK_QUARTERS_MIN = 2
+# En sådan time er delvist fri for vandbårne kilder, når de blokerede kvarterer ligger samlet i den ene ende og mindst så
+# mange kvarterer er frie: den frie del bruges som fortsættelse af nabotimen (fx rødt fra 06:30 → varme til 06:30)
+PARTIAL_FREE_MIN = 2
 LEARN_IGNORE_WORDS = ("ignorer", "ignore")  # kalender-begivenheder med disse ord springes over i læringen (og er ikke tiltag)
 AIR_EFF_BACKFILL_DAYS = 14  # stigens virkning pr. trin læres også fra så mange dages historik
 AIR_EFF_BF_VERSION = 2  # tilbagefyldningen køres igen automatisk, når metoden ændres
@@ -107,6 +110,7 @@ START_K_DECAY = 0.25  # en start, der kommer igennem opstarten, sænker det lær
 # Varmemodel bestemmer start og stop – varmepumpens egen termostat skal ikke nå at stoppe kompressoren (start/stop slider)
 ANTI_STOP_GAP = 2.0  # stopværn: mens kompressoren kører, holdes målet højst så meget under fremløbet (stop ved ca. målet + 4 °C)
 DF_VALVE_S = 120  # et stop så kort efter en afrimning er 4-vejsventilens skift – intet rigtigt stop
+RESTART_S = 600  # en genstart så kort efter et stop, der ikke tæller (ventilskift, afrimning, varmt vand), er samme kørsel
 DHW_AFTER_S = 600  # efter varmt vand er kredsen varm og fremløbet ustabilt: intet opstartsløft eller stopværn så længe
 # Besked forud: hændelsen »varmemodel_varsel«, når planen forudser et rum under sin grænse (fx en lang blokering)
 EVENT_VARSEL = "varmemodel_varsel"

@@ -27,6 +27,11 @@ class PlanHour:
     price: float  # kr pr. kWh el
     t_out: float  # forventet udetemperatur
     blocked: bool = False  # fx rød pris: ingen varme
+    # Delvist fri time: kun ``free`` af timen kan bruges – resten er blokerede kvarterer i den ene ende. Den frie del ligger
+    # først i timen (fortsætter timen før) eller sidst (``free_end``: fortsætter ind i timen efter) og bruges kun sammen med
+    # den nabotime, så varmepumpen aldrig starter for at blive stoppet kort efter.
+    free: float = 1.0
+    free_end: bool = False
 
 
 @dataclass
@@ -107,22 +112,33 @@ def _preload_window(hours: list[PlanHour], q: list[float], label: Callable[[int]
     """
     n = len(hours)
     pq = [0.0] * n
-    first = next((i for i, h in enumerate(hours) if h.blocked), None)
+
+    def blk(i: int) -> bool:
+        """Blokeret – eller en delvist fri time uden varme: dens røde kvarterer hører til blokeringen ved siden af."""
+        return hours[i].blocked or (hours[i].free < 1.0 and q[i] <= 1e-9)
+
+    first = next((i for i in range(n) if blk(i)), None)
     if not first or q[first - 1] <= 1e-9:
         return pq, None, None
     a = first - 1
-    while a > 0 and q[a - 1] > 1e-9 and not hours[a - 1].blocked:
+    while a > 0 and q[a - 1] > 1e-9 and not blk(a - 1):
         a -= 1
     e = first
-    while e + 1 < n and hours[e + 1].blocked:
+    while e + 1 < n and blk(e + 1):
         e += 1
     for i in range(a, first):
         pq[i] = q[i]
     w = {"from": hours[a].ts, "to": hours[first].ts, "block_from": hours[first].ts, "block_to": hours[e].ts + 3600,
          "kwh": round(sum(q[a:first]), 2)}
+    last = hours[first - 1]
+    if last.free < 1.0 and not last.free_end:
+        # vinduets sidste time er delvist fri: det røde begynder, hvor dens frie del slutter
+        w["to"] = w["block_from"] = last.ts + round(last.free * 3600)
     ov = [(x, y) for x, y in red_spans or [] if x < w["block_to"] and y > w["block_from"]]
     if ov:
         w["block_from"], w["block_to"] = min(x for x, _ in ov), max(y for _, y in ov)
+        # Blokeringen begynder inde i vinduets sidste time (delvist fri time): opvarmningen slutter, når den begynder
+        w["to"] = max(w["from"], min(w["to"], w["block_from"]))
     clk = lambda ts: label(ts).split("kl. ")[-1]  # noqa: E731
     return pq, w, f"opvarmer {label(w['from'])}–{clk(w['to'])} før blokeringen {clk(w['block_from'])}–{clk(w['block_to'])}"
 
@@ -218,11 +234,14 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
               red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None, comfort: float = 0.0,
               economy: float = 0.0, flow_raise_max: int = FLOW_BOOST_MAX,
-              red_spans: list[tuple[int, int]] | None = None) -> Plan:
+              red_spans: list[tuple[int, int]] | None = None, running: bool | None = None) -> Plan:
     """Planen. Forudsiger modellen, at et rum kommer under planens grænse, fordi fremløbsgrænsen holder varmen
-    nede, hæves grænsen 1 °C ad gangen (højst ``FLOW_BOOST_MAX``) til rummene holder – i god tid, da gulvet er langsomt."""
+    nede, hæves grænsen 1 °C ad gangen (højst ``FLOW_BOOST_MAX``) til rummene holder – i god tid, da gulvet er langsomt.
+
+    ``running``: varmekilden kører lige nu (afgør, om en delvist fri første time kan fortsætte kørslen); None = ukendt, så
+    bruges den målte varme i timen før."""
     args = (hours, model, rooms, target, max_pause, past_q, label, boost, boost_hours, red_allowance, preload, comfort, economy)
-    base = _plan_once(*args, flow_margin, red_spans=red_spans)
+    base = _plan_once(*args, flow_margin, red_spans=red_spans, running=running)
     if flow_margin is None or base.deficit <= 0.05 or flow_raise_max <= 0:
         return base
     def under(p: Plan) -> dict[str, float]:
@@ -231,7 +250,7 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
 
     best, kb = base, 0
     for k in range(1, flow_raise_max + 1):
-        p = _plan_once(*args, flow_margin + k, red_spans=red_spans)
+        p = _plan_once(*args, flow_margin + k, red_spans=red_spans, running=running)
         ub, u = under(best), under(p)
         # Kun hvis det hjælper mærkbart: hver grad ud over den forrige hævning skal give mindst 0,1 °C mindre manko
         # (ellers kan fremløbet ikke rette det) – for huset (det værste rum) eller for mindst ét rum. Et rum med en svag
@@ -263,7 +282,8 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
               red_allowance: float = 0.0, preload: float = 0.0, comfort: float = 0.0, economy: float = 0.0,
-              flow_margin: float | None = None, red_spans: list[tuple[int, int]] | None = None) -> Plan:
+              flow_margin: float | None = None, red_spans: list[tuple[int, int]] | None = None,
+              running: bool | None = None) -> Plan:
     """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra.
 
     ``boost`` (»jeg fryser«) hæver målet og rummenes min. i de første ``boost_hours`` timer.
@@ -292,7 +312,27 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
               for i, h in enumerate(hours)]
     plan.demand_kwh = round(sum(demand), 2)
     q = [0.0] * n
-    free = [i for i, h in enumerate(hours) if not h.blocked]
+    # Timens frie del (0 = blokeret, 1 = hel time). En delvist fri time rummer kun den del af effekten og kan kun bruges
+    # som fortsættelse af nabotimen på den frie side (se ``usable``).
+    fr = [0.0 if h.blocked else min(1.0, max(0.0, h.free)) for h in hours]
+    free = [i for i in range(n) if fr[i] > 0]
+    # Kører varmen lige nu? Det afgør, om en delvist fri første time er en fortsættelse (ukendt: målt varme i timen før)
+    ran_before = running if running is not None else (bool(past_q) and past_q[-1] > 1e-9)
+
+    def usable(i: int) -> bool:
+        """En delvist fri time kan kun bruges, når nabotimen på den frie side varmer (samme kørsel)."""
+        if fr[i] >= 1.0:
+            return True
+        j = i + 1 if hours[i].free_end else i - 1
+        return ran_before if j < 0 else (j < n and q[j] > 1e-9)
+
+    def orphans() -> list[int]:
+        """Delvist frie timer med varme, hvis nabotime ikke (længere) varmer."""
+        return [i for i in free if fr[i] < 1.0 and q[i] > 0 and not usable(i)]
+
+    def el(i: int, e: float) -> float:
+        """El (kWh) for ``e`` kWh varme i time i. I en delvist fri time leveres varmen på den frie del – ved højere effekt."""
+        return fr[i] * _el(model, hours[i].t_out, e / fr[i], target) if e > 0 else 0.0
 
     # Lavt og jævnt: fremløbet må højst ligge ``flow_margin`` °C over det lærte fremløb ved timens
     # udetemperatur. Det begrænser effekten pr. time, så varmen spredes over flere timer (højere COP, færre afrimninger).
@@ -305,16 +345,17 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
     def add_cost(i: int, amount: float) -> float:
         """Ekstra el-pris (kr) for at lægge ``amount`` kWh mere i time i."""
         p0, p1 = q[i], q[i] + amount
-        if p1 > pcap[i] + 1e-9:
+        if p1 > pcap[i] * fr[i] + 1e-9:
             return float("inf")
-        h = hours[i]
-        return h.price * (_el(model, h.t_out, p1, target) - _el(model, h.t_out, p0, target))
+        return hours[i].price * (el(i, p1) - el(i, p0))
 
     def add_cheapest(cands: list[int], amount_left: float) -> float:
         """Læg en portion i den billigste kandidat-time. Giver mængden tilbage (0 = ingen plads)."""
         best, best_c, best_a = None, float("inf"), 0.0
         for i in cands:
-            a = max(STEP, model.p_min) if q[i] == 0 else STEP
+            if not usable(i):
+                continue
+            a = max(STEP, model.p_min * fr[i]) if q[i] == 0 else STEP
             c = add_cost(i, a) / a
             if c < best_c:
                 best, best_c, best_a = i, c, a
@@ -373,18 +414,23 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
         sim = simulate_rooms(rooms, hours, q, past_q)
         for _ in range(400):
             # Dyreste sidste portion først (pris × ekstra el for den, inkl. lavere COP ved højere fremløb)
-            cands = sorted((i for i in free if q[i] > 0), key=lambda i: -hours[i].price * (
-                _el(model, hours[i].t_out, q[i], target) - _el(model, hours[i].t_out, max(q[i] - STEP, 0.0), target)))
+            cands = sorted((i for i in free if q[i] > 0), key=lambda i: -hours[i].price * (el(i, q[i]) - el(i, max(q[i] - STEP, 0.0))))
             cut = False
             for i in cands:
                 old = q[i]
-                q[i] = old - STEP if old - STEP >= model.p_min - 1e-9 else 0.0
+                q[i] = old - STEP if old - STEP >= model.p_min * fr[i] - 1e-9 else 0.0
+                # Falder nabotimen væk, falder den delvist frie time med (den kan ikke stå alene)
+                gone = {j: q[j] for j in orphans()}
+                for j in gone:
+                    q[j] = 0.0
                 sim2 = simulate_rooms(rooms, hours, q, past_q)
                 if need_ok(sim2, sim):
                     sim, cut = sim2, True
-                    plan.trimmed_kwh = round(plan.trimmed_kwh + old - q[i], 2)
+                    plan.trimmed_kwh = round(plan.trimmed_kwh + old - q[i] + sum(gone.values()), 2)
                     break
                 q[i] = old
+                for j, v in gone.items():
+                    q[j] = v
             if not cut:
                 break
 
@@ -393,7 +439,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
         for _ in range(50):
             run, hit = 0, None
             for i in range(n):
-                if q[i] > 0 or hours[i].blocked:
+                if q[i] > 0 or fr[i] < 1.0:  # blokeret eller delvist fri: tæller ikke som pause og brydes ikke
                     run = 0
                     continue
                 run += 1
@@ -404,6 +450,9 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
             if hit is None:
                 break
             q[hit] = max(q[hit], model.p_min)
+
+    for i in orphans():  # sikkerhedsnet: en delvist fri time står aldrig alene
+        q[i] = 0.0
 
     # 5) resultat time for time. Der advares kun, når et rum ventes under selve min. (ikke min. + usikkerhed).
     plan.rooms = simulate_rooms(rooms, hours, q, past_q)
@@ -419,17 +468,18 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
                                   "under": round(limit(r, k) - s[k], 2), "fra_ts": hours[first].ts, "blokeret": bool(hours[k].blocked)})
     pq, plan.preload, pre_txt = _preload_window(hours, q, lab, red_spans)
     for i, h in enumerate(hours):
-        p = round(q[i], 2)
-        flow = flow_for(model, p, target) if p > 0 else None
-        cop = _cop(model, h.t_out, p, target) if p > 0 else None
-        el = p / cop if cop else 0.0
+        p = round(q[i], 2)  # kWh varme i timen (= kW i en hel time)
+        pw = p / fr[i] if p > 0 else 0.0  # effekten, mens der varmes (højere i en delvist fri time)
+        flow = flow_for(model, pw, target) if p > 0 else None
+        cop = _cop(model, h.t_out, pw, target) if p > 0 else None
+        e_el = p / cop if cop else 0.0
         plan.hours.append({"ts": h.ts, "heat_kw": p, "flow": flow,
                            "price": round(h.price, 3), "t_out": round(h.t_out, 1), "blocked": h.blocked,
-                           "cop": round(cop, 2) if cop else None, "cost": round(el * h.price, 2),
-                           "preload": round(pq[i], 2)})
+                           "cop": round(cop, 2) if cop else None, "cost": round(e_el * h.price, 2),
+                           "preload": round(pq[i], 2), **({"free": round(fr[i], 2)} if 0 < fr[i] < 1 else {})})
         plan.heat_kwh += p
-        plan.el_kwh += el
-        plan.cost_kr += el * h.price
+        plan.el_kwh += e_el
+        plan.cost_kr += e_el * h.price
     plan.heat_kwh, plan.el_kwh, plan.cost_kr = round(plan.heat_kwh, 1), round(plan.el_kwh, 1), round(plan.cost_kr, 1)
     on = sum(1 for x in plan.hours if x["heat_kw"] > 0)
     # Forvarmning: hvornår der varmes op til en senere blokering (de timer, rummene ellers ville komme under kravet)
@@ -589,7 +639,8 @@ def plan_input_dump(hours: list[PlanHour], model: SourceModel, rooms: list[PlanR
     t0 = hours[0].ts if hours else 0
     spans = kw.get("red_spans")
     return {
-        "hours": [{"h": (h.ts - t0) // 3600, "price": h.price, "t_out": h.t_out, "blocked": h.blocked} for h in hours],
+        "hours": [{"h": (h.ts - t0) // 3600, "price": h.price, "t_out": h.t_out, "blocked": h.blocked,
+                   **({"free": h.free, "free_end": h.free_end} if h.free < 1 else {})} for h in hours],
         "model": asdict(model),
         "rooms": [{**asdict(r), "name": f"rum_{i + 1}"} for i, r in enumerate(rooms)],
         "target": target,
@@ -601,7 +652,8 @@ def plan_input_dump(hours: list[PlanHour], model: SourceModel, rooms: list[PlanR
 def plan_from_dump(d: dict[str, Any], **override: Any) -> Plan:
     """Genkør en plan fra ``plan_input_dump`` (tiderne starter ved 0). ``override`` erstatter enkelte argumenter,
     fx ``flow_margin`` eller ``flow_raise_max`` – til at afprøve en ændring mod en rigtig situation."""
-    hours = [PlanHour(ts=int(x["h"]) * 3600, price=x["price"], t_out=x["t_out"], blocked=bool(x["blocked"])) for x in d["hours"]]
+    hours = [PlanHour(ts=int(x["h"]) * 3600, price=x["price"], t_out=x["t_out"], blocked=bool(x["blocked"]),
+                      free=float(x.get("free", 1.0)), free_end=bool(x.get("free_end", False))) for x in d["hours"]]
     model = SourceModel(**{**d["model"], "cop": tuple(d["model"]["cop"])})
     rooms = [PlanRoom(**{**r, "neighbours": [tuple(n) for n in r.get("neighbours") or []]}) for r in d["rooms"]]
     kw = dict(d.get("kw") or {})

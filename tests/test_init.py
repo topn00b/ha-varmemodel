@@ -1505,3 +1505,87 @@ async def test_low_flow_learns_only_when_its_own_target_is_written(ha: HomeAssis
     hs["low_hold_since"] -= 4 * 3600
     await c._low_flow(s, hs, 35.0)
     assert list((hs.get("low_learned") or {}).values()) == [24.0]
+
+
+def test_partial_hour_patterns() -> None:
+    """Delvist fri time: de blokerede kvarterer ligger samlet i den ene ende, og mindst to kvarterer er frie."""
+    from custom_components.varmemodel.coordinator import partial_hour
+
+    k = 7200
+    q = lambda *js: {k + j * 900 for j in js}  # noqa: E731
+    assert partial_hour(k, q(2, 3)) == (0.5, False)      # rødt fra xx:30: varme til xx:30
+    assert partial_hour(k, q(0, 1)) == (0.5, True)       # rødt til xx:30: varme fra xx:30
+    assert partial_hour(k, q(1, 2)) is None and partial_hour(k, q(0, 3)) is None and partial_hour(k, q(0, 2)) is None  # delt
+    assert partial_hour(k, q(1, 2, 3)) is None and partial_hour(k, q(0, 1, 2)) is None  # kun ét frit kvarter
+    assert partial_hour(k, q(0, 1, 2, 3)) is None and partial_hour(k, set()) is None
+
+
+def test_quarter_prices_only_from_quarter_lists() -> None:
+    """Priser pr. kvarter findes kun, når prislisten har flere rækker i samme time."""
+    from datetime import datetime
+
+    from custom_components.varmemodel.inputs import hourly_prices, quarter_prices
+
+    parse = lambda s: datetime.fromisoformat(s)  # noqa: E731
+    t = lambda h, m: int(datetime.fromisoformat(f"2026-11-25T{h:02d}:{m:02d}:00+01:00").timestamp())  # noqa: E731
+    quarters = {"raw_today": [{"start": f"2026-11-25T06:{m:02d}:00+01:00", "value": v} for m, v in ((0, 2.0), (15, 2.2), (30, 3.4), (45, 3.6))]}
+    assert quarter_prices(quarters, None, parse) == {t(6, 0): 2.0, t(6, 15): 2.2, t(6, 30): 3.4, t(6, 45): 3.6}
+    assert hourly_prices(quarters, None, parse) == {t(6, 0): 2.8}
+    hourly = {"raw_today": [{"start": f"2026-11-25T{h:02d}:00:00+01:00", "value": 2.0} for h in range(4)]}
+    assert quarter_prices(hourly, None, parse) == {} and len(hourly_prices(hourly, None, parse)) == 4
+
+
+def test_day_health_restart_after_defrost_is_not_a_start() -> None:
+    """Dagens starter: genstarten lige efter et stop, der ikke tæller (4-vejsventilens skift ved en afrimning, skiftet efter
+    varmt vand), er samme kørsel. En start længe efter et sådant stop er en rigtig start."""
+    from custom_components.varmemodel.coordinator import day_health
+
+    t0 = 1_000_000.0
+    rows = {
+        "c": [(t0 - 1800, "off"),
+              (t0 + 600, "on"),                               # 1. start
+              (t0 + 4000, "off"), (t0 + 4060, "on"),          # ventilskift ved afrimningens slut: samme kørsel
+              (t0 + 9000, "off"),                             # stop, mens der laves varmt vand (tæller ikke som stop)
+              (t0 + 9000 + 3600, "on"),                       # 2. start – en time senere
+              (t0 + 15000, "off"), (t0 + 15900, "on")],       # rigtigt stop og 3. start
+        "d": [(t0 - 1800, "off"), (t0 + 3800, "on"), (t0 + 3990, "off")],
+        "v": [(t0 - 1800, "off"), (t0 + 8000, "on"), (t0 + 9100, "off")],
+    }
+    h = day_health(rows, "c", "v", "d", t0, t0 + 20000)
+    assert h["starter"] == 3 and h["stop"] == 1 and h["afrimninger"] == 1 and h["varmt_vand"] == 1
+    assert h["drift_min"] == round((3400 + 4940 + 2400 + 4100) / 60)
+
+
+async def test_partial_hour_before_block_is_planned_and_stopped_at_red(ha: HomeAssistant) -> None:
+    """Prisloftets kvarterer begynder midt i en time: for den vandbårne kilde er timens første halvdel fri (som fortsættelse
+    af timen før) med prisen for de frie kvarterer; styringen er blokeret, når klokken når de røde kvarterer – også uden en
+    »Blokering lige nu«-entitet – og »Plan nu« viser næste stop ved det røde kvarter."""
+    from datetime import datetime as _dt
+
+    loc = dt_util.get_default_time_zone()
+    h0 = int(time.time() // 3600 * 3600)
+    iso = lambda ts: _dt.fromtimestamp(ts, loc).isoformat()  # noqa: E731
+    red0 = h0 + 2 * 3600 + 1800  # rødt fra xx:30 i planens tredje time, 10 timer frem
+    ha.states.async_set("sensor.kvart", "40", {"kvarterer": [iso(red0 + j * 900) for j in range(38)]})
+    c, s = await _lv_entry(ha, {"block_quarters_entity": "sensor.kvart"})
+    # priser pr. kvarter: de røde kvarterer er dyre, de frie i samme time billigere
+    ha.states.async_set("sensor.pris", "1.0", {"raw_today": [
+        {"start": iso(h0 + j * 900), "value": 3.5 if red0 <= h0 + j * 900 < red0 + 38 * 900 else (2.1 if h0 + j * 900 >= h0 + 7200 else 1.0)}
+        for j in range(96)]})
+    await c.async_replan()
+    hrs = c.plans[s.sid]["hours"]
+    h2 = next(x for x in hrs if x["ts"] == h0 + 7200)
+    assert [x["blocked"] for x in hrs[:5]] == [False, False, False, True, True]
+    assert h2["free"] == 0.5 and h2["price"] == 2.1 and "free" not in hrs[1]
+    assert hrs[1]["heat_kw"] > 0 and 0 < h2["heat_kw"] <= hrs[1]["heat_kw"] / 2 + 0.13
+    assert c.red_spans == [(red0, red0 + 38 * 900)]
+    # styringen: fri i timens første halvdel, blokeret i de røde kvarterer – uden »Blokering lige nu«
+    assert c.live_blocked() is False
+    assert c._blocked_now(h2, h0 + 7200 + 600) is False and c._blocked_now(h2, red0 + 60) is True  # noqa: SLF001
+    assert c._blocked_now(hrs[1], red0 + 60) is False  # noqa: SLF001 – en hel time afgøres ikke af de røde perioder her
+    st = next(x for x in ha.states.async_all("sensor") if x.entity_id.endswith("plan_now"))
+    assert st.state == "heat" and st.attributes["next_off"] == iso(red0)
+    assert st.attributes["plan"][2]["free"] == 0.5 and st.attributes["preload_window"]["til"] == iso(red0)
+    # luft-luft og resten af huset regner stadig timen som blokeret (fælles timer)
+    d = c.plan_inputs[s.sid][0]
+    assert d[2].free == 0.5 and d[2].blocked is False and d[3].blocked is True

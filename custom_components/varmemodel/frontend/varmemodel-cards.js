@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.24.1';
+  const VERSION = '0.25.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -401,7 +401,7 @@
       if (s && s.plan) {
         const pa = at(h, s.plan); const ca = at(h, s.e('command')); const cst = (st(h, s.e('command')) || {}).state;
         const pl = (pa.plan || []).slice(0, 24); const mx = Math.max(0.1, ...pl.map((x) => x.heat_kw || 0));
-        o += `<div class="h2">${esc(s.name)}: plan</div><div class="tl">${pl.map((x) => `<div class="tc${x.blocked ? ' rd' : ''}" title="${esc(`${when(x.t)}: ${fmt(x.heat_kw, 2)} ${s.kind === 'hydronic' ? 'kW varme' : 'kWh el'} · ${fmt(x.price, 2)} kr${x.blocked ? ' · blokeret' : ''}${x.preload ? ` · opvarmning før rød` : ''}`)}"><div class="tb" style="height:${Math.round(100 * (x.heat_kw || 0) / mx)}%${x.preload ? `;background:repeating-linear-gradient(135deg,${PU} 0 4px,${OR} 4px 8px)` : ''}"></div><div class="tt">${hh(new Date(x.t).getHours())}</div></div>`).join('')}</div>`;
+        o += `<div class="h2">${esc(s.name)}: plan</div><div class="tl">${pl.map((x) => `<div class="tc${x.blocked ? ' rd' : ''}" title="${esc(`${when(x.t)}: ${fmt(x.heat_kw, 2)} ${s.kind === 'hydronic' ? 'kW varme' : 'kWh el'} · ${fmt(x.price, 2)} kr${x.blocked ? ' · blokeret' : ''}${x.free ? ' · kun timens frie del (resten er rød)' : ''}${x.preload ? ` · opvarmning før rød` : ''}`)}"><div class="tb" style="height:${Math.round(100 * (x.heat_kw || 0) / mx)}%${x.preload ? `;background:repeating-linear-gradient(135deg,${PU} 0 4px,${OR} 4px 8px)` : ''}"></div><div class="tt">${hh(new Date(x.t).getHours())}</div></div>`).join('')}</div>`;
         o += `<div class="sm" style="margin-top:4px"><span class="v" data-e="${esc(s.e('command'))}">Anbefalet: ${cst === 'heat' ? 'varme' : cst === 'off' ? 'slukket' : '–'}${ca.setpoint != null ? ` · setpunkt ${fmt(ca.setpoint)} °C` : ''}</span> · ${esc(ca.reason || '')}<br>${preText(h, s) ? `<b>${esc(preText(h, s))}</b><br>` : ''}${esc(pa.reason || '')}</div>`;
       }
       return o;

@@ -36,7 +36,8 @@ def main() -> None:
     print("time  pris   ude  blok   kW  fremløb")
     for x, h in zip(p.hours, dump["hours"]):
         flow = x["flow"] if x["flow"] is not None else "–"
-        print(f"{h['h']:>4}  {x['price']:.2f} {x['t_out']:>5.1f}  {'rød ' if x['blocked'] else '    '} {x['heat_kw']:>4.2f}  {flow}")
+        mark = "rød " if x["blocked"] else ("del " if x.get("free") else "    ")  # del = delvist fri time (kun timens frie del)
+        print(f"{h['h']:>4}  {x['price']:.2f} {x['t_out']:>5.1f}  {mark} {x['heat_kw']:>4.2f}  {flow}")
     for r in dump["rooms"]:
         s = p.rooms.get(r["name"]) or []
         if s:
