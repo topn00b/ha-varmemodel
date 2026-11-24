@@ -225,16 +225,32 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
     base = _plan_once(*args, flow_margin, red_spans=red_spans)
     if flow_margin is None or base.deficit <= 0.05 or flow_raise_max <= 0:
         return base
-    best = base
+    def under(p: Plan) -> dict[str, float]:
+        """Hvert rums største manko under grænsen (°C)."""
+        return {x["rum"]: x["under"] for x in p.problems}
+
+    best, kb = base, 0
     for k in range(1, flow_raise_max + 1):
         p = _plan_once(*args, flow_margin + k, red_spans=red_spans)
-        # Kun hvis det hjælper mærkbart: mindst 0,1 °C mindre manko pr. grad hævet (ellers kan fremløbet ikke rette det)
-        if p.deficit < best.deficit and base.deficit - p.deficit >= 0.1 * k:
-            best, best.flow_raise = p, float(k)
+        ub, u = under(best), under(p)
+        # Kun hvis det hjælper mærkbart: hver grad ud over den forrige hævning skal give mindst 0,1 °C mindre manko
+        # (ellers kan fremløbet ikke rette det) – for huset (det værste rum) eller for mindst ét rum. Et rum med en svag
+        # kreds må ikke spærre for de andre: før en lang blokering ligger det værste punkt ofte lige efter blokeringen,
+        # hvor forvarmningen næsten ikke når frem, mens andre rum får meget ud af den (24/11-2026: +5 °C gav Stue 0,8 °C,
+        # Gang 0,3 °C).
+        gain = max((ub[r] - u.get(r, 0.0) for r in ub), default=0.0)
+        if (p.deficit <= best.deficit + 1e-9 and sum(u.values()) < sum(ub.values()) - 1e-9
+                and max(best.deficit - p.deficit, gain) >= 0.1 * (k - kb)):
+            best, kb = p, k
+            best.flow_raise = float(k)
         if p.deficit <= 0.05:
             break
     if best.flow_raise:
-        best.reason += f" – fremløbsgrænsen hævet {best.flow_raise:.0f} °C, så rummene forudsiges at holde"
+        u0, ub = under(base), under(best)
+        rum = max(u0, key=lambda r: u0[r] - ub.get(r, 0.0))
+        best.reason += (f" – fremløbsgrænsen hævet {best.flow_raise:.0f} °C, så rummene forudsiges at holde" if best.deficit <= 0.05
+                        else f" – fremløbsgrænsen hævet {best.flow_raise:.0f} °C: rummene holder ikke helt, men det hjælper"
+                             f" ({rum} {u0[rum] - ub.get(rum, 0.0):.1f} °C mindre under grænsen)")
     return best
 
 

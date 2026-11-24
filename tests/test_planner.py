@@ -300,6 +300,21 @@ def test_plan_raises_flow_limit_when_forecast_says_rooms_drop() -> None:
     assert ok.flow_raise == 0
 
 
+def test_plan_raises_flow_when_one_room_gains_although_weakest_does_not() -> None:
+    """Et rum med en svag kreds (allerede under gulvet, hævningen når det knap) må ikke spærre for de andre rum."""
+    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, emission_kw_k=0.283, flow_c0=26.0, flow_slope=-0.6)
+    hs = hours(20, t_out=lambda i: -3.0, blocked=lambda i: 6 <= i <= 15)
+    good = PlanRoom(name="Rum A", t_now=20.3, t_min=20.0, heat_now=0.08, heat_delayed=0.05, cool_per_hk=0.006, margin=0.2)
+    weak = PlanRoom(name="Rum B", t_now=19.0, t_min=20.0, heat_now=0.002, heat_delayed=0.002, cool_per_hk=0.006, margin=0.2)
+    alone = make_plan(hs, m, [weak], 20.0, flow_margin=0.0)
+    assert alone.flow_raise == 0  # alene: hævningen hjælper ikke mærkbart
+    p = make_plan(hs, m, [good, weak], 20.0, flow_margin=0.0)
+    # +2 °C får Rum A til at holde; flere grader giver kun Rum B ca. 0,01 °C pr. grad – dem betaler planen ikke for
+    assert p.flow_raise == 2 and "rummene holder ikke helt, men det hjælper (Rum A" in p.reason
+    u = {x["rum"]: x["under"] for x in p.problems}
+    assert "Rum A" not in u and u["Rum B"] > 0.5
+
+
 def test_trims_heat_when_rooms_are_warm() -> None:
     """Husets behov er kun udgangspunktet: er rummene varme nok, skæres varmen ned (lavere effekt og fremløb)."""
     hs = hours(12, t_out=lambda i: 2.0)
