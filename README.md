@@ -276,6 +276,9 @@ alerts:               # egne afvigelser
   - entity: automation.heating
     state: "off"
     text: Varmeautomatikken er slukket
+  - entity: input_text.heating_watchdog   # `not`: alt andet end de nævnte tilstande; {state} sætter tilstanden ind
+    not: normal
+    text: "Vagten: {state}"
 actions:              # knapper (slår til/fra)
   - entity: input_boolean.im_cold
     name: Jeg fryser

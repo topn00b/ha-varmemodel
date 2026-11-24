@@ -233,7 +233,8 @@ class SourceState:
         return self.conf.get(key) or None
 
     def as_store(self) -> dict[str, Any]:
-        return {"collected": self.collected, "accepted": self.accepted, "fits": self.fits, "slots": self.slots, "daily": self.daily}
+        return {"collected": self.collected, "accepted": self.accepted, "fits": self.fits, "slots": self.slots, "daily": self.daily,
+                "today": {"t": round(time.time()), "v": self.today}}
 
     def load(self, d: dict[str, Any]) -> None:
         self.collected = d.get("collected", {})
@@ -241,6 +242,10 @@ class SourceState:
         self.fits = d.get("fits", {})
         self.slots = d.get("slots", {})
         self.daily = d.get("daily", {})
+        # Dagens tal vises straks efter en genstart eller genindlæsning (regnes ellers først efter halvandet minut)
+        td = d.get("today") or {}
+        if td.get("v") and dt_util.as_local(dt_util.utc_from_timestamp(float(td.get("t") or 0))).date() == dt_util.now().date():
+            self.today = td["v"]
         # 0.7.0: timemodellen for COP er fjernet; 0.8.0: LG's varmekurve er erstattet af det lærte fremløb
         for k in ("cop", "curve"):
             self.accepted.pop(k, None)

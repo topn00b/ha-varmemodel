@@ -1419,3 +1419,19 @@ async def test_hydro_returns_to_heat_mode(ha: HomeAssistant) -> None:
     calls.clear()
     await c._hydro_apply(s, True, False, [])
     assert calls == []
+
+
+def test_source_state_restores_todays_figures() -> None:
+    """Dagens COP-tal gemmes med kilden og vises straks efter en genstart – men kun samme dag."""
+    from custom_components.varmemodel.coordinator import SourceState
+
+    s = SourceState(sid="a", name="Kilde", kind="hydronic", conf={})
+    s.today = {"cop": 2.5, "kwh_varme": 30.1, "kwh_el": 12.2}
+    d = s.as_store()
+    s2 = SourceState(sid="a", name="Kilde", kind="hydronic", conf={})
+    s2.load(d)
+    assert s2.today == s.today
+    d["today"]["t"] -= 2 * 86400  # gemt i forgårs: bruges ikke
+    s3 = SourceState(sid="a", name="Kilde", kind="hydronic", conf={})
+    s3.load(d)
+    assert s3.today == {}

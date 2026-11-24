@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.22.2';
+  const VERSION = '0.22.3';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -776,7 +776,9 @@
       const svgActs = !!main && !(this._tall ?? ((this.clientWidth || 1000) < 700));
       const acts = svgActs ? '' : (c.actions || []).map((a) => {
         const s = st(h, a.entity); const on = !!s && s.state === 'on';
-        return `<button class="${on ? 'on' : ''}" data-act="${esc(a.entity)}">${esc(a.name || a.entity)}${on ? ' · siden ' + new Date(s.last_changed).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' }) : ''}</button>`;
+        // »siden« kun for husets egne kontakter – Varmemodels egne får ny tid ved hver genindlæsning
+        const since = on && (h.entities[a.entity] || {}).platform !== 'varmemodel';
+        return `<button class="${on ? 'on' : ''}" data-act="${esc(a.entity)}">${esc(a.name || a.entity)}${since ? ' · siden ' + new Date(s.last_changed).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' }) : ''}</button>`;
       }).join('');
       return `<div class="band">${zone}<div class="b zn">${this.timeline(h, vm)}</div><div class="b afv">${this.alerts(h, vm, D)}</div>`
         + `${notes ? `<div class="b note">${notes}</div>` : ''}${acts ? `<div class="acts">${acts}</div>` : ''}</div>`;
@@ -868,7 +870,12 @@
       const known = new Set([...Object.values(md.rum || {}).map((x) => x['føler']), out && out['føler']].filter(Boolean));
       const bad = [...new Set(ids)].filter((e) => { const s = st(h, e); return !known.has(e) && (!s || ['unavailable', 'unknown'].includes(s.state)); });
       if (bad.length) w.push(['❗', 'Svarer ikke: ' + bad.map((e) => (at(h, e).friendly_name || e)).join(', ')]);
-      for (const x of this._c.alerts || []) { const s = st(h, x.entity); if (s && s.state === String(x.state ?? 'on')) w.push([x.icon || '⚠️', x.text || x.entity]); }
+      // Egne advarsler: `state` (præcis tilstand, standard 'on') eller `not` (alt andet end de nævnte tilstande); {state} i teksten
+      for (const x of this._c.alerts || []) {
+        const s = st(h, x.entity); if (!s) continue;
+        const hit = x.not !== undefined ? ![].concat(x.not, ['unavailable', 'unknown']).map(String).includes(s.state) : s.state === String(x.state ?? 'on');
+        if (hit) w.push([x.icon || '⚠️', String(x.text || x.entity).replace('{state}', s.state)]);
+      }
       return w.length ? w.map(([i, t]) => `<div>${i} ${esc(t)}</div>`).join('') : '<div>✅ Ingen afvigelser</div>';
     }
     pills(h, D, main) {
@@ -1004,7 +1011,7 @@
           acts.slice(0, 6).forEach((a, i) => {
             const s0 = st(h, a.entity); const on = !!s0 && s0.state === 'on';
             const x = 920 + (i % 3) * (bw + 12), y = two ? 30 + Math.floor(i / 3) * 52 : 64;
-            const tid = on ? ' · ' + new Date(s0.last_changed).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' }) : '';
+            const tid = on && (h.entities[a.entity] || {}).platform !== 'varmemodel' ? ' · ' + new Date(s0.last_changed).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' }) : '';
             const max = Math.floor((bw - 16) / 8.2);
             let lbl = (a.name || a.entity) + tid;
             if (lbl.length > max) lbl = (a.name || a.entity).length > max ? (a.name || a.entity).slice(0, max - 1) + '…' : (a.name || a.entity);
