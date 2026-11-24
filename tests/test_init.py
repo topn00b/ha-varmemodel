@@ -908,6 +908,13 @@ async def test_low_flow_preheat_shown(ha: HomeAssistant) -> None:
     hs.update(low=28.0, start_t=time.time(), low_t=time.time(), low_status="holder", low_loft=35.0, low_raise=3.0)
     v = c.flow_search(s)
     assert v["forvarmer"] == 3.0 and v["mål_nu"] == 31.0 and v["tekst"].startswith("Forvarmer: 31 °C")
+    # søgningen har selv hævet sit mål, siden planen regnede: forvarmningen vises, som den står – klippet af loftet
+    hs.update(low=29.0, low_loft=34.8, low_raise=8.0)
+    v = c.flow_search(s)
+    assert v["forvarmer"] == 6.0 and v["mål_nu"] == 34.8 and v["tekst"].startswith("Forvarmer: 35 °C (søgningens 29 °C + 6 °C)")
+    hs.update(low=35.0, low_loft=35.0, low_raise=4.0)  # søgningen står på loftet: ingen forvarmning at vise
+    v = c.flow_search(s)
+    assert v["forvarmer"] is None and v["mål_nu"] is None and not v["tekst"].startswith("Forvarmer")
 
 
 @pytest.mark.parametrize("expected_lingering_timers", [True])

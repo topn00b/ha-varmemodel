@@ -2359,7 +2359,12 @@ class VarmemodelCoordinator:
         k = float(hs.get("low_raise") or 0.0)
         sk = self._start_k(hs)
         sk_txt = f"; opstarten løftes til retur + {_k_txt(sk)} °C, lært af varmepumpens opstart" if sk > SOFT_OVER_RETURN_K else ""
-        eff = min((low if low is not None else cap or 0) + k, hs.get("low_loft") or 99) if k else None
+        base = low if low is not None else cap or 0
+        eff = min(base + k, hs.get("low_loft") or 99) if k else None
+        # Forvarmningen, som den faktisk står: loftet kan klippe den – fx når søgningen selv har hævet sit mål, siden planen
+        # regnede (planen regner igen ved næste kvarter)
+        k = max(0.0, float(round(eff - base))) if eff is not None else 0.0
+        eff = eff if k else None
         g = hs.get("guard") if not off else None
         if g and g.get("mål") is not None:
             eff = max(eff or 0, g["mål"])
