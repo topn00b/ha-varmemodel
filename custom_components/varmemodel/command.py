@@ -20,6 +20,10 @@ MIN_OFF = 1800
 MIN_GAP = 900
 FLOW_HOLD = 900  # fremløbet må justeres hvert kvarter (≥ 1 K); tænd/sluk er det, der skånes
 DEADBAND = 1
+# Planlægningen kører hvert kvarter, men en kørsel kan ligge lidt efter (fx lige efter en genstart). Uden slæk blev et kvarters
+# hold til en halv time: 24/11 blev fremløbet sat 13:32:55, og forvarmningen kl. 13:47:00 blev holdt 5 s for tidligt – næste
+# chance 14:02 lå i rød, så forvarmningen nåede aldrig frem
+SLACK = 90
 
 
 @dataclass
@@ -59,11 +63,11 @@ def step(c: Command, now: float, day: str, want_on: bool, want_flow: int | None,
         want_on = False
     target = want_on
     if n.on != want_on and not blocked:
-        if n.on and now - n.since_onoff < min_on:
+        if n.on and now - n.since_onoff < min_on - SLACK:
             target, reason = True, f"holder mindst {min_on / 60:.0f} min. tændt"
-        elif not n.on and now - n.since_onoff < min_off:
+        elif not n.on and now - n.since_onoff < min_off - SLACK:
             target, reason = False, f"holder mindst {min_off / 60:.0f} min. slukket"
-        elif now - n.last_change < min_gap:
+        elif now - n.last_change < min_gap - SLACK:
             target, reason = n.on, f"højst én ændring pr. {min_gap / 60:.0f} min."
     if blocked and n.on:
         reason = "blokeret: slukker straks"
@@ -75,12 +79,14 @@ def step(c: Command, now: float, day: str, want_on: bool, want_flow: int | None,
         n.flow = want_flow if target else None
         n.since_flow = now
     elif n.on and want_flow is not None and want_flow != n.flow:
-        if n.flow is None or (abs(want_flow - n.flow) >= DEADBAND and now - n.since_flow >= FLOW_HOLD and now - n.last_change >= min_gap):
+        if n.flow is None or (abs(want_flow - n.flow) >= DEADBAND and now - n.since_flow >= FLOW_HOLD - SLACK
+                              and now - n.last_change >= min_gap - SLACK):
             n.flow, n.since_flow, n.last_change = want_flow, now, now
             n.writes += 1
             reason = "nyt fremløb"
         else:
-            reason = "holder fremløbet mindst et kvarter" if now - n.since_flow < FLOW_HOLD else f"højst én ændring pr. {min_gap / 60:.0f} min."
+            reason = ("holder fremløbet mindst et kvarter" if now - n.since_flow < FLOW_HOLD - SLACK
+                      else f"højst én ændring pr. {min_gap / 60:.0f} min.")
     if n.on and blocked:
         n.blocked_on += 1
     n.reason = reason

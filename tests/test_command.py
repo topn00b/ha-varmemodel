@@ -55,3 +55,13 @@ def test_counters_reset_each_day() -> None:
 def test_roundtrip() -> None:
     c = step(Command(), 0, "d", True, 2, False)
     assert Command.load(c.dump()) == c
+
+
+def test_hold_has_slack_for_replan_jitter() -> None:
+    """24/11: fremløbet sat 13:32:55 (kørsel lige efter en genstart); planlægningen 13:47:00 må hæve til forvarmning –
+    ellers blev et kvarters hold til en halv time, og forvarmningen nåede aldrig frem før rød kl. 14."""
+    c = step(Command(), 0, "d", True, 30, False)
+    c = step(c, 845, "d", True, 35, False)
+    assert c.flow == 35 and c.reason == "nyt fremløb"
+    c = step(c, 845 + 600, "d", True, 30, False)
+    assert c.flow == 35 and c.reason == "holder fremløbet mindst et kvarter"

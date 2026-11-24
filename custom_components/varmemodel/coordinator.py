@@ -60,7 +60,7 @@ from .air_control import (
     learn_w,
     preload_per_room,
 )
-from .command import FLOW_HOLD, MIN_GAP, Command, step
+from .command import FLOW_HOLD, MIN_GAP, SLACK, Command, step
 from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
 from .planner import FLOW_LOW_OPEN_S, FLOW_MAX as FLOW_MAX_C, PlanHour, PlanRoom, SourceModel, estimate_room, flow_boost_step, make_air_plan, make_plan, simulate_rooms
 from .const import (
@@ -2039,7 +2039,7 @@ class VarmemodelCoordinator:
         if not off and lg is not None and want_now is not None and abs(float(want_now) - lg) >= 1:
             c = self.commands.get(s.sid) or {}
             t_ok = now if (g and g.get("mål") is not None and g["mål"] >= float(want_now)) else max(
-                now, float(c.get("since_flow") or 0) + FLOW_HOLD, float(c.get("last_change") or 0) + MIN_GAP)
+                now, float(c.get("since_flow") or 0) + FLOW_HOLD - SLACK, float(c.get("last_change") or 0) + MIN_GAP - SLACK)
             when_txt = dt_util.as_local(dt_util.utc_from_timestamp(_next_replan(t_ok))).strftime("%H:%M")
         return {
             "aktiv": low is not None and bool(hs.get("start_t")) and not off,
