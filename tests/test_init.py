@@ -1117,38 +1117,44 @@ def test_red_spans_with_quarters() -> None:
 
 
 async def test_varsel_event_once_and_when_worse(ha: HomeAssistant) -> None:
-    """Besked forud: hændelsen fyres første gang et rum forudsiges mindst 0,2 °C under grænsen, igen når det bliver 0,3 °C
-    værre, ikke ved gentagelser; er problemet væk (under 0,1), varsles et nyt igen. Teksten nævner blokeringen og planen."""
+    """Besked forud: første gang et rum forudsiges mindst 0,2 °C under grænsen; ikke ved gentagelser eller små forværringer;
+    igen ved 0,5 °C værre – men højst én besked pr. 6 timer, undtagen et nyt problem, der begynder inden for 3 timer."""
     c, s = await _lv_entry(ha)
     events: list = []
     ha.bus.async_listen("varmemodel_varsel", lambda e: events.append(e.data))
     now = time.time()
     h = int(now // 3600 * 3600)
-    prob = {"rum": "Gang", "ts": h + 7 * 3600, "temp": 19.7, "grænse": 20.0, "under": 0.3, "fra_ts": h + 5 * 3600, "blokeret": True}
+    prob = {"rum": "Gang", "ts": h + 9 * 3600, "temp": 19.7, "grænse": 20.0, "under": 0.3, "fra_ts": h + 5 * 3600, "blokeret": True}
     plan = {"problems": [dict(prob)], "warnings": ["behovet kan ikke dækkes i de frie timer"], "flow_raise": 5.0}
-    c.red_spans = [(h + 3600, h + 8 * 3600)]
-    c._varsel(s, plan, now)  # noqa: SLF001
-    await ha.async_block_till_done()
+    c.red_spans = [(h + 3600, h + 10 * 3600)]
+
+    async def run() -> None:
+        c._varsel_all({s.sid: plan}, now)  # noqa: SLF001
+        await ha.async_block_till_done()
+    await run()
     assert len(events) == 1 and events[0]["nye"] == ["Gang"] and events[0]["kilde"] == "Luft-vand"
     t = events[0]["tekst"]
-    assert "Gang 19,7 °C" in t and "grænse 20,0" in t and "under fra" in t and "Blokeret" in t and "hæver allerede fremløbet 5 °C" in t
-    c._varsel(s, plan, now)  # noqa: SLF001
-    await ha.async_block_till_done()
+    assert t.startswith("Luft-vand: Gang 19,7 °C") and "grænse 20,0" in t and "under fra" in t and "Blokeret" in t
+    assert "kan ikke dække behovet" in t and "hæver allerede fremløbet 5 °C" in t
+    await run()
     assert len(events) == 1  # samme problem: ingen ny besked
     plan["problems"][0].update(under=0.65, temp=19.35)
-    c._varsel(s, plan, now)  # noqa: SLF001
-    await ha.async_block_till_done()
+    await run()
+    assert len(events) == 1  # 0,35 °C værre: under grænsen for en ny besked
+    plan["problems"][0].update(under=0.85, temp=19.15)
+    await run()
+    assert len(events) == 1  # 0,55 °C værre, men under 6 timer siden sidste besked
+    c.air["varsel"]["t"] = now - 7 * 3600
+    await run()
     assert len(events) == 2 and events[1]["værre"] == ["Gang"] and events[1]["nye"] == []
     plan["problems"] = [dict(prob, under=0.05)]  # næsten væk: glemmes
-    c._varsel(s, plan, now)  # noqa: SLF001
+    await run()
     plan["problems"] = [dict(prob, under=0.25)]
-    c._varsel(s, plan, now)  # noqa: SLF001
-    await ha.async_block_till_done()
-    assert len(events) == 3 and events[2]["nye"] == ["Gang"]
-    plan["problems"] = [dict(prob, under=0.25), dict(prob, rum="Stue", under=0.15)]  # Stue under 0,2: ingen besked
-    c._varsel(s, plan, now)  # noqa: SLF001
-    await ha.async_block_till_done()
-    assert len(events) == 3
+    await run()
+    assert len(events) == 2  # nyt problem om 5 timer: venter på de 6 timer
+    plan["problems"] = [dict(prob, under=0.25, fra_ts=h + 2 * 3600)]
+    await run()
+    assert len(events) == 3 and events[2]["nye"] == ["Gang"]  # begynder inden for 3 timer: straks
 
 
 async def test_varsel_only_unusual(ha: HomeAssistant) -> None:
@@ -1164,15 +1170,31 @@ async def test_varsel_only_unusual(ha: HomeAssistant) -> None:
     def p(rum: str, temp: float) -> dict:
         g = 19.5 if rum == "Værelse" else 20.0
         return {"rum": rum, "ts": h + 7200, "temp": temp, "grænse": g, "under": round(g - temp, 2), "fra_ts": h + 3600, "blokeret": True}
-    c._varsel(s, {"problems": [p("Værelse", 18.5)]}, now)  # noqa: SLF001 – 1,0 under: sædvanligt
+    c._varsel_all({s.sid: {"problems": [p("Værelse", 18.5)]}}, now)  # noqa: SLF001 – 1,0 under: sædvanligt
     await ha.async_block_till_done()
     assert events == []
-    c._varsel(s, {"problems": [p("Værelse", 17.9)]}, now)  # noqa: SLF001 – 1,6 under: usædvanligt
+    c._varsel_all({s.sid: {"problems": [p("Værelse", 17.9)]}}, now)  # noqa: SLF001 – 1,6 under: usædvanligt
     await ha.async_block_till_done()
     assert len(events) == 1 and "normalt ned til 18,3" in events[0]["tekst"]
-    c._varsel(s, {"problems": [p("Værelse", 17.9), p("Gang", 19.7)]}, now)  # noqa: SLF001 – Gang plejer at holde sig over
+    c._varsel_all({s.sid: {"problems": [p("Værelse", 17.9), p("Gang", 19.7)]}}, now)  # noqa: SLF001 – nyt og snart: straks
     await ha.async_block_till_done()
     assert len(events) == 2 and events[1]["nye"] == ["Gang"]
+
+
+async def test_varsel_one_message_for_the_house(ha: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Én samlet besked for alle varmekilder (ikke én pr. kilde)."""
+    c = entry.runtime_data
+    events: list = []
+    ha.bus.async_listen("varmemodel_varsel", lambda e: events.append(e.data))
+    now = time.time()
+    h = int(now // 3600 * 3600)
+    srcs = list(c.sources.values())
+    assert len(srcs) == 2
+    plans = {x.sid: {"problems": [{"rum": f"Rum {i}", "ts": h + 7200, "temp": 19.0, "grænse": 20.0, "under": 1.0, "fra_ts": h + 3600,
+                                   "blokeret": True}]} for i, x in enumerate(srcs)}
+    c._varsel_all(plans, now)  # noqa: SLF001
+    await ha.async_block_till_done()
+    assert len(events) == 1 and all(f"{x.name}:" in events[0]["tekst"] for x in srcs) and len(events[0]["problemer"]) == 2
 
 
 def test_usual_margin() -> None:

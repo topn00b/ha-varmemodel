@@ -111,7 +111,9 @@ DHW_AFTER_S = 600  # efter varmt vand er kredsen varm og fremløbet ustabilt: in
 # Besked forud: hændelsen »varmemodel_varsel«, når planen forudser et rum under sin grænse (fx en lang blokering)
 EVENT_VARSEL = "varmemodel_varsel"
 VARSEL_MIN = 0.2  # varsles, når et rum forudsiges mindst så meget under grænsen
-VARSEL_WORSE = 0.3  # og igen, hvis det bliver så meget værre end sidst varslet
+VARSEL_WORSE = 0.5  # og igen, hvis det bliver så meget værre end sidst varslet (planen bliver ofte lidt værre, når horisonten vokser)
+VARSEL_COOLDOWN = 6 * 3600  # højst én samlet besked så ofte (brugeren: "2 x 2 beskeder indenfor 30 min – det virker af meget")
+VARSEL_URGENT = 3 * 3600  # undtagen et nyt problem, der begynder inden for så kort tid
 VARSEL_CLEAR = 0.1  # under så lidt (eller ikke under) er problemet væk – et nyt varsles igen
 # Kun det usædvanlige: rummets sædvanlige laveste (en almindelig dårlig dag de seneste VARSEL_DAYS døgn) – besked kun, når planen
 # forudser mindst VARSEL_UNUSUAL °C koldere end det (brugeren: "ikke beskeder hver dag på noget jeg godt ved")

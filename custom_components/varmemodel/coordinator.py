@@ -146,10 +146,12 @@ from .const import (
     DHW_AFTER_S,
     EVENT_VARSEL,
     VARSEL_CLEAR,
+    VARSEL_COOLDOWN,
     VARSEL_DAYS,
     VARSEL_MIN,
     VARSEL_PCT,
     VARSEL_UNUSUAL,
+    VARSEL_URGENT,
     VARSEL_WORSE,
     START_K_DECAY,
     START_K_MAX,
@@ -1305,51 +1307,70 @@ class VarmemodelCoordinator:
         except Exception:  # noqa: BLE001
             _LOGGER.debug("%s: fremløbet kunne ikke opdateres efter et skift", s.name, exc_info=True)
 
-    def _varsel(self, s: SourceState, plan: dict[str, Any], now: float) -> None:
-        """Besked forud: fyr EVENT_VARSEL, når planen forudser et rum mindst VARSEL_MIN °C under sin grænse – første gang og
-        igen, hvis det bliver mindst VARSEL_WORSE °C værre end sidst varslet. Et rum, der ikke længere er et problem (under
-        VARSEL_CLEAR), glemmes, så et nyt problem senere varsles igen. Hændelsen bærer en færdig tekst (dansk) og data, så en
-        automation kan sende den videre (fx til telefonen)."""
-        probs = plan.get("problems") or []
+    def _varsel_check(self, s: SourceState, plan: dict[str, Any]) -> dict[str, Any] | None:
+        """Kildens kandidater til besked forud: rum, der forudsiges mindst VARSEL_MIN °C under grænsen og mindst
+        VARSEL_UNUSUAL °C koldere end rummets sædvanlige dårlige dag – nye, eller mindst VARSEL_WORSE °C værre end sidst
+        varslet. Et rum, der ikke længere er et problem (under VARSEL_CLEAR), glemmes, så et nyt problem senere varsles igen.
+        Markerer intet som varslet (det gør _varsel_all, når beskeden faktisk sendes)."""
         st = self.air.setdefault(f"varsel:{s.sid}", {})
         known: dict[str, float] = st.setdefault("rum", {})
         base: dict[str, float] = st.get("base") or {}
-        by_room = {x["rum"]: x for x in probs}
+        by_room = {x["rum"]: x for x in plan.get("problems") or []}
         for name in list(known):
             if name not in by_room or by_room[name]["under"] < VARSEL_CLEAR:
                 known.pop(name)
-        # Kun det usædvanlige: forudsagt mindst VARSEL_UNUSUAL °C koldere (over for grænsen) end rummets sædvanlige dårlige dag
         cur = {n: x for n, x in by_room.items() if x["under"] >= VARSEL_MIN
                and (base.get(n) is None or x["temp"] - x["grænse"] < base[n] - VARSEL_UNUSUAL)}
         new = [n for n in cur if n not in known]
         worse = [n for n in cur if n in known and cur[n]["under"] >= known[n] + VARSEL_WORSE]
         if not new and not worse:
+            return None
+        return {"s": s, "plan": plan, "cur": cur, "new": new, "worse": worse, "base": base}
+
+    def _varsel_all(self, plans: dict[str, dict[str, Any]], now: float) -> None:
+        """Besked forud – én samlet for huset (alle varmekilder) og højst én pr. VARSEL_COOLDOWN; et nyt problem, der begynder
+        inden for VARSEL_URGENT, sendes dog straks (der er stadig tid til at gøre noget). Hændelsen EVENT_VARSEL bærer en
+        færdig tekst (dansk) og data, så en automation kan sende den videre (fx til telefonen)."""
+        cands = [c for sid, pl in plans.items() if (src := self.sources.get(sid)) is not None
+                 for c in [self._varsel_check(src, pl)] if c]
+        if not cands:
             return
-        for n in new + worse:
-            known[n] = cur[n]["under"]
-        rows = sorted(cur.values(), key=lambda x: (x["fra_ts"], -x["under"]))
-        parts = []
-        for x in rows:
-            usual = f", normalt ned til {x['grænse'] + base[x['rum']]:.1f}" if base.get(x["rum"]) is not None else ""
-            parts.append(f"{x['rum']} {x['temp']:.1f} °C {_clock(x['ts'])} (grænse {x['grænse']:.1f}{usual}"
-                         + (f", under fra {_clock(x['fra_ts'])}" if x["fra_ts"] < x["ts"] else "") + ")")
-        last = max(x["ts"] for x in rows) + 3600
+        g = self.air.setdefault("varsel", {})
+        urgent = any(c["cur"][n]["fra_ts"] - now < VARSEL_URGENT for c in cands for n in c["new"])
+        if now - float(g.get("t") or 0) < VARSEL_COOLDOWN and not urgent:
+            return  # venter: kandidaterne er ikke markeret og kommer med i næste tilladte besked
+        parts, rows_all, last, warn_cant, raises = [], [], now, False, []
+        for c in cands:
+            s, cur, base = c["s"], c["cur"], c["base"]
+            for n in c["new"] + c["worse"]:
+                self.air[f"varsel:{s.sid}"]["rum"][n] = cur[n]["under"]
+            rows = sorted(cur.values(), key=lambda x: (x["fra_ts"], -x["under"]))
+            items = []
+            for x in rows:
+                usual = f", normalt ned til {x['grænse'] + base[x['rum']]:.1f}" if base.get(x["rum"]) is not None else ""
+                items.append(f"{x['rum']} {x['temp']:.1f} °C {_clock(x['ts'])} (grænse {x['grænse']:.1f}{usual}"
+                             + (f", under fra {_clock(x['fra_ts'])}" if x["fra_ts"] < x["ts"] else "") + ")")
+                rows_all.append({"kilde": s.name, **x})
+            parts.append(f"{s.name}: " + "; ".join(items) + ".")
+            last = max([last] + [x["ts"] + 3600 for x in rows])
+            warn_cant |= any("kan ikke dækkes" in w for w in c["plan"].get("warnings") or [])
+            if c["plan"].get("flow_raise"):
+                raises.append(f"{s.name} hæver allerede fremløbet {c['plan']['flow_raise']:.0f} °C.")
         reds = [(a, b) for a, b in self.red_spans if b > now and a < last]
-        red_txt = ", ".join(f"{_clock(a)}–{dt_util.as_local(dt_util.utc_from_timestamp(b)).strftime('%H:%M')}" for a, b in reds)
-        warn = plan.get("warnings") or []
         extra = []
         if reds:
-            extra.append(f"Blokeret {red_txt}.")
-        if any("kan ikke dækkes" in w for w in warn):
+            extra.append("Blokeret " + ", ".join(f"{_clock(a)}–{dt_util.as_local(dt_util.utc_from_timestamp(b)).strftime('%H:%M')}"
+                                                 for a, b in reds) + ".")
+        if warn_cant:
             extra.append("Planen kan ikke dække behovet i de frie timer.")
-        if plan.get("flow_raise"):
-            extra.append(f"Planen hæver allerede fremløbet {plan['flow_raise']:.0f} °C.")
-        text = _dk_txt(f"{s.name}: " + "; ".join(parts) + ". " + " ".join(extra)).strip()
-        st["sidst"] = {"t": round(now), "tekst": text}
+        extra += raises
+        text = _dk_txt(" ".join(parts + extra)).strip()
+        g.update(t=round(now), tekst=text)
         self.hass.bus.async_fire(EVENT_VARSEL, {
-            "kilde": s.name, "nye": new, "værre": worse, "tekst": text,
-            "problemer": [{"rum": x["rum"], "kl": _ts_local_iso(x["ts"]), "fra": _ts_local_iso(x["fra_ts"]), "temp": x["temp"],
-                           "grænse": x["grænse"], "under": x["under"], "blokeret": x["blokeret"]} for x in rows],
+            "kilde": " og ".join(c["s"].name for c in cands), "nye": [n for c in cands for n in c["new"]],
+            "værre": [n for c in cands for n in c["worse"]], "tekst": text,
+            "problemer": [{"kilde": x["kilde"], "rum": x["rum"], "kl": _ts_local_iso(x["ts"]), "fra": _ts_local_iso(x["fra_ts"]),
+                           "temp": x["temp"], "grænse": x["grænse"], "under": x["under"], "blokeret": x["blokeret"]} for x in rows_all],
             "blokeret": [{"fra": _ts_local_iso(a), "til": _ts_local_iso(b)} for a, b in reds],
         })
 
@@ -2897,9 +2918,12 @@ class VarmemodelCoordinator:
                         # Det sædvanlige regnes én gang i døgnet (langtidsstatistik, timernes laveste)
                         vs["base"] = await get_instance(self.hass).async_add_executor_job(self._room_base_sync, src)
                         vs["base_day"] = today
-                    self._varsel(src, pl, now)
                 except Exception:  # noqa: BLE001 – en besked må aldrig vælte planlægningen
-                    _LOGGER.debug("%s: besked forud kunne ikke laves", src.name, exc_info=True)
+                    _LOGGER.debug("%s: det sædvanlige kunne ikke regnes", src.name, exc_info=True)
+        try:
+            self._varsel_all(plans, now)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Besked forud kunne ikke laves", exc_info=True)
         self._flag_missing(now, out_flag)
         if len(hours) < 6:
             missing.append("for få timer med pris")
