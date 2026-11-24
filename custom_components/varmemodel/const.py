@@ -113,6 +113,11 @@ EVENT_VARSEL = "varmemodel_varsel"
 VARSEL_MIN = 0.2  # varsles, når et rum forudsiges mindst så meget under grænsen
 VARSEL_WORSE = 0.3  # og igen, hvis det bliver så meget værre end sidst varslet
 VARSEL_CLEAR = 0.1  # under så lidt (eller ikke under) er problemet væk – et nyt varsles igen
+# Kun det usædvanlige: rummets sædvanlige laveste (en almindelig dårlig dag de seneste VARSEL_DAYS døgn) – besked kun, når planen
+# forudser mindst VARSEL_UNUSUAL °C koldere end det (brugeren: "ikke beskeder hver dag på noget jeg godt ved")
+VARSEL_DAYS = 14
+VARSEL_UNUSUAL = 0.3
+VARSEL_PCT = 0.2  # fraktilen af døgnenes laveste margen over gulvet, der regnes som »sædvanlig dårlig dag«
 CONF_MAX_PAUSE = "max_pause"
 CONF_COMFORT_OFFSET = "comfort_offset"
 CONF_BOOST_ENTITY = "boost_entity"

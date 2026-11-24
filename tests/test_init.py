@@ -1149,3 +1149,35 @@ async def test_varsel_event_once_and_when_worse(ha: HomeAssistant) -> None:
     c._varsel(s, plan, now)  # noqa: SLF001
     await ha.async_block_till_done()
     assert len(events) == 3
+
+
+async def test_varsel_only_unusual(ha: HomeAssistant) -> None:
+    """Kun det usædvanlige: et rum, der plejer at dykke (fx 1,2 °C under på en almindelig dårlig dag), giver ingen besked for
+    et sædvanligt dyk – kun når planen forudser mindst 0,3 °C koldere end det. Et rum, der plejer at holde sig over, varsles."""
+    c, s = await _lv_entry(ha)
+    events: list = []
+    ha.bus.async_listen("varmemodel_varsel", lambda e: events.append(e.data))
+    now = time.time()
+    h = int(now // 3600 * 3600)
+    c.air[f"varsel:{s.sid}"] = {"base": {"Værelse": -1.2, "Gang": 0.4}}
+
+    def p(rum: str, temp: float) -> dict:
+        g = 19.5 if rum == "Værelse" else 20.0
+        return {"rum": rum, "ts": h + 7200, "temp": temp, "grænse": g, "under": round(g - temp, 2), "fra_ts": h + 3600, "blokeret": True}
+    c._varsel(s, {"problems": [p("Værelse", 18.5)]}, now)  # noqa: SLF001 – 1,0 under: sædvanligt
+    await ha.async_block_till_done()
+    assert events == []
+    c._varsel(s, {"problems": [p("Værelse", 17.9)]}, now)  # noqa: SLF001 – 1,6 under: usædvanligt
+    await ha.async_block_till_done()
+    assert len(events) == 1 and "normalt ned til 18,3" in events[0]["tekst"]
+    c._varsel(s, {"problems": [p("Værelse", 17.9), p("Gang", 19.7)]}, now)  # noqa: SLF001 – Gang plejer at holde sig over
+    await ha.async_block_till_done()
+    assert len(events) == 2 and events[1]["nye"] == ["Gang"]
+
+
+def test_usual_margin() -> None:
+    """Det sædvanlige: 20 %-fraktilen af døgnenes laveste margen over gulvet; for få døgn eller intet gulv: ukendt."""
+    from custom_components.varmemodel.coordinator import usual_margin
+
+    assert usual_margin([19.0, 18.8, 19.2, 19.4, 18.5, 19.1], 19.5) == -0.7
+    assert usual_margin([19.0, 18.8, 19.2, 19.4], 19.5) is None and usual_margin([19.0] * 6, None) is None

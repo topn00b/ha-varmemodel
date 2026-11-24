@@ -146,7 +146,10 @@ from .const import (
     DHW_AFTER_S,
     EVENT_VARSEL,
     VARSEL_CLEAR,
+    VARSEL_DAYS,
     VARSEL_MIN,
+    VARSEL_PCT,
+    VARSEL_UNUSUAL,
     VARSEL_WORSE,
     START_K_DECAY,
     START_K_MAX,
@@ -1310,11 +1313,14 @@ class VarmemodelCoordinator:
         probs = plan.get("problems") or []
         st = self.air.setdefault(f"varsel:{s.sid}", {})
         known: dict[str, float] = st.setdefault("rum", {})
+        base: dict[str, float] = st.get("base") or {}
         by_room = {x["rum"]: x for x in probs}
         for name in list(known):
             if name not in by_room or by_room[name]["under"] < VARSEL_CLEAR:
                 known.pop(name)
-        cur = {n: x for n, x in by_room.items() if x["under"] >= VARSEL_MIN}
+        # Kun det usædvanlige: forudsagt mindst VARSEL_UNUSUAL °C koldere (over for grænsen) end rummets sædvanlige dårlige dag
+        cur = {n: x for n, x in by_room.items() if x["under"] >= VARSEL_MIN
+               and (base.get(n) is None or x["temp"] - x["grænse"] < base[n] - VARSEL_UNUSUAL)}
         new = [n for n in cur if n not in known]
         worse = [n for n in cur if n in known and cur[n]["under"] >= known[n] + VARSEL_WORSE]
         if not new and not worse:
@@ -1324,7 +1330,8 @@ class VarmemodelCoordinator:
         rows = sorted(cur.values(), key=lambda x: (x["fra_ts"], -x["under"]))
         parts = []
         for x in rows:
-            parts.append(f"{x['rum']} {x['temp']:.1f} °C {_clock(x['ts'])} (grænse {x['grænse']:.1f}"
+            usual = f", normalt ned til {x['grænse'] + base[x['rum']]:.1f}" if base.get(x["rum"]) is not None else ""
+            parts.append(f"{x['rum']} {x['temp']:.1f} °C {_clock(x['ts'])} (grænse {x['grænse']:.1f}{usual}"
                          + (f", under fra {_clock(x['fra_ts'])}" if x["fra_ts"] < x["ts"] else "") + ")")
         last = max(x["ts"] for x in rows) + 3600
         reds = [(a, b) for a, b in self.red_spans if b > now and a < last]
@@ -1345,6 +1352,28 @@ class VarmemodelCoordinator:
                            "grænse": x["grænse"], "under": x["under"], "blokeret": x["blokeret"]} for x in rows],
             "blokeret": [{"fra": _ts_local_iso(a), "til": _ts_local_iso(b)} for a, b in reds],
         })
+
+    def _room_base_sync(self, s: SourceState) -> dict[str, float]:
+        """Det sædvanlige pr. rum: margen over gulvet på en almindelig dårlig dag de seneste VARSEL_DAYS døgn (VARSEL_PCT-
+        fraktilen af døgnenes laveste time, fra langtidsstatistikken) – en dyk, der sker hver uge, er ikke en nyhed."""
+        rooms = [r for r in self.rooms_cfg if self.room_source(r) is s and r["in_plan"] and r.get("key")]
+        if not rooms:
+            return {}
+        end = dt_util.as_utc(dt_util.start_of_local_day())
+        stats = statistics_during_period(self.hass, end - timedelta(days=VARSEL_DAYS), end, {r["key"] for r in rooms}, "hour", None, {"min"})
+        out: dict[str, float] = {}
+        for r in rooms:
+            floor = self._state_num(r["min_entity"]) if r["min_entity"] else _num(r["min"])
+            days: dict[str, float] = {}
+            for row in stats.get(r["key"], []):
+                v, t = _num(row.get("min")), row.get("start")
+                if v is None or t is None:
+                    continue
+                d = dt_util.as_local(dt_util.utc_from_timestamp(t if isinstance(t, (int, float)) else t.timestamp())).date().isoformat()
+                days[d] = min(days.get(d, v), v)
+            if (b := usual_margin(list(days.values()), floor)) is not None:
+                out[r["name"] or r["key"]] = b
+        return out
 
     def _guard_value(self, s: SourceState, hs: dict[str, Any]) -> tuple[float | None, str | None]:
         """Varmemodel bestemmer start og stop – varmepumpens egen termostat skal ikke nå at stoppe kompressoren:
@@ -2859,9 +2888,15 @@ class VarmemodelCoordinator:
             if s.conf.get(CONF_FLOW_TARGET) and (full or self.settings.get(f"{sid}.{FLOW_SWITCH}")):
                 await self._flow_apply(s, p.hours, (bool(cur and cur["blocked"]) or self.live_blocked()))
         self.plans = plans
+        today = dt_util.now().date().isoformat()
         for sid, pl in plans.items():
             if (src := self.sources.get(sid)) is not None:
                 try:
+                    vs = self.air.setdefault(f"varsel:{sid}", {})
+                    if vs.get("base_day") != today:
+                        # Det sædvanlige regnes én gang i døgnet (langtidsstatistik, timernes laveste)
+                        vs["base"] = await get_instance(self.hass).async_add_executor_job(self._room_base_sync, src)
+                        vs["base_day"] = today
                     self._varsel(src, pl, now)
                 except Exception:  # noqa: BLE001 – en besked må aldrig vælte planlægningen
                     _LOGGER.debug("%s: besked forud kunne ikke laves", src.name, exc_info=True)
@@ -2995,6 +3030,15 @@ def start_flow(ret: float | None, k: float, k_default: float, floor: float) -> f
         return None
     v = ret + k
     return float(max(ceil(v - 1e-9) if k > k_default else round(v), floor))
+
+
+def usual_margin(daily_mins: list[float], floor: float | None, pct: float = VARSEL_PCT, min_days: int = 5) -> float | None:
+    """Rummets sædvanlige laveste margen over gulvet: ``pct``-fraktilen af døgnenes laveste temperatur minus gulvet (en
+    almindelig dårlig dag). None uden gulv eller med for få døgn."""
+    if floor is None or len(daily_mins) < min_days:
+        return None
+    vals = sorted(v - floor for v in daily_mins)
+    return round(vals[min(len(vals) - 1, int(len(vals) * pct))], 2)
 
 
 def _next_replan(ts: float, minutes: tuple[int, ...] = (2, 17, 32, 47)) -> float:
