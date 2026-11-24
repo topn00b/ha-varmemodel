@@ -104,6 +104,10 @@ LOW_LEARN_HOLD = 10800  # målet har holdt rummene i 3 timer uden at hæve: lær
 START_PHASE_S = 1200  # et stop inden for så mange sekunder efter kompressorstart er en kort kørsel (opstarten)
 START_K_MAX = 10.0  # højst så meget lært startløft over returen
 START_K_DECAY = 0.25  # en start, der kommer igennem opstarten, sænker det lærte løft så meget (prøver lavere igen)
+# Varmemodel bestemmer start og stop – varmepumpens egen termostat skal ikke nå at stoppe kompressoren (start/stop slider)
+ANTI_STOP_GAP = 2.0  # stopværn: mens kompressoren kører, holdes målet højst så meget under fremløbet (stop ved ca. målet + 4 °C)
+DF_VALVE_S = 120  # et stop så kort efter en afrimning er 4-vejsventilens skift – intet rigtigt stop
+DHW_AFTER_S = 600  # efter varmt vand er kredsen varm og fremløbet ustabilt: intet opstartsløft eller stopværn så længe
 CONF_MAX_PAUSE = "max_pause"
 CONF_COMFORT_OFFSET = "comfort_offset"
 CONF_BOOST_ENTITY = "boost_entity"
