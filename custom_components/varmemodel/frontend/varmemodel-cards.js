@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.20.2';
+  const VERSION = '0.20.3';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -1351,7 +1351,9 @@
         if (vv) g += BOX(265, 10, 245, 100, 'Varmt vand') + TX(327, 56, 'beholder', 'm c') + TX(447, 56, 'laver nu', 'm c') + (p.tank ? P(327, 84, 105, p.tank) : '') + P(447, 84, 110, p.vv);
         g += BOX(10, 125, 500, 235, `${main.name} · ${sc.model || 'varmepumpe'}`);
         g += P(135, 180, 230, p.status) + TX(135, 212, p.plan, 'm c', D.differs ? ` style="fill:${YE};font-weight:700"` : '');
-        g += P(385, 180, 230, p.ud) + P(135, 250, 230, p.cop) + P(385, 250, 230, p.flow) + P(385, 320, 230, p.ind);
+        // Nederste række: varmepumpens egne ind/ud over sine rør (retur til venstre, fremløb til højre),
+        // lodret over følerne D og A, så de to målinger af samme rør står over for hinanden
+        g += P(385, 180, 230, p.cop) + P(260, 250, 230, p.flow) + P(135, 320, 230, p.ind) + P(385, 320, 230, p.ud);
         const bp = !!c.bypass, bf = !!c.buffer;
         g += PATH('M440 360 V776', 'hot', true) + PATH('M80 780 V364', 'cold', true);
         if (bp) {
@@ -1360,11 +1362,11 @@
         }
         if (p.pump) g += '<rect x="370" y="500" width="140" height="70" rx="35" class="comp"/>' + TX(450, 530, sc.pump_name || 'Pumpe', 'ttl') + P(440, 554, 112, p.pump, 24);
         if (bf) g += '<rect x="10" y="520" width="140" height="80" rx="8" class="comp"/>' + TX(80, 556, sc.buffer_name || 'Buffer', 'ttl') + TX(80, 578, 'i returen', 'm c');
-        if (p.a) g += SEN(440, 405, 'A') + TX(320, 381, 'VP ud', 'm c') + P(330, 405, 100, p.a);
-        if (p.b) g += SEN(440, 715, 'B') + TX(320, 691, 'manifold ind', 'm c') + P(330, 715, 100, p.b);
-        // ud for fremløbets følere (A/B), spejlet om midten, så ind og ud står over for hinanden
-        if (p.d) g += SEN(80, 405, 'D') + TX(190, 381, 'VP ind', 'm c') + P(190, 405, 100, p.d);
-        if (p.c) g += SEN(80, 715, 'C') + TX(190, 691, 'manifold retur', 'm c') + P(190, 715, 100, p.c);
+        // Følerne i samme søjler som varmepumpens ind (x 135) og ud (x 385); smalle, så de går fri af cirklerne på rørene
+        if (p.a) g += SEN(440, 405, 'A') + TX(385, 381, 'VP ud', 'm c') + P(385, 405, 74, p.a);
+        if (p.b) g += SEN(440, 715, 'B') + TX(385, 691, 'manifold ind', 'm c') + P(385, 715, 74, p.b);
+        if (p.d) g += SEN(80, 405, 'D') + TX(135, 381, 'VP ind', 'm c') + P(135, 405, 74, p.d);
+        if (p.c) g += SEN(80, 715, 'C') + TX(135, 691, 'manifold retur', 'm c') + P(135, 715, 74, p.c);
         g += BOX(10, 780, 500, 120, `${sc.manifold_name || 'Manifold'} · gulvvarme`);
         g += P(95, 846, 160, p.dthus) + P(260, 846, 150, p.ab) + P(425, 846, 150, p.dc);
         if (p.ab || p.dc) g += TX(260, 886, p.balTxt, 'm c', D.bal ? ` style="fill:${GR};font-weight:700"` : '');
