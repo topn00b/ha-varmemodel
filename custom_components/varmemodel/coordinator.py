@@ -60,7 +60,7 @@ from .air_control import (
     learn_w,
     preload_per_room,
 )
-from .command import Command, step
+from .command import FLOW_HOLD, MIN_GAP, Command, step
 from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices
 from .planner import FLOW_LOW_OPEN_S, FLOW_MAX as FLOW_MAX_C, PlanHour, PlanRoom, SourceModel, estimate_room, flow_boost_step, make_air_plan, make_plan, simulate_rooms
 from .const import (
@@ -2031,6 +2031,16 @@ class VarmemodelCoordinator:
         elif g and g.get("grund") == "stopværn":
             text = (f"Stopværn: {f(g['mål'])} °C (søgningens {f(low)} °C) – fremløbet nærmer sig varmepumpens stopgrænse (målet + ca. "
                     f"4 °C); målet følger med, så kompressoren kører videre i stedet for at stoppe og starte. ") + text
+        # Målet, der står i varmepumpen nu, og hvornår det ønskede når frem: planens fremløb (fx forvarmning) ændres højst hvert
+        # kvarter (kommandoens hold) ved næste planlægning; opstartsløft og stopværn skrives straks
+        lg = self._target_now(s)
+        want_now = eff if eff is not None else (low if low is not None else cap)
+        when_txt = None
+        if not off and lg is not None and want_now is not None and abs(float(want_now) - lg) >= 1:
+            c = self.commands.get(s.sid) or {}
+            t_ok = now if (g and g.get("mål") is not None and g["mål"] >= float(want_now)) else max(
+                now, float(c.get("since_flow") or 0) + FLOW_HOLD, float(c.get("last_change") or 0) + MIN_GAP)
+            when_txt = dt_util.as_local(dt_util.utc_from_timestamp(_next_replan(t_ok))).strftime("%H:%M")
         return {
             "aktiv": low is not None and bool(hs.get("start_t")) and not off,
             "slukket": off, "mål": low if low is not None else cap, "loft": hs.get("low_loft"), "forvarmer": k or None, "mål_nu": eff,
@@ -2038,7 +2048,7 @@ class VarmemodelCoordinator:
             "tekst": _dk_txt(text), "grund": _dk_txt(hs.get("low_why") or ""), "næste_ændring": _ts_local_iso(nxt) if nxt_txt else None,
             "bestemmer": bind["navn"] if bind and not off else None, "kompressorstop": hs.get("low_stops") or 0,
             "startløft": round(sk, 1), "korte_kørsler": hs.get("start_short") or 0, "værn": g or None,
-            "sidste_korte": hs.get("short_last"),
+            "sidste_korte": hs.get("short_last"), "mål_vp": lg, "mål_kl": when_txt,
             "næste_start": dt_util.as_local(dt_util.utc_from_timestamp(start_at)).strftime("%H:%M") if off and start_at else None,
             "rum": [{k: x.get(k) for k in ("navn", "t", "gulv", "margen", "tendens", "om_3t")} for x in rooms],
             "lært": hs.get("low_learned") or {}, "log": (hs.get("low_log") or [])[-48:],
@@ -2931,6 +2941,17 @@ def start_flow(ret: float | None, k: float, k_default: float, floor: float) -> f
         return None
     v = ret + k
     return float(max(ceil(v - 1e-9) if k > k_default else round(v), floor))
+
+
+def _next_replan(ts: float, minutes: tuple[int, ...] = (2, 17, 32, 47)) -> float:
+    """Første planlægning (minut 2, 17, 32 eller 47) på eller efter ``ts``."""
+    d = dt_util.as_local(dt_util.utc_from_timestamp(ts)).replace(second=0, microsecond=0)
+    for h in (0, 1, 2):
+        for m in minutes:
+            c = d.replace(minute=m) + timedelta(hours=h)
+            if c.timestamp() >= ts:
+                return c.timestamp()
+    return ts
 
 
 def _k_txt(k: float) -> str:

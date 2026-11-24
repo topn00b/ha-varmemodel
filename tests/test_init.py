@@ -1054,6 +1054,7 @@ async def test_guard_start_lift_and_anti_stop(ha: HomeAssistant) -> None:
     assert calls[-1] == 27.0 and hs["guard"] == {"mål": 27.0, "grund": "opstart"}
     v = c.flow_search(s)
     assert v["mål_nu"] == 27.0 and v["mål"] == 24.0 and v["tekst"].startswith("Opstartsløft: 27 °C (søgningens 24 °C)")
+    assert v["mål_vp"] == 24.0 and v["mål_kl"] is not None  # varmepumpen står endnu på 24 (testens service ændrer ikke tilstanden)
     hs["low_loft"] = 26.0
     ha.states.async_set("climate.vp_flow", "heat", {"temperature": 27, "min_temp": 20, "max_temp": 45})
     await c._flow_apply(s, [{"flow": 30.0, "blocked": False}], False)
@@ -1072,6 +1073,18 @@ async def test_guard_start_lift_and_anti_stop(ha: HomeAssistant) -> None:
     ha.states.async_set("climate.vp_flow", "heat", {"temperature": 24, "min_temp": 20, "max_temp": 45})
     await c._flow_refresh(s.sid)
     assert calls[-1] == 27.0 and s.sid not in c._refresh_pending  # noqa: SLF001
+
+
+def test_next_replan() -> None:
+    """Næste planlægning (minut 2, 17, 32, 47) på eller efter et tidspunkt – til »→ 35 °C kl. 13:47«."""
+    from datetime import datetime
+
+    from custom_components.varmemodel.coordinator import _next_replan
+
+    loc = dt_util.get_default_time_zone()
+    t = lambda h, m, sec=0: datetime(2026, 11, 24, h, m, sec, tzinfo=loc).timestamp()  # noqa: E731
+    assert _next_replan(t(13, 33, 10)) == t(13, 47) and _next_replan(t(13, 47)) == t(13, 47)
+    assert _next_replan(t(13, 50)) == t(14, 2) and _next_replan(t(23, 48)) == datetime(2026, 11, 25, 0, 2, tzinfo=loc).timestamp()
 
 
 def test_quarter_block_counts() -> None:

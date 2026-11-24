@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.18.0';
+  const VERSION = '0.18.1';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -995,8 +995,9 @@
         }
         if (p.pump) g += '<rect x="560" y="220" width="160" height="80" rx="40" class="comp"/>' + TX(640, 252, sc.pump_name || 'Pumpe', 'ttl') + P(640, 280, 136, p.pump, 28);
         if (bf) g += '<rect x="580" y="430" width="180" height="80" rx="8" class="comp"/>' + TX(670, 464, sc.buffer_name || 'Buffer', 'ttl') + TX(670, 486, 'i returen', 'm c');
-        if (p.a) g += SEN(360, 260, 'A') + TX(360, 188, 'VP ud', 'm c') + P(360, 214, 96, p.a);
-        if (p.b) g += SEN(810, 260, 'B') + TX(810, 188, 'manifold ind', 'm c') + P(810, 214, 96, p.b);
+        // lodret over returens følere (D/C), så ud og ind står over for hinanden
+        if (p.a) g += SEN(380, 260, 'A') + TX(380, 188, 'VP ud', 'm c') + P(380, 214, 96, p.a);
+        if (p.b) g += SEN(840, 260, 'B') + TX(840, 188, 'manifold ind', 'm c') + P(840, 214, 96, p.b);
         if (p.d) g += SEN(380, 470, 'D') + P(380, 516, 96, p.d) + TX(380, 550, 'VP ind', 'm c');
         if (p.c) g += SEN(840, 470, 'C') + P(840, 516, 96, p.c) + TX(840, 550, 'manifold retur', 'm c');
         g += BOX(930, 140, 170, 420, sc.manifold_name || 'Manifold', 'gulvvarme');
@@ -1303,7 +1304,12 @@
       const ud = sv(h, f.flow_temp), ind = sv(h, f.return_temp);
       const n3 = (lbl, v, sub) => `<div class="fsc"><div class="mut sm">${lbl}</div><div class="fsv">${v}</div>${sub ? `<div class="mut sm">${sub}</div>` : ''}</div>`;
       const værn = fs.værn && !fs.slukket ? `${fs.værn.grund === 'opstart' ? 'opstartsløft' : 'stopværn'} (søgning ${fmt(fs.mål, 0)})` : null;
-      const nums = `<div class="fsr">${n3('Mål i varmepumpen', `${fmt(fs.mål_nu ?? fs.mål, 0)} °C`, fs.slukket ? 'ved næste start' : værn || (fs.forvarmer ? `forvarmer +${fmt(fs.forvarmer, 0)} °C (søgning ${fmt(fs.mål, 0)})` : 'søger laveste'))}`
+      // Målet, der faktisk står i varmepumpen; venter et nyt (fx forvarmning, der højst ændres hvert kvarter): »→ 35 °C kl. 13:47«
+      const want = fs.mål_nu ?? fs.mål, inVp = fs.mål_vp;
+      const why = værn || (fs.forvarmer ? `forvarmer +${fmt(fs.forvarmer, 0)} °C (søgning ${fmt(fs.mål, 0)})` : 'søger laveste');
+      const pend = !fs.slukket && inVp != null && want != null && Math.abs(want - inVp) >= 1;
+      const nums = `<div class="fsr">${n3('Mål i varmepumpen', `${fmt(fs.slukket || inVp == null ? want : inVp, 0)} °C`,
+        fs.slukket ? 'ved næste start' : pend ? `→ ${fmt(want, 0)} °C${fs.mål_kl ? ` kl. ${fs.mål_kl}` : ''} · ${why}` : why)}`
         + `${n3('Målt ud / ind', `${fmt(ud, 1)} / ${fmt(ind, 1)} °C`, ud !== null && ind !== null ? `ΔT ${fmt(ud - ind, 1)} K` : '')}`
         + `${n3('Loft', `${fmt(fs.loft, 0)} °C`, fs.mål != null && fs.loft != null && fs.loft > fs.mål ? `${fmt(fs.loft - fs.mål, 0)} °C over målet` : 'det lærte fremløb + margen')}</div>`;
       const lært = Object.entries(fs.lært || {}).sort((a, b) => +a[0] - +b[0]).map(([k, v]) => `<tr><td>${String(+k).replace('-', '−')}…${String(+k + 5).replace('-', '−')} °C ude</td><td class="n"><b>${fmt(v, 0)} °C</b></td></tr>`).join('');
@@ -1355,8 +1361,9 @@
         if (bf) g += '<rect x="10" y="520" width="140" height="80" rx="8" class="comp"/>' + TX(80, 556, sc.buffer_name || 'Buffer', 'ttl') + TX(80, 578, 'i returen', 'm c');
         if (p.a) g += SEN(440, 405, 'A') + TX(320, 381, 'VP ud', 'm c') + P(330, 405, 100, p.a);
         if (p.b) g += SEN(440, 715, 'B') + TX(320, 691, 'manifold ind', 'm c') + P(330, 715, 100, p.b);
-        if (p.d) g += SEN(80, 420, 'D') + TX(195, 396, 'VP ind', 'm c') + P(185, 420, 100, p.d);
-        if (p.c) g += SEN(80, 720, 'C') + TX(195, 696, 'manifold retur', 'm c') + P(185, 720, 100, p.c);
+        // ud for fremløbets følere (A/B), spejlet om midten, så ind og ud står over for hinanden
+        if (p.d) g += SEN(80, 405, 'D') + TX(190, 381, 'VP ind', 'm c') + P(190, 405, 100, p.d);
+        if (p.c) g += SEN(80, 715, 'C') + TX(190, 691, 'manifold retur', 'm c') + P(190, 715, 100, p.c);
         g += BOX(10, 780, 500, 120, `${sc.manifold_name || 'Manifold'} · gulvvarme`);
         g += P(95, 846, 160, p.dthus) + P(260, 846, 150, p.ab) + P(425, 846, 150, p.dc);
         if (p.ab || p.dc) g += TX(260, 886, p.balTxt, 'm c', D.bal ? ` style="fill:${GR};font-weight:700"` : '');
