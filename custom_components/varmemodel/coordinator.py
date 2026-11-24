@@ -256,6 +256,7 @@ class VarmemodelCoordinator:
         self._started = time.time()
         self.device_ids: dict[str | None, str] = {}  # underpunkt (None = huset) -> enheds-id i HA
         self._listeners: list[Callable[[], None]] = []
+        self._stopped = False  # sat ved afmelding/genindlæsning: denne instans styrer og gemmer ikke mere
         self._unsubs: list[CALLBACK_TYPE] = []
         self._replan_lock = asyncio.Lock()
         self._air_rise: dict[str, dict[str, float]] = {}  # luft-luft: rummenes målte stigning (°C/t) seneste 30 min.  # én planlægning ad gangen (planlagt og »blokering lige nu«)
@@ -380,11 +381,14 @@ class VarmemodelCoordinator:
         return new
 
     async def async_stop(self) -> None:
+        # Først flaget: en planlægning, der stadig kører i denne instans, må ikke tænde/slukke eller skrive bagefter
+        # (24/11: en gammel instans tændte luft-vand efter en genindlæsning, mens den nye var slået fra)
+        self._stopped = True
         for u in self._unsubs:
             u()
         self._unsubs.clear()
         self._sync_issues({})
-        await self._save()
+        await self._save(force=True)
 
     def _data(self) -> dict[str, Any]:
         return {"collected": self.collected, "sources": {sid: s.as_store() for sid, s in self.sources.items()},
@@ -394,7 +398,9 @@ class VarmemodelCoordinator:
                 "commands": self.commands, "plan_stats": self.plan_stats, "last_known": self.last_known, "air": self.air,
                 "plant_week": self.plant_week}
 
-    async def _save(self) -> None:
+    async def _save(self, force: bool = False) -> None:
+        if self._stopped and not force:
+            return
         await self.store.async_save(self._data())
 
     @callback
@@ -1392,7 +1398,12 @@ class VarmemodelCoordinator:
                 # gulvet (så tager det 30–60 min. længere). Kun »Jeg fryser« bruger øverste trin.
                 # Rolig opstart: start højst midt på stigen, hold hvert trin 30 min., og gå kun op, hvis det kolde rum
                 # ikke stiger mindst AIR_SOFT_MIN_RISE °C/t (målt) – så prøves et trin af, før der skrues op
-                mid = max(1, round((len(ladder) - 1) * AIR_SOFT_SHARE))
+                # Lært virkning pr. trin (kW el, °C pr. kWh el) til planen; med mindst tre lærte trin vælger planen selv
+                # lavere trin og flere timer, og den faste midte bruges ikke
+                a["eff_curve"] = sorted({(round(lw[k] / 1000, 3), round(le[k], 4)) for k in range(min(len(lw), len(le)))
+                                         if lw[k] and le[k]})
+                learned = len(a["eff_curve"]) >= 3
+                mid = len(ladder) - 1 if learned else max(1, round((len(ladder) - 1) * AIR_SOFT_SHARE))
                 if tgt is not None:
                     tgt = min(tgt, mid)
                 # Bund: under gulvet køres aldrig under planens trin (dets forbrug dækker planens varme) – lavere trin kan ikke
@@ -1512,6 +1523,8 @@ class VarmemodelCoordinator:
         styres stadig andetsteds). Kun når varmepumpen står i varme-tilstand, aldrig i blokerede timer, kun ved en
         ændring på mindst 1 °C og højst FLOW_MAX_WRITES gange pr. døgn. Uden planlagt varme nu bruges næste planlagte
         fremløb, så en varmepumpe, der startes af anden styring, kører med planens lave fremløb."""
+        if self._stopped:
+            return
         eid = s.conf.get(CONF_FLOW_TARGET)
         st = self.hass.states.get(eid) if eid else None
         if st is None or st.state in ("unavailable", "unknown") or blocked:
@@ -1569,12 +1582,15 @@ class VarmemodelCoordinator:
                 await self.hass.services.async_call(dom, "set_value", {"entity_id": eid, "value": want}, blocking=True)
             f["writes"] += 1
             f["last"] = {"t": time.time(), "flow": want}
+            self._notify()  # »seneste« på kontakten med det samme – ellers ser vagten et nyt mål mod en gammel skrivning
         except Exception:  # noqa: BLE001
             _LOGGER.exception("%s: kunne ikke skrive fremløbet", s.name)
 
     async def _hydro_apply(self, s: SourceState, want_on: bool, blocked: bool, hours: list[dict[str, Any]]) -> None:
         """Tænd (varme) og sluk den vandbårne varmepumpe efter den anbefalede styring (mindst 60 min. tændt, 30 min. slukket,
         højst én ændring pr. 15 min. – reglerne i command.py). Blokeret: sluk straks. Højst HYDRO_MAX_FLIPS skift pr. døgn."""
+        if self._stopped:
+            return
         eid = s.conf.get(CONF_ONOFF_TARGET)
         st = self.hass.states.get(eid) if eid else None
         if st is None or st.state in ("unavailable", "unknown"):
@@ -1611,6 +1627,7 @@ class VarmemodelCoordinator:
                                                 blocking=True)
             h["flips"] += 1
             h["last"] = {"t": time.time(), "on": want_on}
+            self._notify()
             if want_on:
                 if mode == "test":
                     h["last_soft"] = soft
@@ -1947,6 +1964,8 @@ class VarmemodelCoordinator:
 
     async def _air_apply(self, s: SourceState, clim: str, d: dict[str, Any]) -> None:
         """Skriv anbefalingen til klimaentiteten – kun det, der er forskelligt, og højst 60 skrivninger pr. døgn."""
+        if self._stopped:
+            return
         st = self.hass.states.get(clim)
         if st is None or st.state in ("unavailable", "unknown"):
             return
@@ -2050,8 +2069,11 @@ class VarmemodelCoordinator:
             e_min, e_max = 0.3, 1.0
         # Rolig opstart: planen må højst regne med loft-trinnets lærte forbrug pr. time (så den lægger flere timer med
         # lavere effekt i stedet for at regne med de øverste trin – og forudsigelserne passer med det, stigen kører)
-        cap_w = (self.air.get(s.sid) or {}).get("soft_cap_w")
-        if self.air_setting(s, "air_start") == "rolig" and cap_w:
+        ast = self.air.get(s.sid) or {}
+        curve = [tuple(x) for x in (ast.get("eff_curve") or [])]
+        cap_w = ast.get("soft_cap_w")
+        if self.air_setting(s, "air_start") == "rolig" and cap_w and len(curve) < 3:
+            # Nødløsning, indtil stigens virkning pr. trin er lært: planen regner med højst midterste trin
             e_max = max(e_min + 0.05, min(e_max, cap_w / 1000))
         try:
             rq, _ = await get_instance(self.hass).async_add_executor_job(self._recent_sync, s, h0 - 12 * 3600, h0)
@@ -2061,7 +2083,7 @@ class VarmemodelCoordinator:
         p = await self.hass.async_add_executor_job(
             partial(make_air_plan, hours, show, e_min, e_max, past_q=past, label=_clock,
                     comfort=self.setting(CONF_COMFORT_OFFSET), red_allowance=self.setting(CONF_RED_ALLOWANCE),
-                    economy=self.setting(CONF_ECONOMY)))
+                    economy=self.setting(CONF_ECONOMY), eff_curve=curve if len(curve) >= 3 else None))
         if (eco := self.setting(CONF_ECONOMY)) > 0:
             p.reason += f" – økonomi: rummene må gå {eco:.2f} °C under gulvet"
         plan = {"kind": "air_air", "hours": p.hours, "rooms": p.rooms, "rooms_planned": [r.name for r in show if r.t_min > -50],
@@ -2112,6 +2134,8 @@ class VarmemodelCoordinator:
 
     async def async_replan(self) -> None:
         """Ny plan for hver vandbåren varmekilde ud fra priser, røde timer, vejrudsigt og rummene."""
+        if self._stopped:
+            return
         missing: list[str] = []
         now = time.time()
         h0 = int(now // 3600 * 3600)

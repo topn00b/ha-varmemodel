@@ -386,3 +386,17 @@ def test_economy_knob_buys_less_heat_at_lower_flow() -> None:
     eco = make_plan(hs, M, [room], 19.5, economy=0.5)
     assert eco.heat_kwh < base.heat_kwh
     assert max(x["flow"] or 0 for x in eco.hours) <= max(x["flow"] or 0 for x in base.hours)
+
+
+def test_air_plan_spreads_when_high_steps_are_less_efficient() -> None:
+    """Med lært virkning pr. trin (høje trin giver mindre varme pr. kWh el) spreder planen varmen over flere timer på
+    lave trin i stedet for at køre de højeste trin i de billigste timer – og bruger mindre el."""
+    from custom_components.varmemodel.planner import make_air_plan
+
+    hs = hours(n=12, price=lambda i: 1.0 + 0.02 * i, t_out=lambda i: 5.0)
+    base = make_air_plan(hs, [_air_room(t_now=19.5, t_min=19.5, cool=0.02)], e_min=0.3, e_max=1.5)
+    spread = make_air_plan(hs, [_air_room(t_now=19.5, t_min=19.5, cool=0.02)], e_min=0.3, e_max=1.5,
+                           eff_curve=[(0.3, 2.0), (0.8, 1.6), (1.5, 0.7)])
+    assert max(x["el_kw"] for x in spread.hours) < max(x["el_kw"] for x in base.hours)
+    assert sum(1 for x in spread.hours if x["el_kw"] > 0) > sum(1 for x in base.hours if x["el_kw"] > 0)
+    assert spread.el_kwh < base.el_kwh

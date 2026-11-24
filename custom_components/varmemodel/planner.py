@@ -412,8 +412,14 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
 
 def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0.3, e_max: float = 1.0,
                   past_q: list[float] | None = None, label: Callable[[int], str] | None = None,
-                  preload: float = 0.0, comfort: float = 0.0, red_allowance: float = 0.0, economy: float = 0.0) -> Plan:
+                  preload: float = 0.0, comfort: float = 0.0, red_allowance: float = 0.0, economy: float = 0.0,
+                  eff_curve: list[tuple[float, float]] | None = None) -> Plan:
     """Plan for en luft-luft-varmepumpe i kWh el pr. time (rummodellerne lærer grader pr. kWh el).
+
+    ``eff_curve``: stigens lærte virkning [(kW el, °C pr. kWh el)] pr. trin. Med mindst tre punkter regner planen med, at
+    de høje trin giver mindre varme pr. kWh el: rummene får el × virkning (i forhold til virkningen midt i området), og en
+    portion lægges i den time, hvor den giver mest varme pr. krone – så spredes varmen over flere timer på lavere trin,
+    når det kan betale sig (lært, ikke en fast regel).
 
     Varmen måles ikke, så der er intet husbehov at fordele. Planen varmer kun så meget, at rummene holder
     gulv + komfort + usikkerhed (+ forvarmning i blokerede timer), i de billigste frie timer før behovet
@@ -435,6 +441,26 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
     free = [i for i, h in enumerate(hours) if not h.blocked]
     planned = [r for r in rooms if r.t_min > -50]
     capped = [r for r in rooms if r.t_max is not None]
+    pts = sorted((float(k), float(e)) for k, e in (eff_curve or []) if k and e and k > 0 and e > 0)
+    use_eff = len(pts) >= 3
+
+    def eff(x: float) -> float:
+        """Lært virkning (°C pr. kWh el) ved x kW el – lineært mellem trinene, fladt udenfor."""
+        if x <= pts[0][0]:
+            return pts[0][1]
+        for (k0, e0), (k1, e1) in zip(pts, pts[1:]):
+            if x <= k1:
+                return e0 + (e1 - e0) * (x - k0) / (k1 - k0) if k1 > k0 else e1
+        return pts[-1][1]
+
+    e_ref = eff((e_min + e_max) / 2) if use_eff else 1.0
+
+    def qe(x: float) -> float:
+        """El omsat til rummenes enhed: el × virkning i forhold til virkningen midt i området."""
+        return x * eff(x) / e_ref if use_eff and x > 0 else x
+
+    def sim_q() -> dict[str, list[float]]:
+        return simulate_rooms(rooms, hours, [qe(x) for x in q], past_q)
 
     def need(r: PlanRoom, i: int) -> float:
         # Brugerens valg: i blokerede (røde) timer må rummet gå op til ``red_allowance`` under gulvet for at spare
@@ -449,7 +475,16 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
 
     skip: set[tuple[str, int]] = set()
     full: set[int] = set()
-    sim = simulate_rooms(rooms, hours, q, past_q)
+    sim = sim_q()
+
+    def mcost(j: int) -> float:
+        """Pris pr. varmeenhed for den næste portion i time j (uden lært virkning: bare prisen)."""
+        if not use_eff:
+            return hours[j].price
+        a = e_min if q[j] == 0 else min(AIR_STEP, e_max - q[j])
+        gain = (qe(q[j] + a) - qe(q[j])) / a if a > 0 else 0.0
+        return hours[j].price / max(gain, 0.05)
+
     for _ in range(800):
         worst: tuple[int, PlanRoom] | None = None
         for r in planned:
@@ -462,12 +497,12 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
             break
         i_bad, r = worst
         # Billigste frie time før behovet; ved samme pris den seneste (stabil sortering af en omvendt liste)
-        cands = sorted((j for j in reversed(free) if j <= i_bad and j not in full and q[j] < e_max - 1e-9), key=lambda j: hours[j].price)
+        cands = sorted((j for j in reversed(free) if j <= i_bad and j not in full and q[j] < e_max - 1e-9), key=mcost)
         added = False
         for j in cands:
             a = e_min if q[j] == 0 else min(AIR_STEP, e_max - q[j])
             q[j] += a
-            sim2 = simulate_rooms(rooms, hours, q, past_q)
+            sim2 = sim_q()
             if capped and new_over_cap(sim2, sim):
                 q[j] -= a
                 full.add(j)
