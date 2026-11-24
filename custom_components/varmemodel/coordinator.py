@@ -1984,19 +1984,22 @@ class VarmemodelCoordinator:
 
     def _air_eff_backfill_sync(self, clim: str, peid: str, rooms: list[dict[str, Any]], sp_min: float, out_eid: str | None,
                                vent: str | None, vent_speed: str | None, df: str | None, start: float, end: float,
-                               skip: list[tuple[float, float]]) -> tuple[dict[str, list[float]], dict[str, Any]]:
+                               skip: list[tuple[float, float]], ctl: str | None = None,
+                               fans: list[str] | None = None) -> tuple[dict[str, list[float]], dict[str, Any]]:
         """Virkning pr. trin (°C pr. kWh el) fra historikken – samme beregning som den løbende læring: kvarterer, hvor
         trinnet har kørt mindst EFF_HOLD, rummenes stigning ud over afkøling, gratis varme og naborum pr. kWh el.
         Stramme filtre, så der ikke læres forkert: varmepumpen varmer (> 100 W), ingen afrimning (fra 10 min. før til
         15 min. efter), ingen udluftning (et rum falder > AIR_EFF_AIRING_DROP på et kvarter), ventilationen skifter ikke,
         perioder med »ignorer« i kalenderen springes over, og målinger, der stikker voldsomt ud for samme rum og trin,
-        kasseres (median ± 3 × MAD). Giver (virkning, oversigt)."""
+        kasseres (median ± 3 × MAD). Kun kvarterer, hvor stigen selv styrede (``ctl``: »Varmemodel styrer« til) og
+        blæseren stod på et af stigens trin (``fans``; fx ikke »Auto«) – data fra en anden styring er ikke stigens trin.
+        Giver (virkning, oversigt)."""
         import bisect
         from statistics import median as _med
 
         utc = dt_util.utc_from_timestamp
         ents = list(dict.fromkeys([clim] + [m["e"] for m in rooms] + [n for m in rooms for _, n in m["nb"]]
-                                  + [x for x in (out_eid, vent, vent_speed, df) if x]))
+                                  + [x for x in (out_eid, vent, vent_speed, df, ctl) if x]))
         res = history.get_significant_states(self.hass, utc(start), utc(end), ents, include_start_time_state=True,
                                              significant_changes_only=False)
         ser = {e: [(z.last_updated.timestamp(), z) for z in res.get(e, [])] for e in ents}
@@ -2018,8 +2021,10 @@ class VarmemodelCoordinator:
             atr = z.attributes or {}
             sp = _num(atr.get("temperature"))
             lab = None
-            if z.state == "heat" and sp is not None and sp >= sp_min - 1e-6:
-                lab = f"{'quiet' if atr.get('preset_mode') == 'quiet' else atr.get('fan_mode')} +{sp - sp_min:.1f}"
+            name = "quiet" if atr.get("preset_mode") == "quiet" else atr.get("fan_mode")
+            if (z.state == "heat" and sp is not None and sp >= sp_min - 1e-6
+                    and (fans is None or name == "quiet" or name in fans)):
+                lab = f"{name} +{sp - sp_min:.1f}"
             if not changes or changes[-1][1] != lab:
                 changes.append((t, lab))
         cht = [t for t, _ in changes]
@@ -2044,7 +2049,7 @@ class VarmemodelCoordinator:
         st = statistics_during_period(self.hass, utc(start), utc(end), {peid}, "5minute", None, {"mean"})
         pw = {int(_ts(x["start"])): _num(x.get("mean")) for x in st.get(peid, [])}
         segs: list[dict[str, Any]] = []
-        stat = {"kvarterer": 0, "afrimning": 0, "udluftning": 0, "ventilation": 0, "ignoreret": 0, "for_kort": 0}
+        stat = {"kvarterer": 0, "afrimning": 0, "udluftning": 0, "ventilation": 0, "ignoreret": 0, "for_kort": 0, "anden_styring": 0}
         t = float(int(start // 900 * 900) + 3600)
         while t + 900 <= end:
             lab, since = step(t)
@@ -2053,7 +2058,10 @@ class VarmemodelCoordinator:
                 t += 900
                 continue
             stat["kvarterer"] += 1
-            if t - since < EFF_HOLD:
+            c0, c1 = (at(ctl, t), at(ctl, t + 899)) if ctl else (None, None)
+            if ctl and not (c0 is not None and c1 is not None and c0.state == "on" and c1.state == "on"):
+                stat["anden_styring"] += 1
+            elif t - since < EFF_HOLD:
                 stat["for_kort"] += 1
             elif any(a <= t + 900 and b >= t for a, b in skip):
                 stat["ignoreret"] += 1
@@ -2123,10 +2131,16 @@ class VarmemodelCoordinator:
             now = time.time()
             start = now - AIR_EFF_BACKFILL_DAYS * 86400
             skip = await self._learn_skip_windows(start, now)
+            # Kun stigens egne kvarterer: »Varmemodel styrer« for kilden til, og blæseren på et af stigens trin
+            from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+            uid = f"{self.entry.entry_id}_{AIR_SWITCH}" if src.legacy_ids else f"{self.entry.entry_id}_{src.sid}_{AIR_SWITCH}"
+            ctl = er.async_get(self.hass).async_get_entity_id("switch", DOMAIN, uid)
+            fans = fan_options(atr.get("fan_modes")) or None
             try:
                 eff, stat = await get_instance(self.hass).async_add_executor_job(
                     self._air_eff_backfill_sync, clim, peid, rooms, sp_min, self._id(CONF_OUTDOOR), src.conf.get(CONF_ASSIST),
-                    src.conf.get(CONF_ASSIST_SPEED), src.eid(CONF_DEFROST), start, now, skip)
+                    src.conf.get(CONF_ASSIST_SPEED), src.eid(CONF_DEFROST), start, now, skip, ctl, fans)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("%s: virkning pr. trin kunne ikke læres fra historikken", src.name)
                 a["bf_eff"] = AIR_EFF_BF_VERSION
