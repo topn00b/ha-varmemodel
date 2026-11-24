@@ -1159,7 +1159,7 @@ class VarmemodelCoordinator:
             q = lambda h: max(h.q or 0.0, 0.0)  # noqa: E731
             e = lambda h: max(h.e or 0.0, 0.0)  # noqa: E731
             out[sid] = {
-                "dato": day, "timer_med_plan": len(known), "timer": len(hrs),
+                "dato": day, "timer_med_plan": len(known), "timer_i_alt": len(hrs),  # »timer« er listen nedenfor (før overskrev den antallet)
                 "plan_varme_kwh": round(sum(x["p"] for _, x in known), 1),
                 "plan_el_kwh": round(sum(x.get("e", 0.0) for _, x in known), 1),
                 "plan_kr": round(sum(x.get("e", 0.0) * x["pr"] for _, x in known), 1),
@@ -2821,11 +2821,11 @@ class VarmemodelCoordinator:
         if clim:
             try:
                 peid = s.conf.get(CONF_EL_POWER)
-                p_w = await self.hass.async_add_executor_job(self._power_mean_sync, peid, now - 900, now) if peid else None
+                p_w = await get_instance(self.hass).async_add_executor_job(self._power_mean_sync, peid, now - 900, now) if peid else None
                 a = self.air.setdefault(s.sid, {})
                 if peid and not a.get("bf"):
                     # Første gang: forbrug pr. trin fra de seneste døgns historik (det, varmepumpen faktisk har kørt)
-                    bf = await self.hass.async_add_executor_job(self._air_backfill_sync, clim, peid, now - 3 * 86400, now)
+                    bf = await get_instance(self.hass).async_add_executor_job(self._air_backfill_sync, clim, peid, now - 3 * 86400, now)
                     a["w"] = {**{k: round(median(v)) for k, v in bf.items() if len(v) >= 3}, **(a.get("w") or {})}
                     a["bf"] = True
                 if peid and a.get("bf_eff") != AIR_EFF_BF_VERSION:

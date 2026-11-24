@@ -236,6 +236,8 @@ Til planlægning bruges COP-formlen fra *COP i stabil drift*, men højere effekt
 
 ## Kort til dashboardet
 
+**Opdatering af kortene (0.22.2):** efter en opdatering kører en åben browser eller app stadig de gamle kort, til siden genindlæses. Kortene tjekker selv integrationens version og viser så en linje øverst: »Kortene er opdateret til … – tryk her for at genindlæse«. Kortene tegnes kun om, når indholdet har ændret sig, og brede tabeller beholder deres rulleposition.
+
 Integrationen leverer seks kort, som selv finder Varmemodels entiteter (Hus → varmekilde → rum). Tilføj dem med *Tilføj kort* eller i YAML:
 
 | Kort | Viser |

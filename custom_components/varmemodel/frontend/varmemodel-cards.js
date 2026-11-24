@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.22.1';
+  const VERSION = '0.22.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -155,6 +155,7 @@
   .v{cursor:pointer;white-space:nowrap}.v:hover{text-decoration:underline dotted}
   .v.usikker{opacity:.5}.v.mangler{color:var(--secondary-text-color)}
   .wrap{overflow-x:auto}
+  .upd{background:var(--warning-color,#f5a623);color:#000;border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:14px;cursor:pointer}
   table{border-collapse:collapse;width:100%;font-size:14px}
   th{font-weight:500;color:var(--secondary-text-color);text-align:left;padding:4px 6px;border-bottom:1px solid var(--divider-color);white-space:nowrap}
   td{padding:6px;border-bottom:1px solid var(--divider-color);vertical-align:top;white-space:nowrap}
@@ -169,6 +170,18 @@
   `;
   const LEG = '<div class="leg">≈ foreløbig · <span style="opacity:.5">≈ usikker</span> · – mangler data · ↗/↘ holdt tilbage af vagten · '
     + '<span class="orange">over</span>/<span class="blue">under</span> forudsigelsen fra 6 timer før · <span class="flag">!</span> afviger mere end dobbelt så meget som normalt · tryk på et tal for detaljer</div>';
+
+  // Kører browseren en ældre udgave af kortene end integrationen (opdateret, men appen er ikke genindlæst)? Så vises en
+  // linje øverst i kortene, der genindlæser siden. Tjekkes højst hvert 10. minut for alle kort tilsammen.
+  let verT = 0, verNew = null;
+  const checkVersion = (h, redraw) => {
+    if (!h || !h.callWS || Date.now() - verT < 600000) return;
+    verT = Date.now();
+    Promise.resolve(h.callWS({ type: 'manifest/get', integration: 'varmemodel' })).then((m) => {
+      const was = verNew; verNew = m && m.version && m.version !== VERSION ? String(m.version) : null;
+      if (verNew !== was) redraw();
+    }).catch(() => {});
+  };
 
   class Base extends HTMLElement {
     setConfig(c) { this._c = c || {}; this._open = this._open || new Set(); if (this._h) this._draw(); }
@@ -187,6 +200,7 @@
         const r = this.attachShadow({ mode: 'open' });
         r.addEventListener('click', (ev) => {
           const path = ev.composedPath();
+          if (path.find((x) => x.dataset && x.dataset.reload)) { location.reload(); return; }
           const act = path.find((x) => x.dataset && x.dataset.act);
           if (act) { this._h.callService('homeassistant', 'toggle', { entity_id: act.dataset.act }); return; }
           const kk = path.find((x) => x.dataset && x.dataset.k !== undefined);
@@ -215,13 +229,19 @@
       const ae = this.shadowRoot.activeElement;
       if (ae && ['SELECT', 'INPUT'].includes(ae.tagName)) { clearTimeout(this._tmE); this._tmE = setTimeout(() => this._draw(), 1500); return; }
       if (!force && Date.now() - (this._moved || 0) < 1200) { clearTimeout(this._tmE); this._tmE = setTimeout(() => this._draw(), 1300); return; }
+      checkVersion(this._h, () => this._draw(true));
       const vm = discover(this._h);
       let body;
       try { body = vm ? this.body(this._h, vm) : '<div class="mut">Varmemodel er ikke sat op endnu.</div>'; }
       catch (e) { body = `<div class="red">Fejl i kortet: ${esc(e && e.message)}</div>`; }
+      // Uændret indhold tegnes ikke om: tabeller, markeret tekst og åbne afsnit får lov at stå (de fleste tilstands-
+      // ændringer i huset rører ikke kortet)
+      const html = `<style>${CSS}${this.css || ''}</style><ha-card>${verNew ? `<div class="upd" data-reload="1">Kortene er opdateret til ${esc(verNew)} (du ser ${VERSION}) – tryk her for at genindlæse</div>` : ''}${this._c.title ? `<div class="h">${esc(this._c.title)}</div>` : ''}${body}</ha-card>`;
+      if (!force && html === this._html) return;
+      this._html = html;
       // Kortets egne rulleområder (brede tabeller på mobil) beholder deres position hen over en gentegning
       const sc = [...this.shadowRoot.querySelectorAll('.wrap')].map((e) => [e.scrollLeft, e.scrollTop]);
-      this.shadowRoot.innerHTML = `<style>${CSS}${this.css || ''}</style><ha-card>${this._c.title ? `<div class="h">${esc(this._c.title)}</div>` : ''}${body}</ha-card>`;
+      this.shadowRoot.innerHTML = html;
       for (const id of this._open) { const d = this.shadowRoot.getElementById(id); if (d) d.open = true; }
       this.shadowRoot.querySelectorAll('.wrap').forEach((e, i) => { if (sc[i] && (sc[i][0] || sc[i][1])) { e.scrollLeft = sc[i][0]; e.scrollTop = sc[i][1]; } });
     }
