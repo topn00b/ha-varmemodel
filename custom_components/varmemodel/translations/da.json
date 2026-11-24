@@ -193,6 +193,9 @@
     "button": {
       "recalibrate": {
         "name": "Kalibrér nu"
+      },
+      "air_relearn": {
+        "name": "Lær stigen fra historikken"
       }
     },
     "select": {

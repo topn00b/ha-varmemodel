@@ -86,7 +86,11 @@ CONF_BLOCK_NOW_ENTITY = "block_now_entity"  # blokering lige nu (fx et prisloft 
 CONF_BLOCK_NOW_STATES = "block_now_states"  # entitetens tilstande, der blokerer (kommasepareret)
 DEFAULT_BLOCK_NOW_STATES = "rød, red, r, on"
 CONF_BLOCK_QUARTERS_ENTITY = "block_quarters_entity"  # blokerede kvarterer (attribut »kvarterer«: liste af starttider)
-BLOCK_QUARTERS_MIN = 2  # en time med så mange blokerede kvarterer planlægges som blokeret (ellers klippes kørslen over)
+BLOCK_QUARTERS_MIN = 2
+LEARN_IGNORE_WORDS = ("ignorer", "ignore")  # kalender-begivenheder med disse ord springes over i læringen (og er ikke tiltag)
+AIR_EFF_BACKFILL_DAYS = 14  # stigens virkning pr. trin læres også fra så mange dages historik
+AIR_EFF_BF_VERSION = 1  # tilbagefyldningen køres igen automatisk, når metoden ændres
+AIR_EFF_AIRING_DROP = 0.3  # et rum, der falder mere end så mange °C på et kvarter, er luftet ud – kvarteret bruges ikke  # en time med så mange blokerede kvarterer planlægges som blokeret (ellers klippes kørslen over)
 # Søg laveste fremløb (»lavest«): hold målet lavt og ændr det stille og roligt efter rummenes margen og tendens
 LOW_URGENT_HOLD = 1800  # et rum under gulvet og ikke på vej op: +2 K højst hver halve time
 LOW_UP_HOLD = 3600  # et rum på vej under gulvet inden for 3 timer: +1 K højst hver time

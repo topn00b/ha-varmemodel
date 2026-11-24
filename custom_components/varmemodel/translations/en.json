@@ -193,6 +193,9 @@
     "button": {
       "recalibrate": {
         "name": "Calibrate now"
+      },
+      "air_relearn": {
+        "name": "Relearn ladder from history"
       }
     },
     "select": {

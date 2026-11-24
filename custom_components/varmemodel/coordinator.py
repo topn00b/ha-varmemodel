@@ -129,6 +129,10 @@ from .const import (
     CONF_BLOCK_NOW_ENTITY,
     CONF_BLOCK_QUARTERS_ENTITY,
     BLOCK_QUARTERS_MIN,
+    LEARN_IGNORE_WORDS,
+    AIR_EFF_BACKFILL_DAYS,
+    AIR_EFF_BF_VERSION,
+    AIR_EFF_AIRING_DROP,
     CONF_BLOCK_NOW_STATES,
     DEFAULT_BLOCK_NOW_STATES,
     LOW_DOWN_HOLD,
@@ -1181,6 +1185,8 @@ class VarmemodelCoordinator:
         zh: dict[str, list[Hour]] = {}
         out = []
         for ev in events:
+            if any(w in f"{ev.get('summary') or ''} {ev.get('description') or ''}".lower() for w in LEARN_IGNORE_WORDS):
+                continue  # en periode, der skal ignoreres i læringen – ikke et energitiltag
             src = self.measure_source(f"{ev.get('summary') or ''} {ev.get('description') or ''}") or self.hydronic
             if src.sid not in zh:
                 zh[src.sid] = self._zone_hours(src, room_hours)
@@ -1933,6 +1939,205 @@ class VarmemodelCoordinator:
         vals = [v for x in st.get(eid, []) if (v := _num(x.get("mean"))) is not None]
         return sum(vals) / len(vals) if vals else None
 
+    async def _learn_skip_windows(self, start: float, end: float) -> list[tuple[float, float]]:
+        """Perioder, læringen skal springe over: begivenheder i tiltags-kalenderen med »ignorer« (fx en dørtest)."""
+        cal = self._id(CONF_MEASURES_CALENDAR)
+        if not cal:
+            return []
+        try:
+            resp = await self.hass.services.async_call(
+                "calendar", "get_events", {"start_date_time": dt_util.utc_from_timestamp(start), "end_date_time": dt_util.utc_from_timestamp(end)},
+                target={"entity_id": cal}, blocking=True, return_response=True)
+        except Exception:  # noqa: BLE001
+            return []
+        out = []
+        for ev in ((resp or {}).get(cal) or {}).get("events") or []:
+            if not any(w in f"{ev.get('summary') or ''} {ev.get('description') or ''}".lower() for w in LEARN_IGNORE_WORDS):
+                continue
+            a, b = dt_util.parse_datetime(str(ev.get("start"))), dt_util.parse_datetime(str(ev.get("end")))
+            if a is None:  # heldags: hele døgnet
+                d = dt_util.parse_date(str(ev.get("start")))
+                a = datetime.combine(d, datetime.min.time(), dt_util.get_default_time_zone()) if d else None
+                b = a + timedelta(days=1) if a else None
+            if a is not None and b is not None:
+                out.append((a.timestamp(), b.timestamp()))
+        return out
+
+    def _air_rooms_meta(self, s: SourceState) -> list[dict[str, Any]]:
+        """Kildens rum med gulv og model til læring fra historikken (afkøling, gratis varme, naborum som entiteter)."""
+        out = []
+        for r in self.rooms_cfg:
+            if self.room_source(r) is not s or not r["in_plan"]:
+                continue
+            t_min = self._state_num(r["min_entity"]) if r["min_entity"] else (_num(r["min"]) if r["min"] is not None else None)
+            fitd = self.rooms.get(r["key"]) or {}
+            ex = fitd.get("extra") or {}
+            if t_min is None or fitd.get("value") is None:
+                continue
+            nbs = []
+            for nb_name, nb in (ex.get("neighbours") or {}).items():
+                if nb_eid := next((n for n in r.get("neighbours") or [] if self._label(n) == nb_name), None):
+                    nbs.append((float(nb.get("per_h_k") or 0.0), nb_eid))
+            out.append({"navn": r["name"] or r["key"], "e": r["key"], "gulv": t_min, "cool": float(fitd["value"]) / 20,
+                        "free": float(ex.get("free_heat_k_per_day") or 0.0) / 24, "nb": nbs})
+        return out
+
+    def _air_eff_backfill_sync(self, clim: str, peid: str, rooms: list[dict[str, Any]], sp_min: float, out_eid: str | None,
+                               vent: str | None, vent_speed: str | None, df: str | None, start: float, end: float,
+                               skip: list[tuple[float, float]]) -> tuple[dict[str, list[float]], dict[str, Any]]:
+        """Virkning pr. trin (°C pr. kWh el) fra historikken – samme beregning som den løbende læring: kvarterer, hvor
+        trinnet har kørt mindst EFF_HOLD, rummenes stigning ud over afkøling, gratis varme og naborum pr. kWh el.
+        Stramme filtre, så der ikke læres forkert: varmepumpen varmer (> 100 W), ingen afrimning (fra 10 min. før til
+        15 min. efter), ingen udluftning (et rum falder > AIR_EFF_AIRING_DROP på et kvarter), ventilationen skifter ikke,
+        perioder med »ignorer« i kalenderen springes over, og målinger, der stikker voldsomt ud for samme rum og trin,
+        kasseres (median ± 3 × MAD). Giver (virkning, oversigt)."""
+        import bisect
+        from statistics import median as _med
+
+        utc = dt_util.utc_from_timestamp
+        ents = list(dict.fromkeys([clim] + [m["e"] for m in rooms] + [n for m in rooms for _, n in m["nb"]]
+                                  + [x for x in (out_eid, vent, vent_speed, df) if x]))
+        res = history.get_significant_states(self.hass, utc(start), utc(end), ents, include_start_time_state=True,
+                                             significant_changes_only=False)
+        ser = {e: [(z.last_updated.timestamp(), z) for z in res.get(e, [])] for e in ents}
+        tix = {e: [t for t, _ in v] for e, v in ser.items()}
+
+        def at(e: str | None, t: float) -> Any:
+            if not e:
+                return None
+            i = bisect.bisect_right(tix.get(e, []), t) - 1
+            return ser[e][i][1] if i >= 0 else None
+
+        def num(e: str | None, t: float) -> float | None:
+            z = at(e, t)
+            return _num(z.state) if z is not None else None
+
+        # Trinnet (samme navne som stigen: blæser/forudindstilling + setpunkt over laveste setpunkt) og hvornår det skiftede
+        changes: list[tuple[float, str | None]] = []
+        for t, z in ser.get(clim, []):
+            atr = z.attributes or {}
+            sp = _num(atr.get("temperature"))
+            lab = None
+            if z.state == "heat" and sp is not None and sp >= sp_min - 1e-6:
+                lab = f"{'quiet' if atr.get('preset_mode') == 'quiet' else atr.get('fan_mode')} +{sp - sp_min:.1f}"
+            if not changes or changes[-1][1] != lab:
+                changes.append((t, lab))
+        cht = [t for t, _ in changes]
+
+        def step(t: float) -> tuple[str | None, float]:
+            i = bisect.bisect_right(cht, t) - 1
+            return (changes[i][1], changes[i][0]) if i >= 0 else (None, t)
+
+        df_on = [t for t, z in ser.get(df, []) if z.state == "on"] if df else []
+        df_off = [t for t, z in ser.get(df, []) if z.state == "off"] if df else []
+
+        def vent_on(t: float) -> bool | None:
+            z = at(vent, t)
+            if z is None or z.state in ("unknown", "unavailable"):
+                return None
+            on = z.state.lower() not in ("off", "fra", "0", "false", "slukket")
+            if on and vent_speed:
+                v = num(vent_speed, t)
+                on = v is not None and v > 0
+            return on
+
+        st = statistics_during_period(self.hass, utc(start), utc(end), {peid}, "5minute", None, {"mean"})
+        pw = {int(_ts(x["start"])): _num(x.get("mean")) for x in st.get(peid, [])}
+        segs: list[dict[str, Any]] = []
+        stat = {"kvarterer": 0, "afrimning": 0, "udluftning": 0, "ventilation": 0, "ignoreret": 0, "for_kort": 0}
+        t = float(int(start // 900 * 900) + 3600)
+        while t + 900 <= end:
+            lab, since = step(t)
+            lab2, _ = step(t + 899)
+            if lab is None or lab2 != lab:
+                t += 900
+                continue
+            stat["kvarterer"] += 1
+            if t - since < EFF_HOLD:
+                stat["for_kort"] += 1
+            elif any(a <= t + 900 and b >= t for a, b in skip):
+                stat["ignoreret"] += 1
+            elif any(t - 600 <= x <= t + 900 for x in df_on) or any(t - 900 <= x <= t for x in df_off):
+                stat["afrimning"] += 1
+            else:
+                w = [pw.get(int(t + k * 300)) for k in range(3)]
+                v0, v1 = vent_on(t), vent_on(t + 899)
+                if v0 != v1:
+                    stat["ventilation"] += 1
+                elif None not in w and min(w) > 100 and (t_out := num(out_eid, t)) is not None:
+                    gains, drops = {}, False
+                    for m in rooms:
+                        a_, b_ = num(m["e"], t), num(m["e"], t + 900)
+                        if a_ is None or b_ is None:
+                            continue
+                        if b_ - a_ < -AIR_EFF_AIRING_DROP:
+                            drops = True
+                            break
+                        nb = [(k, x) for k, e in m["nb"] if (x := num(e, t)) is not None]
+                        gains[m["navn"]] = room_gain(a_, b_, 0.25, t_out, m["cool"], m["free"], nb)
+                    if drops:
+                        stat["udluftning"] += 1
+                    elif gains:
+                        vk = "" if v0 is None else ("|vent til" if v0 else "|vent fra")
+                        segs.append({"t": t, "lab": lab, "vk": vk, "b": band(t_out), "g": gains, "kwh": sum(w) / 3 * 0.25 / 1000})
+            t += 900
+        # Udskud pr. rum og trin: median ± 3 × MAD (mindst 0,02 °C pr. kWh) – fx et rum med lukket dør
+        by: dict[tuple[str, str], list[float]] = {}
+        for x in segs:
+            for r, g in x["g"].items():
+                by.setdefault((r, x["lab"]), []).append(g / x["kwh"])
+        lim: dict[tuple[str, str], tuple[float, float]] = {}
+        for k, v in by.items():
+            if len(v) >= 6:
+                md = _med(v)
+                lim[k] = (md, 3 * max(_med([abs(y - md) for y in v]), 0.02))
+        eff: dict[str, list[float]] = {}
+        kept = outl = 0
+        for x in segs:
+            if any(abs(g / x["kwh"] - lim[(r, x["lab"])][0]) > lim[(r, x["lab"])][1]
+                   for r, g in x["g"].items() if (r, x["lab"]) in lim):
+                outl += 1
+                continue
+            g = sum(x["g"].values()) / len(x["g"])
+            k = x["lab"] + x["vk"]
+            eff = eff_update(eff, k, g, x["kwh"])
+            if x["b"] is not None:
+                eff = eff_update(eff, k + f"@{x['b']}", g, x["kwh"])
+            kept += 1
+        stat.update(brugt=kept, udskud=outl, trin=sorted({x["lab"] for x in segs}))
+        return eff, stat
+
+    async def async_air_relearn(self, s: SourceState | None = None) -> None:
+        """Lær stigens virkning pr. trin forfra fra historikken (de seneste AIR_EFF_BACKFILL_DAYS døgn)."""
+        for src in ([s] if s else [x for x in self.sources.values() if self.air_climate(x)]):
+            clim, peid = self.air_climate(src), src.conf.get(CONF_EL_POWER)
+            if not clim or not peid:
+                continue
+            a = self.air.setdefault(src.sid, {})
+            rooms = self._air_rooms_meta(src)
+            cst = self.hass.states.get(clim)
+            atr = cst.attributes if cst else {}
+            stp = float(atr.get("target_temp_step") or 0.5)
+            floors = [m["gulv"] for m in rooms]
+            sp_min = max(float(atr.get("min_temp") or 16), round((max(floors) if floors else 20.0) / stp) * stp)
+            now = time.time()
+            start = now - AIR_EFF_BACKFILL_DAYS * 86400
+            skip = await self._learn_skip_windows(start, now)
+            try:
+                eff, stat = await get_instance(self.hass).async_add_executor_job(
+                    self._air_eff_backfill_sync, clim, peid, rooms, sp_min, self._id(CONF_OUTDOOR), src.conf.get(CONF_ASSIST),
+                    src.conf.get(CONF_ASSIST_SPEED), src.eid(CONF_DEFROST), start, now, skip)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("%s: virkning pr. trin kunne ikke læres fra historikken", src.name)
+                a["bf_eff"] = AIR_EFF_BF_VERSION
+                continue
+            a["eff"] = eff
+            a["bf_eff"] = AIR_EFF_BF_VERSION
+            a["bf_eff_info"] = {**stat, "tid": _ts_local_iso(now), "ignorerede_perioder": len(skip)}
+            _LOGGER.info("%s: virkning pr. trin lært fra historikken: %s", src.name, a["bf_eff_info"])
+        await self._save()
+        self._notify()
+
     def _air_backfill_sync(self, clim: str, peid: str, start: float, end: float) -> dict[str, list[float]]:
         """Forbrug pr. trin fra historikken: klimaentitetens blæser/setpunkt/forudindstilling og 5-minutters effekt.
 
@@ -2119,6 +2324,9 @@ class VarmemodelCoordinator:
                     bf = await self.hass.async_add_executor_job(self._air_backfill_sync, clim, peid, now - 3 * 86400, now)
                     a["w"] = {**{k: round(median(v)) for k, v in bf.items() if len(v) >= 3}, **(a.get("w") or {})}
                     a["bf"] = True
+                if peid and a.get("bf_eff") != AIR_EFF_BF_VERSION:
+                    # Første gang (og når metoden ændres): virkning pr. trin fra historikken, så stigen ikke skal vente dage
+                    await self.async_air_relearn(s)
                 if self.air_setting(s, "air_start") == "rolig":
                     # Rolig opstart: rummenes målte stigning de seneste 30 min. (prøv trinnet, før der skrues op)
                     rr = {r["name"] or r["key"]: r["key"] for r in self.rooms_cfg if self.room_source(r) is s}

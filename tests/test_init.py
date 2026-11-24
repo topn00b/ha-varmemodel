@@ -622,6 +622,8 @@ async def test_air_ladder_shadow_and_control(ha: HomeAssistant) -> None:
     c._recent_sync = lambda s, a, b: ({}, {})
     for sid in c.sources:
         c.settings[f"{sid}.air_start"] = "hurtig"  # testen gælder stigens mekanik; rolig opstart testes for sig
+        # Samme maks. blæser dag og nat, så stigen ikke afhænger af, hvornår testen køres
+        c.settings[f"{sid}.air_fan_day"] = c.settings[f"{sid}.air_fan_night"] = "High"
     await c.async_replan()
     await ha.async_block_till_done()
     step = next(s for s in ha.states.async_all("sensor") if s.entity_id.endswith("ladder_step") or s.entity_id.endswith("air_step"))
