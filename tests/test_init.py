@@ -936,3 +936,16 @@ async def test_comp_stop_after_defrost_ignored(ha: HomeAssistant) -> None:
 
     src = inspect.getsource(co.VarmemodelCoordinator._comp_stops_sync)
     assert "near_df" in src and "df_on" in src and "df_off" in src
+
+
+def test_quarter_block_counts() -> None:
+    """Blokerede kvarterer tælles pr. time; mindst 2 i en time = blokeret i planen."""
+    from datetime import datetime, timezone
+
+    from custom_components.varmemodel.coordinator import quarter_block_counts
+
+    items = ["2026-11-24T06:30:00+01:00", "2026-11-24T06:45:00+01:00", "2026-11-24T10:00:00+01:00"]
+    c = quarter_block_counts(items, lambda s: datetime.fromisoformat(s))
+    h6 = int(datetime(2026, 11, 24, 5, 0, tzinfo=timezone.utc).timestamp())
+    h10 = int(datetime(2026, 11, 24, 9, 0, tzinfo=timezone.utc).timestamp())
+    assert c[h6] == 2 and c[h10] == 1

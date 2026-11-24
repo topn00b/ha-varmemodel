@@ -20,6 +20,7 @@
           "plant_room_loss": "Plant room heat loss (W/K)",
           "block_now_entity": "Block right now",
           "block_now_states": "Blocking states",
+          "block_quarters_entity": "Blocked quarter-hours",
           "ground_temp": "Ground temperature"
         },
         "data_description": {
@@ -32,6 +33,7 @@
           "plant_room_loss": "Fixed heat loss of that room to the ground and outside (U·A of walls, floor and door). Kept fixed because it cannot be separated from the house heat loss with little data; a free fit is shown as diagnostics.",
           "block_now_entity": "Entity that blocks heating right now on top of the hourly schedule – e.g. a price status that is red when the quarter-hour price is above your cap. Heat pumps are stopped/not started while it is in one of the states below.",
           "block_now_states": "Comma separated, e.g. “red, on”.",
+          "block_quarters_entity": "Sensor with the attribute “kvarterer” (start times of blocked quarter-hours, e.g. above a price cap). An hour with at least 2 of them is planned as blocked, so heat is placed before it.",
           "ground_temp": "Typical ground temperature at basement depth (about 8–10 °C in Northern Europe)."
         }
       }
@@ -60,6 +62,7 @@
           "plant_room_loss": "Plant room heat loss (W/K)",
           "block_now_entity": "Block right now",
           "block_now_states": "Blocking states",
+          "block_quarters_entity": "Blocked quarter-hours",
           "ground_temp": "Ground temperature"
         },
         "data_description": {
@@ -72,6 +75,7 @@
           "plant_room_loss": "Fixed heat loss of that room to the ground and outside (U·A of walls, floor and door). Kept fixed because it cannot be separated from the house heat loss with little data; a free fit is shown as diagnostics.",
           "block_now_entity": "Entity that blocks heating right now on top of the hourly schedule – e.g. a price status that is red when the quarter-hour price is above your cap. Heat pumps are stopped/not started while it is in one of the states below.",
           "block_now_states": "Comma separated, e.g. “red, on”.",
+          "block_quarters_entity": "Sensor with the attribute “kvarterer” (start times of blocked quarter-hours, e.g. above a price cap). An hour with at least 2 of them is planned as blocked, so heat is placed before it.",
           "ground_temp": "Typical ground temperature at basement depth (about 8–10 °C in Northern Europe)."
         }
       }

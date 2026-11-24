@@ -127,6 +127,8 @@ from .const import (
     CONF_BLOCK_ENTITY,
     CONF_BLOCK_CODES,
     CONF_BLOCK_NOW_ENTITY,
+    CONF_BLOCK_QUARTERS_ENTITY,
+    BLOCK_QUARTERS_MIN,
     CONF_BLOCK_NOW_STATES,
     DEFAULT_BLOCK_NOW_STATES,
     LOW_DOWN_HOLD,
@@ -2156,6 +2158,12 @@ class VarmemodelCoordinator:
         if (beid := self._id(CONF_BLOCK_ENTITY)) and (bst := self.hass.states.get(beid)):
             codes = [c.strip() for c in str(self.conf.get(CONF_BLOCK_CODES) or "r").split(",") if c.strip()]
             blocks = blocked_hours(bst.state, dict(bst.attributes), codes, self._parse_local)
+        if (qeid := self._id(CONF_BLOCK_QUARTERS_ENTITY)) and (qst := self.hass.states.get(qeid)):
+            # Blokerede kvarterer (fx over et prisloft): en time med mindst BLOCK_QUARTERS_MIN af dem planlægges som blokeret,
+            # så varmen lægges før – i stedet for en kørsel, der klippes over midt i timen (24/11-2026)
+            for k, n in quarter_block_counts(qst.attributes.get("kvarterer") or [], self._parse_local).items():
+                if n >= BLOCK_QUARTERS_MIN:
+                    blocks[k] = True
         fc: dict[int, float] = {}
         if w := self._id(CONF_WEATHER):
             try:
@@ -2423,6 +2431,17 @@ def _clock(ts: int) -> str:
     d = dt_util.as_local(dt_util.utc_from_timestamp(ts))
     days = (d.date() - dt_util.now().date()).days
     return {0: "", 1: "i morgen ", 2: "i overmorgen "}.get(days, d.strftime("%d/%m ")) + d.strftime("kl. %H")
+
+
+def quarter_block_counts(items: list[Any], parse: Callable[[str], datetime | None]) -> dict[int, int]:
+    """Antal blokerede kvarterer pr. time (timens start i unix-sekunder) fra en liste af kvarterernes starttider."""
+    cnt: dict[int, int] = {}
+    for x in items:
+        d = parse(str(x))
+        if d is not None:
+            k = int(d.timestamp() // 3600 * 3600)
+            cnt[k] = cnt.get(k, 0) + 1
+    return cnt
 
 
 def _dk_txt(t: str) -> str:

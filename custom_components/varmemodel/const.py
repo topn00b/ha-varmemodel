@@ -85,6 +85,8 @@ CONF_BLOCK_CODES = "block_codes"
 CONF_BLOCK_NOW_ENTITY = "block_now_entity"  # blokering lige nu (fx et prisloft pr. kvarter) ud over timeplanen
 CONF_BLOCK_NOW_STATES = "block_now_states"  # entitetens tilstande, der blokerer (kommasepareret)
 DEFAULT_BLOCK_NOW_STATES = "rød, red, r, on"
+CONF_BLOCK_QUARTERS_ENTITY = "block_quarters_entity"  # blokerede kvarterer (attribut »kvarterer«: liste af starttider)
+BLOCK_QUARTERS_MIN = 2  # en time med så mange blokerede kvarterer planlægges som blokeret (ellers klippes kørslen over)
 # Søg laveste fremløb (»lavest«): hold målet lavt og ændr det stille og roligt efter rummenes margen og tendens
 LOW_URGENT_HOLD = 1800  # et rum under gulvet og ikke på vej op: +2 K højst hver halve time
 LOW_UP_HOLD = 3600  # et rum på vej under gulvet inden for 3 timer: +1 K højst hver time
