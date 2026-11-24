@@ -1116,9 +1116,9 @@ def test_red_spans_with_quarters() -> None:
     assert spans_from_quarters(set()) == []
 
 
-async def test_varsel_event_once_and_when_worse(ha: HomeAssistant) -> None:
-    """Besked forud: første gang et rum forudsiges mindst 0,2 °C under grænsen; ikke ved gentagelser eller små forværringer;
-    igen ved 0,5 °C værre – men højst én besked pr. 6 timer, undtagen et nyt problem, der begynder inden for 3 timer."""
+async def test_varsel_urgent_only(ha: HomeAssistant) -> None:
+    """Rum-beskeden er en nødbesked: kun et nyt, usædvanligt problem, der begynder inden for 3 timer – højst én pr. 6 timer,
+    ingen gentagelser. Problemer længere ude dækkes af døgnets besked om lange røde dage."""
     c, s = await _lv_entry(ha)
     events: list = []
     ha.bus.async_listen("varmemodel_varsel", lambda e: events.append(e.data))
@@ -1132,29 +1132,20 @@ async def test_varsel_event_once_and_when_worse(ha: HomeAssistant) -> None:
         c._varsel_all({s.sid: plan}, now)  # noqa: SLF001
         await ha.async_block_till_done()
     await run()
-    assert len(events) == 1 and events[0]["nye"] == ["Gang"] and events[0]["kilde"] == "Luft-vand"
+    assert events == []  # begynder om 4–5 timer: ingen nødbesked
+    plan["problems"] = [dict(prob, fra_ts=h + 2 * 3600)]
+    await run()
+    assert len(events) == 1 and events[0]["nye"] == ["Gang"] and events[0]["titel"] == "Varme: problem inden for 3 timer"
     t = events[0]["tekst"]
-    assert t.startswith("Luft-vand: Gang 19,7 °C") and "grænse 20,0" in t and "under fra" in t and "Blokeret" in t
-    assert "kan ikke dække behovet" in t and "hæver allerede fremløbet 5 °C" in t
+    assert t.startswith("Luft-vand: Gang 19,7 °C") and "Blokeret" in t and "kan ikke dække behovet" in t and "hæver allerede fremløbet 5 °C" in t
     await run()
     assert len(events) == 1  # samme problem: ingen ny besked
-    plan["problems"][0].update(under=0.65, temp=19.35)
+    plan["problems"].append(dict(prob, rum="Stue", fra_ts=h + 2 * 3600))
     await run()
-    assert len(events) == 1  # 0,35 °C værre: under grænsen for en ny besked
-    plan["problems"][0].update(under=0.85, temp=19.15)
-    await run()
-    assert len(events) == 1  # 0,55 °C værre, men under 6 timer siden sidste besked
+    assert len(events) == 1  # nyt rum, men under 6 timer siden sidste besked
     c.air["varsel"]["t"] = now - 7 * 3600
     await run()
-    assert len(events) == 2 and events[1]["værre"] == ["Gang"] and events[1]["nye"] == []
-    plan["problems"] = [dict(prob, under=0.05)]  # næsten væk: glemmes
-    await run()
-    plan["problems"] = [dict(prob, under=0.25)]
-    await run()
-    assert len(events) == 2  # nyt problem om 5 timer: venter på de 6 timer
-    plan["problems"] = [dict(prob, under=0.25, fra_ts=h + 2 * 3600)]
-    await run()
-    assert len(events) == 3 and events[2]["nye"] == ["Gang"]  # begynder inden for 3 timer: straks
+    assert len(events) == 2 and events[1]["nye"] == ["Stue"]
 
 
 async def test_varsel_only_unusual(ha: HomeAssistant) -> None:
@@ -1176,7 +1167,8 @@ async def test_varsel_only_unusual(ha: HomeAssistant) -> None:
     c._varsel_all({s.sid: {"problems": [p("Værelse", 17.9)]}}, now)  # noqa: SLF001 – 1,6 under: usædvanligt
     await ha.async_block_till_done()
     assert len(events) == 1 and "normalt ned til 18,3" in events[0]["tekst"]
-    c._varsel_all({s.sid: {"problems": [p("Værelse", 17.9), p("Gang", 19.7)]}}, now)  # noqa: SLF001 – nyt og snart: straks
+    c.air["varsel"]["t"] = now - 7 * 3600
+    c._varsel_all({s.sid: {"problems": [p("Værelse", 17.9), p("Gang", 19.7)]}}, now)  # noqa: SLF001 – Gang plejer at holde sig over
     await ha.async_block_till_done()
     assert len(events) == 2 and events[1]["nye"] == ["Gang"]
 
@@ -1195,6 +1187,44 @@ async def test_varsel_one_message_for_the_house(ha: HomeAssistant, entry: MockCo
     c._varsel_all(plans, now)  # noqa: SLF001
     await ha.async_block_till_done()
     assert len(events) == 1 and all(f"{x.name}:" in events[0]["tekst"] for x in srcs) and len(events[0]["problemer"]) == 2
+
+
+async def test_red_day_message(ha: HomeAssistant) -> None:
+    """Lang rød dag (brugerens regel): over 8 røde timer i et døgn (talt pr. kvarter) → én besked for døgnet med de røde perioder
+    og planens laveste temperaturer; ikke ved første kørsel (kendte dage), ikke to gange, ikke under 8 timer; døgnets rum får
+    ikke en nødbesked bagefter."""
+    from datetime import datetime, timedelta
+
+    from custom_components.varmemodel.coordinator import spans_from_quarters
+
+    c, s = await _lv_entry(ha)
+    events: list = []
+    ha.bus.async_listen("varmemodel_varsel", lambda e: events.append(e.data))
+    loc = dt_util.get_default_time_zone()
+    d1 = (dt_util.now() + timedelta(days=1)).date()
+    q = lambda hh, mm: int(datetime(d1.year, d1.month, d1.day, hh, mm, tzinfo=loc).timestamp())  # noqa: E731
+    c._red_q = set(range(q(6, 30), q(10, 15), 900)) | set(range(q(14, 0), q(21, 15), 900))  # noqa: SLF001 – 11 røde timer
+    c.red_spans = spans_from_quarters(c._red_q)  # noqa: SLF001
+    plan = {"problems": [{"rum": "Gang", "ts": q(21, 0), "temp": 18.9, "grænse": 20.0, "under": 1.1, "fra_ts": q(17, 0), "blokeret": True}]}
+    now = time.time()
+
+    async def run() -> None:
+        c._red_day_msg({s.sid: plan}, now)  # noqa: SLF001
+        c._varsel_all({s.sid: plan}, now)  # noqa: SLF001
+        await ha.async_block_till_done()
+    await run()
+    assert events == [] and d1.isoformat() in c.air["varsel"]["dage"]  # første kørsel: kendt dag, ingen besked
+    c.air["varsel"] = {"dage": []}
+    await run()
+    assert len(events) == 1 and events[0]["titel"] == "Varme: lang rød dag i morgen" and events[0]["røde_timer"] == 11
+    assert events[0]["tekst"].startswith("I morgen: 11 røde timer (06:30–10:15, 14:00–21:15). Planen forventer: Gang 18,9 °C")
+    await run()
+    assert len(events) == 1  # én gang pr. døgn
+    c.air["varsel"] = {"dage": []}
+    c.air[f"varsel:{s.sid}"] = {}
+    c._red_q = set(range(q(14, 0), q(21, 45), 900))  # noqa: SLF001 – 7,75 timer
+    await run()
+    assert len(events) == 1  # under 8 timer: ingen dagsbesked (og Gang begynder ikke inden for 3 timer)
 
 
 def test_usual_margin() -> None:

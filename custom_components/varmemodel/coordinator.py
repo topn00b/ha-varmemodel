@@ -153,6 +153,7 @@ from .const import (
     VARSEL_UNUSUAL,
     VARSEL_URGENT,
     VARSEL_WORSE,
+    RED_DAY_H,
     START_K_DECAY,
     START_K_MAX,
     START_PHASE_S,
@@ -1336,9 +1337,16 @@ class VarmemodelCoordinator:
         if not cands:
             return
         g = self.air.setdefault("varsel", {})
-        urgent = any(c["cur"][n]["fra_ts"] - now < VARSEL_URGENT for c in cands for n in c["new"])
-        if now - float(g.get("t") or 0) < VARSEL_COOLDOWN and not urgent:
-            return  # venter: kandidaterne er ikke markeret og kommer med i næste tilladte besked
+        # Nødbesked: kun et nyt, usædvanligt problem, der begynder inden for VARSEL_URGENT (lange røde dage har deres egen besked
+        # én gang pr. døgn), og højst én pr. VARSEL_COOLDOWN
+        urgent = []
+        for c in cands:
+            un = [n for n in c["new"] if c["cur"][n]["fra_ts"] - now < VARSEL_URGENT]
+            if un:
+                urgent.append({**c, "new": un, "worse": [], "cur": {n: c["cur"][n] for n in un}})
+        cands = urgent
+        if not cands or now - float(g.get("t") or 0) < VARSEL_COOLDOWN:
+            return
         parts, rows_all, last, warn_cant, raises = [], [], now, False, []
         for c in cands:
             s, cur, base = c["s"], c["cur"], c["base"]
@@ -1367,12 +1375,65 @@ class VarmemodelCoordinator:
         text = _dk_txt(" ".join(parts + extra)).strip()
         g.update(t=round(now), tekst=text)
         self.hass.bus.async_fire(EVENT_VARSEL, {
+            "titel": "Varme: problem inden for 3 timer", "type": "snart",
             "kilde": " og ".join(c["s"].name for c in cands), "nye": [n for c in cands for n in c["new"]],
             "værre": [n for c in cands for n in c["worse"]], "tekst": text,
             "problemer": [{"kilde": x["kilde"], "rum": x["rum"], "kl": _ts_local_iso(x["ts"]), "fra": _ts_local_iso(x["fra_ts"]),
                            "temp": x["temp"], "grænse": x["grænse"], "under": x["under"], "blokeret": x["blokeret"]} for x in rows_all],
             "blokeret": [{"fra": _ts_local_iso(a), "til": _ts_local_iso(b)} for a, b in reds],
         })
+
+    def _red_day_msg(self, plans: dict[str, dict[str, Any]], now: float) -> None:
+        """Lang rød dag (brugerens regel): røde timer pr. døgn talt pr. kvarter (rød zone og prisloft). Over RED_DAY_H er der
+        noget at være opmærksom på – én besked pr. døgn, så snart det er kendt (typisk når morgendagens priser kommer), og
+        før døgnets første røde kvarter. Den nævner de røde perioder og planens laveste temperaturer for døgnets rum, og
+        de rum markeres som varslet (ingen nødbesked bagefter for det samme)."""
+        g = self.air.setdefault("varsel", {})
+        first_run = "dage" not in g
+        sent: list[str] = g.setdefault("dage", [])
+        today = dt_util.now().date()
+        per_day: dict[str, list[int]] = {}
+        for q in sorted(self._red_q):
+            per_day.setdefault(dt_util.as_local(dt_util.utc_from_timestamp(q)).date().isoformat(), []).append(q)
+        for d, qs in sorted(per_day.items()):
+            hrs = len(qs) / 4
+            if hrs <= RED_DAY_H or d in sent:
+                continue
+            if first_run:
+                sent.append(d)  # kendte dage ved første kørsel: ingen besked (brugeren kender dem allerede)
+                continue
+            if d < today.isoformat() or (d == today.isoformat() and min(qs) <= now):
+                continue  # døgnet er gået i gang – beskeden skulle være kommet før
+            day_end = max(qs) + 900
+            spans = [(a, b) for a, b in self.red_spans if a < day_end and b > min(qs)]
+            span_txt = ", ".join(f"{dt_util.as_local(dt_util.utc_from_timestamp(a)).strftime('%H:%M')}–"
+                                 f"{dt_util.as_local(dt_util.utc_from_timestamp(b)).strftime('%H:%M')}" for a, b in spans)
+            label = {0: "I dag", 1: "I morgen", 2: "I overmorgen"}.get((datetime.fromisoformat(d).date() - today).days, d)
+            items, rows = [], []
+            for sid, pl in plans.items():
+                src = self.sources.get(sid)
+                if src is None:
+                    continue
+                st = self.air.setdefault(f"varsel:{sid}", {})
+                base = st.get("base") or {}
+                mine = [x for x in pl.get("problems") or [] if x["under"] >= VARSEL_MIN
+                        and min(qs) - 6 * 3600 <= x["ts"] <= day_end + 6 * 3600]
+                for x in sorted(mine, key=lambda x: -x["under"]):
+                    usual = f", normalt ned til {x['grænse'] + base[x['rum']]:.1f}" if base.get(x["rum"]) is not None else ""
+                    items.append(f"{x['rum']} {x['temp']:.1f} °C {_clock(x['ts'])} (grænse {x['grænse']:.1f}{usual})")
+                    st.setdefault("rum", {})[x["rum"]] = x["under"]
+                    rows.append({"kilde": src.name, **x})
+            text = _dk_txt(f"{label}: {hrs:g} røde timer ({span_txt}). "
+                           + ("Planen forventer: " + "; ".join(items) + "." if items else "Planen forventer, at rummene holder."))
+            sent.append(d)
+            g["dage"] = sent[-10:]
+            self.hass.bus.async_fire(EVENT_VARSEL, {
+                "titel": f"Varme: lang rød dag {label.lower()}", "type": "rød_dag", "kilde": "Huset", "dato": d, "røde_timer": hrs,
+                "tekst": text, "nye": [], "værre": [],
+                "problemer": [{"kilde": x["kilde"], "rum": x["rum"], "kl": _ts_local_iso(x["ts"]), "fra": _ts_local_iso(x["fra_ts"]),
+                               "temp": x["temp"], "grænse": x["grænse"], "under": x["under"], "blokeret": x["blokeret"]} for x in rows],
+                "blokeret": [{"fra": _ts_local_iso(a), "til": _ts_local_iso(b)} for a, b in spans],
+            })
 
     def _room_base_sync(self, s: SourceState) -> dict[str, float]:
         """Det sædvanlige pr. rum: margen over gulvet på en almindelig dårlig dag de seneste VARSEL_DAYS døgn (VARSEL_PCT-
@@ -2921,6 +2982,7 @@ class VarmemodelCoordinator:
                 except Exception:  # noqa: BLE001 – en besked må aldrig vælte planlægningen
                     _LOGGER.debug("%s: det sædvanlige kunne ikke regnes", src.name, exc_info=True)
         try:
+            self._red_day_msg(plans, now)  # først: døgnets besked markerer sine rum, så der ikke følger en nødbesked
             self._varsel_all(plans, now)
         except Exception:  # noqa: BLE001
             _LOGGER.debug("Besked forud kunne ikke laves", exc_info=True)

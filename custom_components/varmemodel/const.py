@@ -114,6 +114,9 @@ VARSEL_MIN = 0.2  # varsles, når et rum forudsiges mindst så meget under græn
 VARSEL_WORSE = 0.5  # og igen, hvis det bliver så meget værre end sidst varslet (planen bliver ofte lidt værre, når horisonten vokser)
 VARSEL_COOLDOWN = 6 * 3600  # højst én samlet besked så ofte (brugeren: "2 x 2 beskeder indenfor 30 min – det virker af meget")
 VARSEL_URGENT = 3 * 3600  # undtagen et nyt problem, der begynder inden for så kort tid
+# Lang rød dag (brugerens regel): over så mange røde timer i et døgn (røde kvarterer / 4 – rød zone og prisloft) er der noget at
+# være opmærksom på – én besked pr. døgn, så snart det er kendt. Rum-beskeden er derefter kun en nødbesked (nyt problem snart)
+RED_DAY_H = 8.0
 VARSEL_CLEAR = 0.1  # under så lidt (eller ikke under) er problemet væk – et nyt varsles igen
 # Kun det usædvanlige: rummets sædvanlige laveste (en almindelig dårlig dag de seneste VARSEL_DAYS døgn) – besked kun, når planen
 # forudser mindst VARSEL_UNUSUAL °C koldere end det (brugeren: "ikke beskeder hver dag på noget jeg godt ved")
