@@ -269,6 +269,7 @@ class VarmemodelCoordinator:
         self.status_note: str = ""
         self._room_t: dict[int, dict[str, float | None]] = {}
         self.plans: dict[str, dict[str, Any]] = {}
+        self.plan_inputs: dict[str, tuple] = {}  # seneste input til planen pr. vandbåren kilde (til diagnostikken)
         self.plan_meta: dict[str, Any] = {"updated": None, "inputs_ok": False, "missing": ["ikke planlagt endnu"]}
         self.settings: dict[str, float] = {}
         self.plan_log: dict[str, dict[str, dict[str, Any]]] = {}  # kilde -> timens start -> det planlagte ved timens start
@@ -3034,11 +3035,13 @@ class VarmemodelCoordinator:
                     fm = low_cap - base_f
             else:
                 hs.pop("low_loft", None)
+            plan_kw = {"past_q": past_q, "boost": boost, "boost_hours": boost_h, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
+                       "economy": self.setting(CONF_ECONOMY), "comfort": offset, "flow_margin": fm, "red_spans": self.red_spans,
+                       **({"flow_raise_max": raise_max} if raise_max is not None else {})}
+            # Planens input gemmes (kun i hukommelsen) til diagnostikken, så planen kan genkøres uden for huset
+            self.plan_inputs[sid] = (hours, model, rooms, target, {**plan_kw, "max_pause": int(self.setting(CONF_MAX_PAUSE))})
             p = await self.hass.async_add_executor_job(
-                partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), past_q=past_q, label=_clock,
-                        boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE), economy=self.setting(CONF_ECONOMY),
-                        comfort=offset, flow_margin=fm, red_spans=self.red_spans,
-                        **({"flow_raise_max": raise_max} if raise_max is not None else {})))
+                partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), label=_clock, **plan_kw))
             if low_cap is not None:
                 k = float(p.flow_raise or 0.0)
                 hs["low_raise"] = k

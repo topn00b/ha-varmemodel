@@ -456,6 +456,15 @@ Varmen fra en luft-luft-varmepumpe kan ikke måles direkte. Rummene lærer i ste
 
 Diagnostikfilen indeholder kalibreringen og de brugte timer med tid som "timer før seneste time". Den indeholder ingen entitets-id'er.
 
+**Genkør en plan (0.23.0):** diagnostikken har også den seneste plans input for hver vandbåren kilde (`plan_input`): timerne som "timer fra nu" med pris, udetemperatur og blokering, kildens model, rummene som `rum_1`, `rum_2` … og planens indstillinger. Planen kan genkøres uden for huset:
+
+```
+python tools/replay_plan.py diagnostik.json
+python tools/replay_plan.py diagnostik.json --sæt flow_raise_max=0
+```
+
+Den første linje viser varme, el, pris, største manko og hævet fremløb. Med `--sæt` kan enkelte argumenter ændres, så en rettelse kan afprøves mod en rigtig situation, før den installeres.
+
 ## Planer
 
 - **0.4–0.5 (her):** Planlæggeren for vandbårne varmekilder, indstillinger, log, rumkontrol og før/efter. Senere: luft-luft i planen.

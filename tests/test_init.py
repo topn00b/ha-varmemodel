@@ -1435,3 +1435,29 @@ def test_source_state_restores_todays_figures() -> None:
     s3 = SourceState(sid="a", name="Kilde", kind="hydronic", conf={})
     s3.load(d)
     assert s3.today == {}
+
+
+async def test_diagnostics_has_replayable_plan_input(ha: HomeAssistant) -> None:
+    """Diagnostikken har den seneste plans input uden entitets-id'er, og den kan genkøres til samme plan."""
+    import json
+
+    from custom_components.varmemodel.diagnostics import async_get_config_entry_diagnostics
+    from custom_components.varmemodel.planner import plan_from_dump
+
+    h0 = int(time.time() // 3600 * 3600)
+    ha.states.async_set("sensor.pris", "1.0", {"timer": _price_items(h0)})
+    ha.states.async_set("sensor.ude", "-2.0", {"state_class": "measurement"})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub(HYD, "source")])
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c._recent_sync = lambda s, a, b: ({}, {})
+    await c.async_replan()
+    sid = next(iter(c.sources))
+    d = json.loads(json.dumps(await async_get_config_entry_diagnostics(ha, e)))
+    pi = d["sources"]["kilde_1"]["plan_input"]
+    assert "sensor." not in json.dumps(pi) and pi["hours"][0]["h"] == 0 and len(pi["hours"]) == 24
+    p = plan_from_dump(pi)
+    assert [x["heat_kw"] for x in p.hours] == [x["heat_kw"] for x in c.plans[sid]["hours"]]

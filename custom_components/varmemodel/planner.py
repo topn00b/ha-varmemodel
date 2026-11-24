@@ -17,7 +17,7 @@ Rene funktioner uden Home Assistant. Alle tal kommer fra kalibreringen:
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -577,3 +577,31 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
                    + (" – " + "; ".join(plan.warnings) if plan.warnings else ""))
     return plan
 
+
+def plan_input_dump(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float, **kw: Any) -> dict[str, Any]:
+    """Planens input som JSON uden personlige oplysninger: timerne som »timer fra nu«, rummene som rum_1, rum_2 …
+    Bruges i diagnostikken, så en plan kan genkøres uden for huset (``plan_from_dump``, tools/replay_plan.py)."""
+    t0 = hours[0].ts if hours else 0
+    spans = kw.get("red_spans")
+    return {
+        "hours": [{"h": (h.ts - t0) // 3600, "price": h.price, "t_out": h.t_out, "blocked": h.blocked} for h in hours],
+        "model": asdict(model),
+        "rooms": [{**asdict(r), "name": f"rum_{i + 1}"} for i, r in enumerate(rooms)],
+        "target": target,
+        "kw": {**{k: v for k, v in kw.items() if k not in ("label", "red_spans")},
+               "red_spans": [[a - t0, b - t0] for a, b in spans] if spans else None},
+    }
+
+
+def plan_from_dump(d: dict[str, Any], **override: Any) -> Plan:
+    """Genkør en plan fra ``plan_input_dump`` (tiderne starter ved 0). ``override`` erstatter enkelte argumenter,
+    fx ``flow_margin`` eller ``flow_raise_max`` – til at afprøve en ændring mod en rigtig situation."""
+    hours = [PlanHour(ts=int(x["h"]) * 3600, price=x["price"], t_out=x["t_out"], blocked=bool(x["blocked"])) for x in d["hours"]]
+    model = SourceModel(**{**d["model"], "cop": tuple(d["model"]["cop"])})
+    rooms = [PlanRoom(**{**r, "neighbours": [tuple(n) for n in r.get("neighbours") or []]}) for r in d["rooms"]]
+    kw = dict(d.get("kw") or {})
+    spans = kw.pop("red_spans", None)
+    kw["red_spans"] = [(a, b) for a, b in spans] if spans else None
+    max_pause = int(kw.pop("max_pause", 0) or 0)
+    kw.update(override)
+    return make_plan(hours, model, rooms, d["target"], max_pause, **kw)

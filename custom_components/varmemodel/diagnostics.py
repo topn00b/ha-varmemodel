@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from . import VarmemodelConfigEntry
+from .planner import plan_input_dump
 
 
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: VarmemodelConfigEntry) -> dict[str, Any]:
@@ -39,4 +40,8 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: Varmemo
                 for h in s.last_hours
             ],
         }
+        if (pi := c.plan_inputs.get(s.sid)) is not None:
+            # Den seneste plans input (anonymiseret) – genkøres med tools/replay_plan.py
+            hours, model, rooms, target, kw = pi
+            out["sources"][f"kilde_{i + 1}"]["plan_input"] = plan_input_dump(hours, model, rooms, target, **kw)
     return out

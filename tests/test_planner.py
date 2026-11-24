@@ -442,3 +442,27 @@ def test_plan_problems_structured() -> None:
     assert p.problems and {x["rum"] for x in p.problems} == {w.split(":")[0] for w in p.warnings if "under planens grænse" in w}
     x = p.problems[0]
     assert x["under"] > 0 and x["temp"] < x["grænse"] and x["fra_ts"] <= x["ts"] and isinstance(x["blokeret"], bool)
+
+
+def test_plan_input_dump_roundtrip_is_anonymous_and_replayable() -> None:
+    """Planens input kan gemmes uden navne og tider og genkøres til samme plan – også med et ændret argument."""
+    import json
+
+    from custom_components.varmemodel.planner import plan_from_dump, plan_input_dump
+
+    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, emission_kw_k=0.283, flow_c0=26.0, flow_slope=-0.6)
+    hs = hours(20, t_out=lambda i: -3.0, blocked=lambda i: 6 <= i <= 15)
+    for h in hs:
+        h.ts += 1_795_000_000  # rigtige tidsstempler
+    room = PlanRoom(name="Stuen hos familien", t_now=20.3, t_min=20.0, heat_now=0.08, heat_delayed=0.05, cool_per_hk=0.006, margin=0.2,
+                    neighbours=[(0.01, 19.0)])
+    kw = {"past_q": [0.0] * 6, "flow_margin": 0.0, "red_spans": [(hs[6].ts, hs[16].ts)], "comfort": 1.0}
+    p = make_plan(hs, m, [room], 20.0, 0, **kw)
+    d = json.loads(json.dumps(plan_input_dump(hs, m, [room], 20.0, max_pause=0, **kw)))
+    txt = json.dumps(d)
+    assert "familien" not in txt and "1795" not in txt and d["rooms"][0]["name"] == "rum_1" and d["hours"][6]["blocked"]
+    q = plan_from_dump(d)
+    assert (q.heat_kwh, q.deficit, q.flow_raise) == (p.heat_kwh, p.deficit, p.flow_raise)
+    assert [x["heat_kw"] for x in q.hours] == [x["heat_kw"] for x in p.hours]
+    assert q.rooms["rum_1"] == p.rooms["Stuen hos familien"]
+    assert plan_from_dump(d, flow_raise_max=0).flow_raise == 0
