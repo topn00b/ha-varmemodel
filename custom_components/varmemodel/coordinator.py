@@ -248,6 +248,9 @@ class VarmemodelCoordinator:
         self.plan_log: dict[str, dict[str, dict[str, Any]]] = {}  # kilde -> timens start -> det planlagte ved timens start
         self.fc_log: dict[str, dict[str, list[float]]] = {}  # timens start -> rum -> forudsigelse lavet da
         self.rooms_check: dict[str, dict[str, Any]] = {}
+        # Røde perioder med kvarterer [(fra, til)] (timeplanens blokerede timer + blokerede kvarterer) til visning og starttider
+        self.red_spans: list[tuple[int, int]] = []
+        self._red_q: set[int] = set()
         self.yesterday: dict[str, dict[str, Any]] = {}
         self.measures: list[dict[str, Any]] = []
         self.commands: dict[str, dict[str, Any]] = {}
@@ -1840,7 +1843,8 @@ class VarmemodelCoordinator:
         if off:
             for x in (self.plans.get(s.sid) or {}).get("hours") or []:
                 if x.get("heat_kw") and not x.get("blocked") and x.get("ts", 0) + 3600 > now:
-                    start_at = max(x["ts"], now)
+                    # Rød med kvarterer: er planens starttime rød i de første kvarterer (fx 10:00–10:15), starter den først bagefter
+                    start_at = after_red(max(x["ts"], now), self.red_spans)
                     break
         f = lambda v: f"{v:.0f}" if v is not None else "–"  # noqa: E731
         k = float(hs.get("low_raise") or 0.0)
@@ -2304,7 +2308,7 @@ class VarmemodelCoordinator:
         p = await self.hass.async_add_executor_job(
             partial(make_air_plan, hours, show, e_min, e_max, past_q=past, label=_clock,
                     comfort=self.setting(CONF_COMFORT_OFFSET), red_allowance=self.setting(CONF_RED_ALLOWANCE),
-                    economy=self.setting(CONF_ECONOMY), eff_curve=curve if len(curve) >= 3 else None))
+                    economy=self.setting(CONF_ECONOMY), eff_curve=curve if len(curve) >= 3 else None, red_spans=self.red_spans))
         if (eco := self.setting(CONF_ECONOMY)) > 0:
             p.reason += f" – økonomi: rummene må gå {eco:.2f} °C under gulvet"
         plan = {"kind": "air_air", "hours": p.hours, "rooms": p.rooms, "rooms_planned": [r.name for r in show if r.t_min > -50],
@@ -2377,15 +2381,23 @@ class VarmemodelCoordinator:
         if not prices:
             missing.append("priser")
         blocks: dict[int, bool] = {}
+        red_q: set[int] = set()
         if (beid := self._id(CONF_BLOCK_ENTITY)) and (bst := self.hass.states.get(beid)):
             codes = [c.strip() for c in str(self.conf.get(CONF_BLOCK_CODES) or "r").split(",") if c.strip()]
             blocks = blocked_hours(bst.state, dict(bst.attributes), codes, self._parse_local)
+            red_q = {int(k) + j * 900 for k, b in blocks.items() if b for j in range(4)}
         if (qeid := self._id(CONF_BLOCK_QUARTERS_ENTITY)) and (qst := self.hass.states.get(qeid)):
             # Blokerede kvarterer (fx over et prisloft): en time med mindst BLOCK_QUARTERS_MIN af dem planlægges som blokeret,
             # så varmen lægges før – i stedet for en kørsel, der klippes over midt i timen (24/11-2026)
-            for k, n in quarter_block_counts(qst.attributes.get("kvarterer") or [], self._parse_local).items():
+            items = qst.attributes.get("kvarterer") or []
+            for k, n in quarter_block_counts(items, self._parse_local).items():
                 if n >= BLOCK_QUARTERS_MIN:
                     blocks[k] = True
+            red_q |= quarter_starts(items, self._parse_local)
+        # Røde perioder med kvarterer: fremtiden altid fra de friske data, fortiden (op til 13 t) huskes hen over midnat
+        q_now = int(now // 900 * 900)
+        self._red_q = {q for q in self._red_q if now - 13 * 3600 <= q < q_now} | {q for q in red_q if q >= now - 13 * 3600}
+        self.red_spans = spans_from_quarters(self._red_q)
         fc: dict[int, float] = {}
         if w := self._id(CONF_WEATHER):
             try:
@@ -2521,7 +2533,8 @@ class VarmemodelCoordinator:
             p = await self.hass.async_add_executor_job(
                 partial(make_plan, hours, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), past_q=past_q, label=_clock,
                         boost=boost, boost_hours=boost_h, red_allowance=self.setting(CONF_RED_ALLOWANCE), economy=self.setting(CONF_ECONOMY),
-                        comfort=offset, flow_margin=fm, **({"flow_raise_max": raise_max} if raise_max is not None else {})))
+                        comfort=offset, flow_margin=fm, red_spans=self.red_spans,
+                        **({"flow_raise_max": raise_max} if raise_max is not None else {})))
             if low_cap is not None:
                 k = float(p.flow_raise or 0.0)
                 hs["low_raise"] = k
@@ -2652,7 +2665,36 @@ def _clock(ts: int) -> str:
     """Lokal klokkeslæt til planens advarsler, fx 'kl. 23'."""
     d = dt_util.as_local(dt_util.utc_from_timestamp(ts))
     days = (d.date() - dt_util.now().date()).days
-    return {0: "", 1: "i morgen ", 2: "i overmorgen "}.get(days, d.strftime("%d/%m ")) + d.strftime("kl. %H")
+    return {0: "", 1: "i morgen ", 2: "i overmorgen "}.get(days, d.strftime("%d/%m ")) + d.strftime("kl. %H") + (d.strftime(":%M") if d.minute else "")
+
+
+def quarter_starts(items: list[Any], parse: Callable[[str], datetime | None]) -> set[int]:
+    """Kvarterernes start (unix-sekunder, rundet ned til kvarteret) fra en liste af starttider."""
+    out: set[int] = set()
+    for x in items:
+        d = parse(str(x))
+        if d is not None:
+            out.add(int(d.timestamp() // 900 * 900))
+    return out
+
+
+def spans_from_quarters(quarters: set[int]) -> list[tuple[int, int]]:
+    """Sammenhængende perioder [(fra, til)] af kvarterer, fx {06:30, 06:45, 07:00} → [(06:30, 07:15)]."""
+    out: list[tuple[int, int]] = []
+    for q in sorted(quarters):
+        if out and out[-1][1] == q:
+            out[-1] = (out[-1][0], q + 900)
+        else:
+            out.append((q, q + 900))
+    return out
+
+
+def after_red(ts: float, spans: list[tuple[int, int]]) -> float:
+    """Første tidspunkt fra ``ts``, der ikke ligger i en rød periode (perioderne er sorterede og slået sammen)."""
+    for a, b in spans:
+        if a <= ts < b:
+            ts = b
+    return ts
 
 
 def quarter_block_counts(items: list[Any], parse: Callable[[str], datetime | None]) -> dict[int, int]:

@@ -400,3 +400,18 @@ def test_air_plan_spreads_when_high_steps_are_less_efficient() -> None:
     assert max(x["el_kw"] for x in spread.hours) < max(x["el_kw"] for x in base.hours)
     assert sum(1 for x in spread.hours if x["el_kw"] > 0) > sum(1 for x in base.hours if x["el_kw"] > 0)
     assert spread.el_kwh < base.el_kwh
+
+
+def test_preload_window_shows_red_with_quarters() -> None:
+    """Rød med kvarterer: planen regner i hele timer (blokeret 9–17), men vinduet viser den røde periodes præcise start
+    og slut (08:30–17:15), når de røde perioder kendes."""
+    hs = hours(24, price=lambda i: 1.0 if i >= 18 else 2.0, t_out=lambda i: 3.0, blocked=lambda i: 9 <= i <= 16)
+    room = PlanRoom(name="Stue", t_now=20.4, t_min=20.0, heat_now=0.08, heat_delayed=0.05, cool_per_hk=0.006, margin=0.2)
+
+    def lab(ts):
+        return f"kl. {ts // 3600:02d}" + (f":{ts // 60 % 60:02d}" if ts % 3600 else "")
+
+    p = make_plan(hs, M, [room], 20.0, preload=0.3, label=lab, red_spans=[(8 * 3600 + 1800, 17 * 3600 + 900), (20 * 3600, 21 * 3600)])
+    w = p.preload
+    assert w and w["to"] == 9 * 3600 and w["block_from"] == 8 * 3600 + 1800 and w["block_to"] == 17 * 3600 + 900
+    assert "før blokeringen 08:30–17:15" in p.reason

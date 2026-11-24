@@ -951,3 +951,19 @@ def test_quarter_block_counts() -> None:
     h6 = int(datetime(2026, 11, 24, 5, 0, tzinfo=timezone.utc).timestamp())
     h10 = int(datetime(2026, 11, 24, 9, 0, tzinfo=timezone.utc).timestamp())
     assert c[h6] == 2 and c[h10] == 1
+
+
+def test_red_spans_with_quarters() -> None:
+    """Røde perioder samles fra kvarterer, og en start i et rødt kvarter flyttes til periodens slut (rød 10:00–10:15 → 10:15)."""
+    from datetime import datetime
+
+    from custom_components.varmemodel.coordinator import after_red, quarter_starts, spans_from_quarters
+
+    items = ["2026-11-24T06:30:00+01:00", "2026-11-24T06:45:00+01:00", "2026-11-24T10:00:00+01:00", "x"]
+    qs = quarter_starts(items, lambda s: datetime.fromisoformat(s) if s[0] == "2" else None)
+    t = lambda h, m: int(datetime.fromisoformat(f"2026-11-24T{h:02d}:{m:02d}:00+01:00").timestamp())  # noqa: E731
+    hours = {t(7, 0) + j * 900 for j in range(12)}  # timeplanens røde timer 07–10
+    spans = spans_from_quarters(qs | hours)
+    assert spans == [(t(6, 30), t(10, 15))]
+    assert after_red(t(10, 0), spans) == t(10, 15) and after_red(t(10, 15), spans) == t(10, 15) and after_red(t(6, 0), spans) == t(6, 0)
+    assert spans_from_quarters(set()) == []

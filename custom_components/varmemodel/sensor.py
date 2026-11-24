@@ -12,7 +12,7 @@ from homeassistant.util import dt as dt_util
 
 from . import VarmemodelConfigEntry
 from .const import FIT_KEYS, SOURCE_HYDRONIC
-from .coordinator import SourceState, VarmemodelCoordinator
+from .coordinator import SourceState, VarmemodelCoordinator, after_red
 from .entity import VarmemodelEntity
 
 PRECISION = {"heat_loss": 0, "cop_steady": 2, "cop_loss": 1, "emission": 3, "max_power": 2, "min_power": 2,
@@ -339,7 +339,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["heat", "off", "blocked", "unknown"]
-    _unrecorded_attributes = frozenset({"plan", "rooms_forecast", "history", "rooms_check", "rooms_band"})
+    _unrecorded_attributes = frozenset({"plan", "rooms_forecast", "history", "rooms_check", "rooms_band", "røde_perioder"})
 
     def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
         super().__init__(coordinator, s, "plan_now")
@@ -362,6 +362,9 @@ class PlanNowSensor(SourceEntity, SensorEntity):
         hrs = p.get("hours") or []
         nxt_on = next((x["ts"] for x in hrs if x["heat_kw"] > 0 and x["ts"] > (h.get("ts") or 0)), None)
         nxt_off = next((x["ts"] for x in hrs if x["heat_kw"] == 0 and x["ts"] > (h.get("ts") or 0)), None)
+        spans = self.coordinator.red_spans
+        if nxt_on is not None:
+            nxt_on = after_red(nxt_on, spans)  # rød med kvarterer: fx 10:00–10:15 rødt → start 10:15
         upd = m.get("updated")
         return {
             "heat_kw": h.get("heat_kw"), "flow": h.get("flow"), "price": h.get("price"),
@@ -388,6 +391,7 @@ class PlanNowSensor(SourceEntity, SensorEntity):
                                           "blokering_til": _ts_local(w["block_to"]), "kwh": w["kwh"]} if w else None)(p.get("preload_window")),
             "flow_boost": (lambda b: {"grader": b["k"], "rum": b["rooms"], "siden": _ts_local(b["t"])} if b else None)(p.get("flow_boost")),
             "flow_raise": p.get("flow_raise"),
+            "røde_perioder": [{"fra": _ts_local(a), "til": _ts_local(b)} for a, b in spans] or None,
             "max_pause": p.get("max_pause"), "comfort_offset": p.get("comfort_offset"),
             "history": [{"t": _ts_local(int(k)), "plan": v["p"], "price": v["pr"], "blocked": v["b"]}
                         for k, v in sorted((self.coordinator.plan_log.get(self.src.sid) or {}).items(), key=lambda kv: int(kv[0]))[-48:]],

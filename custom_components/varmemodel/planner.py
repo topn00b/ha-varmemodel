@@ -95,10 +95,13 @@ def flow_for(m: SourceModel, p: float, target: float) -> float:
     return round(2 * max(FLOW_MIN, min(FLOW_MAX, f))) / 2
 
 
-def _preload_window(hours: list[PlanHour], q: list[float], label: Callable[[int], str]) -> tuple[list[float], dict[str, Any] | None, str | None]:
+def _preload_window(hours: list[PlanHour], q: list[float], label: Callable[[int], str],
+                    red_spans: list[tuple[int, int]] | None = None) -> tuple[list[float], dict[str, Any] | None, str | None]:
     """Opvarmning før rød: de sammenhængende timer med varme lige op til den første blokering.
 
     Giver varmen time for time (0 uden for vinduet), vinduet (fra/til, blokeringen og mængden) og en tekst.
+    ``red_spans``: de røde perioder med kvarterer [(fra, til)] – blokeringens start og slut vises så præcist (fx 06:30–10:15),
+    selvom planen regner i hele timer.
     """
     n = len(hours)
     pq = [0.0] * n
@@ -115,6 +118,9 @@ def _preload_window(hours: list[PlanHour], q: list[float], label: Callable[[int]
         pq[i] = q[i]
     w = {"from": hours[a].ts, "to": hours[first].ts, "block_from": hours[first].ts, "block_to": hours[e].ts + 3600,
          "kwh": round(sum(q[a:first]), 2)}
+    ov = [(x, y) for x, y in red_spans or [] if x < w["block_to"] and y > w["block_from"]]
+    if ov:
+        w["block_from"], w["block_to"] = min(x for x, _ in ov), max(y for _, y in ov)
     clk = lambda ts: label(ts).split("kl. ")[-1]  # noqa: E731
     return pq, w, f"opvarmer {label(w['from'])}–{clk(w['to'])} før blokeringen {clk(w['block_from'])}–{clk(w['block_to'])}"
 
@@ -209,16 +215,17 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
               red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None, comfort: float = 0.0,
-              economy: float = 0.0, flow_raise_max: int = FLOW_BOOST_MAX) -> Plan:
+              economy: float = 0.0, flow_raise_max: int = FLOW_BOOST_MAX,
+              red_spans: list[tuple[int, int]] | None = None) -> Plan:
     """Planen. Forudsiger modellen, at et rum kommer under planens grænse, fordi fremløbsgrænsen holder varmen
     nede, hæves grænsen 1 °C ad gangen (højst ``FLOW_BOOST_MAX``) til rummene holder – i god tid, da gulvet er langsomt."""
     args = (hours, model, rooms, target, max_pause, past_q, label, boost, boost_hours, red_allowance, preload, comfort, economy)
-    base = _plan_once(*args, flow_margin)
+    base = _plan_once(*args, flow_margin, red_spans=red_spans)
     if flow_margin is None or base.deficit <= 0.05 or flow_raise_max <= 0:
         return base
     best = base
     for k in range(1, flow_raise_max + 1):
-        p = _plan_once(*args, flow_margin + k)
+        p = _plan_once(*args, flow_margin + k, red_spans=red_spans)
         # Kun hvis det hjælper mærkbart: mindst 0,1 °C mindre manko pr. grad hævet (ellers kan fremløbet ikke rette det)
         if p.deficit < best.deficit and base.deficit - p.deficit >= 0.1 * k:
             best, best.flow_raise = p, float(k)
@@ -233,7 +240,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
               red_allowance: float = 0.0, preload: float = 0.0, comfort: float = 0.0, economy: float = 0.0,
-              flow_margin: float | None = None) -> Plan:
+              flow_margin: float | None = None, red_spans: list[tuple[int, int]] | None = None) -> Plan:
     """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra.
 
     ``boost`` (»jeg fryser«) hæver målet og rummenes min. i de første ``boost_hours`` timer.
@@ -384,7 +391,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
         if s[k] < limit(r, k):
             plan.warnings.append(f"{r.name}: {s[k]:.1f} °C {lab(hours[k].ts)} er under planens grænse ({limit(r, k):.1f})")
             plan.deficit = max(plan.deficit, round(limit(r, k) - s[k], 2))
-    pq, plan.preload, pre_txt = _preload_window(hours, q, lab)
+    pq, plan.preload, pre_txt = _preload_window(hours, q, lab, red_spans)
     for i, h in enumerate(hours):
         p = round(q[i], 2)
         flow = flow_for(model, p, target) if p > 0 else None
@@ -413,7 +420,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
 def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0.3, e_max: float = 1.0,
                   past_q: list[float] | None = None, label: Callable[[int], str] | None = None,
                   preload: float = 0.0, comfort: float = 0.0, red_allowance: float = 0.0, economy: float = 0.0,
-                  eff_curve: list[tuple[float, float]] | None = None) -> Plan:
+                  eff_curve: list[tuple[float, float]] | None = None, red_spans: list[tuple[int, int]] | None = None) -> Plan:
     """Plan for en luft-luft-varmepumpe i kWh el pr. time (rummodellerne lærer grader pr. kWh el).
 
     ``eff_curve``: stigens lærte virkning [(kW el, °C pr. kWh el)] pr. trin. Med mindst tre punkter regner planen med, at
@@ -525,7 +532,7 @@ def make_air_plan(hours: list[PlanHour], rooms: list[PlanRoom], e_min: float = 0
         if r.t_now > r.t_max:
             notes.append(f"{r.name} er over loftet ({r.t_now:.1f} mod {r.t_max:.1f} °C) – varmer ikke, før det er faldet")
     sp = (min(r.t_max for r in capped) - 0.5) if capped else None
-    pq, plan.preload, pre_txt = _preload_window(hours, q, lab)
+    pq, plan.preload, pre_txt = _preload_window(hours, q, lab, red_spans)
     for i, h in enumerate(hours):
         e = round(q[i], 2)
         setpoint = None

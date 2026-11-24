@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.17.1';
+  const VERSION = '0.17.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -33,14 +33,15 @@
   const at = (h, e) => (st(h, e) || {}).attributes || {};
   const isOn = (h, e) => (st(h, e) || {}).state === 'on';
   const hh = (n) => String(n).padStart(2, '0');
-  const when = (iso) => {
-    const d = new Date(iso); if (isNaN(d)) return '–';
+  const dayTxt = (d) => {
     const a = new Date(d); a.setHours(0, 0, 0, 0); const b = new Date(); b.setHours(0, 0, 0, 0);
     const k = Math.round((a - b) / 864e5);
     const day = { '-1': 'i går ', 0: '', 1: 'i morgen ', 2: 'i overmorgen ' }[k];
-    return (day ?? d.toLocaleDateString('da-DK', { day: 'numeric', month: 'numeric' }) + ' ') + 'kl. ' + hh(d.getHours());
+    return day ?? d.toLocaleDateString('da-DK', { day: 'numeric', month: 'numeric' }) + ' ';
   };
-  const whenM = (iso) => { const d = new Date(iso); return isNaN(d) ? '–' : `${when(iso)}:${hh(d.getMinutes())}`; };
+  // »kl. 10« på hele timer, »kl. 10:15« midt i en time (rød og starttider følger kvartererne)
+  const when = (iso) => { const d = new Date(iso); return isNaN(d) ? '–' : `${dayTxt(d)}kl. ${hh(d.getHours())}${d.getMinutes() ? ':' + hh(d.getMinutes()) : ''}`; };
+  const whenM = (iso) => { const d = new Date(iso); return isNaN(d) ? '–' : `${dayTxt(d)}kl. ${hh(d.getHours())}:${hh(d.getMinutes())}`; };
   const kW = (h, e) => { const v = sv(h, e); if (v === null) return null; return String(at(h, e).unit_of_measurement || '').toLowerCase() === 'w' ? v / 1000 : v; };
   const GR = '#2e9e5b', YE = '#d29b12', RE = '#d6453d', BL = '#3b82c4', OR = '#f2711c', ORT = '#e8890c', PU = '#8b5cf6';
   const mixCol = (v) => (v === null ? null : v > 1.5 ? RE : v > 0.5 ? YE : v < -0.5 ? BL : GR);
@@ -246,7 +247,7 @@
   // Opvarmning før rød: tekst ud fra planens preload_window
   function preText(h, s, short) {
     const w = at(h, s.plan).preload_window; if (!w || !w.fra) return '';
-    const u = s.kind === 'hydronic' ? 'kWh varme' : 'kWh el'; const k = (t) => hh(new Date(t).getHours());
+    const u = s.kind === 'hydronic' ? 'kWh varme' : 'kWh el'; const k = (t) => { const d = new Date(t); return `${hh(d.getHours())}:${hh(d.getMinutes())}`; };
     const now = Date.now(); const on = Date.parse(w.fra) <= now && now < Date.parse(w.til);
     const t = `opvarmning før rød kl. ${k(w.fra)}–${k(w.til)}${on ? ' (nu)' : ''}` + (w.blokering_fra ? ` · rød ${k(w.blokering_fra)}–${k(w.blokering_til)}` : '');
     return short ? t : `${t} (${fmt(w.kwh)} ${u})`;
@@ -1258,6 +1259,8 @@
       const comp = ser(f.compressor);
       const pa = at(h, main.plan); const fut = (pa.plan || []).map((x) => ({ t: Date.parse(x.t), v: x.heat_kw > 0 ? num(x.flow) : null, b: !!x.blocked }));
       const past = (pa.history || []).map((x) => ({ t: Date.parse(x.t), b: !!x.blocked }));
+      // Røde perioder med kvarterer (fx 06:30–10:15); ældre versioner har kun timerne
+      const reds = (pa['røde_perioder'] || []).map((x) => [Date.parse(x.fra), Date.parse(x.til)]).filter((x) => !isNaN(x[0]) && !isNaN(x[1]));
       const vals = [...ud, ...ind, ...tg].map((x) => x.v).concat(fut.map((x) => x.v), [fs.loft, fs.mål]).filter((x) => x !== null && x !== undefined);
       const lo = Math.floor(Math.min(20, ...vals) / 2) * 2, hi = Math.ceil(Math.max(34, ...vals) / 2) * 2;
       const W = 640, H = 190, L = 30, R = 10, T = 8, B = 30;
@@ -1265,7 +1268,9 @@
       const hhmm = (t) => { const d = new Date(t); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
       let g = '';
       // Blokerede timer (rød), fortid og fremtid
-      for (const x of [...past, ...fut]) if (x.b && x.t + 3600000 > t0 && x.t < t1) g += `<rect x="${X(x.t)}" y="${T}" width="${Math.max(0, X(x.t + 3600000) - X(x.t))}" height="${H - T - B}" fill="#d6453d" opacity="0.12"/>`;
+      const redBox = (a, b) => `<rect x="${X(a)}" y="${T}" width="${Math.max(0, X(b) - X(a))}" height="${H - T - B}" fill="#d6453d" opacity="0.12"/>`;
+      if (reds.length) { for (const [a, b] of reds) if (b > t0 && a < t1) g += redBox(a, b); }
+      else for (const x of [...past, ...fut]) if (x.b && x.t + 3600000 > t0 && x.t < t1) g += redBox(x.t, x.t + 3600000);
       for (let v = lo; v <= hi; v += 2) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--divider-color,#888)" stroke-width="0.5"/>` + (v % 4 === 0 ? `<text x="${L - 4}" y="${Y(v) + 4}" text-anchor="end" class="ax">${v}</text>` : '');
       const h0 = Math.ceil(t0 / 3600000) * 3600000;
       for (let t = h0; t <= t1; t += 3 * 3600000) g += `<line x1="${X(t)}" x2="${X(t)}" y1="${T}" y2="${H - B}" stroke="var(--divider-color,#888)" stroke-width="0.3"/><text x="${X(t)}" y="${H - 8}" text-anchor="middle" class="ax">${hhmm(t)}</text>`;
