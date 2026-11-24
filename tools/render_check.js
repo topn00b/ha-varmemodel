@@ -7,7 +7,7 @@ const [dumpPath, jsPath = __dirname + '/../custom_components/varmemodel/frontend
 const dump = JSON.parse(fs.readFileSync(dumpPath, 'utf8')).map((x) => x.result);
 const [states, ereg, dreg, dash] = dump;
 
-class FakeEl { constructor() { this.dataset = {}; } attachShadow() { this.shadowRoot = { innerHTML: '', addEventListener() {}, getElementById() { return null; } }; return this.shadowRoot; }
+class FakeEl { constructor() { this.dataset = {}; } attachShadow() { this.shadowRoot = { innerHTML: '', addEventListener() {}, getElementById() { return null; }, querySelectorAll() { return []; } }; return this.shadowRoot; }
   dispatchEvent() {} addEventListener() {} get clientWidth() { return global.__W || 1400; } }
 const defs = {};
 global.HTMLElement = FakeEl;

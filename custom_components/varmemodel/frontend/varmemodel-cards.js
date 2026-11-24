@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.22.0';
+  const VERSION = '0.22.1';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -181,7 +181,7 @@
     get hass() { return this._h; }
     getCardSize() { return 8; }
     getGridOptions() { return { columns: 'full', min_columns: 6 }; }
-    _draw() {
+    _draw(force) {
       if (!this._h || !this._c) return;
       if (!this.shadowRoot) {
         const r = this.attachShadow({ mode: 'open' });
@@ -206,16 +206,24 @@
           this._h.callService(dom, svc, data); el.blur();
         });
         r.addEventListener('toggle', (ev) => { const d = ev.target; if (d && d.id) { if (d.open) this._open.add(d.id); else this._open.delete(d.id); } }, true);
+        // Brugeren ruller (i en bred tabel eller hen over kortet): vent med at tegne om, ellers hopper tabellen tilbage
+        const move = () => { this._moved = Date.now(); };
+        for (const ev of ['touchmove', 'wheel']) r.addEventListener(ev, move, { passive: true });
+        r.addEventListener('scroll', move, { passive: true, capture: true });
       }
-      // Tegn ikke om, mens en dropdown eller et felt er i brug (ellers lukker den)
+      // Tegn ikke om, mens en dropdown eller et felt er i brug (ellers lukker den) – eller mens der rulles
       const ae = this.shadowRoot.activeElement;
       if (ae && ['SELECT', 'INPUT'].includes(ae.tagName)) { clearTimeout(this._tmE); this._tmE = setTimeout(() => this._draw(), 1500); return; }
+      if (!force && Date.now() - (this._moved || 0) < 1200) { clearTimeout(this._tmE); this._tmE = setTimeout(() => this._draw(), 1300); return; }
       const vm = discover(this._h);
       let body;
       try { body = vm ? this.body(this._h, vm) : '<div class="mut">Varmemodel er ikke sat op endnu.</div>'; }
       catch (e) { body = `<div class="red">Fejl i kortet: ${esc(e && e.message)}</div>`; }
+      // Kortets egne rulleområder (brede tabeller på mobil) beholder deres position hen over en gentegning
+      const sc = [...this.shadowRoot.querySelectorAll('.wrap')].map((e) => [e.scrollLeft, e.scrollTop]);
       this.shadowRoot.innerHTML = `<style>${CSS}${this.css || ''}</style><ha-card>${this._c.title ? `<div class="h">${esc(this._c.title)}</div>` : ''}${body}</ha-card>`;
       for (const id of this._open) { const d = this.shadowRoot.getElementById(id); if (d) d.open = true; }
+      this.shadowRoot.querySelectorAll('.wrap').forEach((e, i) => { if (sc[i] && (sc[i][0] || sc[i][1])) { e.scrollLeft = sc[i][0]; e.scrollTop = sc[i][1]; } });
     }
   }
 
@@ -348,7 +356,7 @@
 
   class PlanCard extends Base {
     static getStubConfig() { return { floors: [{ name: 'Stueplan', width: 700, height: 500, rooms: [{ name: 'Stue', rect: [0, 0, 400, 300] }] }] }; }
-    _setK(k) { this._k = +k || 0; this._draw(); }
+    _setK(k) { this._k = +k || 0; this._draw(true); }
     body(h, vm) {
       const c = this._c; const k = this._k || 0; const hrs = c.hours || [0, 3, 6, 12];
       let o = `<div class="sm" style="margin:2px 0 8px">${hrs.map((x) => `<span class="pill${x === k ? ' on' : ''}" data-k="${x}">${x === 0 ? 'nu' : `om ${x} t`}</span>`).join(' ')}</div>`;
@@ -1053,7 +1061,7 @@
       g += this.legend(300, Math.max(main ? 590 : 740, H - 90), 4, air.length) + TX(300, Math.max(main ? 650 : 806, H - 30), 'Tryk på en værdi for detaljer og historik', 'm');
       return { w: 1500, h: H, g };
     }
-    _setK(k) { this._k = +k || 0; this._draw(); }
+    _setK(k) { this._k = +k || 0; this._draw(true); }
     // Styrer Varmemodel? En luft-luft-kilde siger det selv (kontakten »Varmemodel styrer«); ellers kortets dry_run
     dry(h, vm) {
       const air = vm.sources.length === 1 && vm.sources[0].kind !== 'hydronic' ? vm.sources[0] : null;
