@@ -1356,10 +1356,10 @@ class VarmemodelCoordinator:
             items = []
             for x in rows:
                 usual = f", normalt ned til {x['grænse'] + base[x['rum']]:.1f}" if base.get(x["rum"]) is not None else ""
-                items.append(f"{x['rum']} {x['temp']:.1f} °C {_clock(x['ts'])} (grænse {x['grænse']:.1f}{usual}"
+                items.append(f"- {x['rum']} {x['temp']:.1f} °C {_clock(x['ts'])} (grænse {x['grænse']:.1f}{usual}"
                              + (f", under fra {_clock(x['fra_ts'])}" if x["fra_ts"] < x["ts"] else "") + ")")
                 rows_all.append({"kilde": s.name, **x})
-            parts.append(f"{s.name}: " + "; ".join(items) + ".")
+            parts.append(f"{s.name}:\n" + "\n".join(items))
             last = max([last] + [x["ts"] + 3600 for x in rows])
             warn_cant |= any("kan ikke dækkes" in w for w in c["plan"].get("warnings") or [])
             if c["plan"].get("flow_raise"):
@@ -1372,10 +1372,12 @@ class VarmemodelCoordinator:
         if warn_cant:
             extra.append("Planen kan ikke dække behovet i de frie timer.")
         extra += raises
-        text = _dk_txt(" ".join(parts + extra)).strip()
+        text = _dk_txt("\n\n".join(parts) + ("\n\n" + " ".join(extra) if extra else "")).strip()
+        first = min(rows_all, key=lambda x: x["fra_ts"])
+        short = _dk_txt(", ".join(dict.fromkeys(x["rum"] for x in rows_all)) + f" under grænsen fra {_clock(first['fra_ts'])}.")
         g.update(t=round(now), tekst=text)
         self.hass.bus.async_fire(EVENT_VARSEL, {
-            "titel": "Varme: problem inden for 3 timer", "type": "snart",
+            "titel": "Varme: problem inden for 3 timer", "type": "snart", "kort": short,
             "kilde": " og ".join(c["s"].name for c in cands), "nye": [n for c in cands for n in c["new"]],
             "værre": [n for c in cands for n in c["worse"]], "tekst": text,
             "problemer": [{"kilde": x["kilde"], "rum": x["rum"], "kl": _ts_local_iso(x["ts"]), "fra": _ts_local_iso(x["fra_ts"]),
@@ -1389,6 +1391,8 @@ class VarmemodelCoordinator:
         før døgnets første røde kvarter. Den nævner de røde perioder og planens laveste temperaturer for døgnets rum, og
         de rum markeres som varslet (ingen nødbesked bagefter for det samme)."""
         g = self.air.setdefault("varsel", {})
+        if "dage" not in g and not self._red_q:
+            return  # lige efter en genstart: de røde kvarterer er ikke læst endnu – første kørsel venter (ellers blev kendte dage sendt)
         first_run = "dage" not in g
         sent: list[str] = g.setdefault("dage", [])
         today = dt_util.now().date()
@@ -1420,16 +1424,21 @@ class VarmemodelCoordinator:
                         and min(qs) - 6 * 3600 <= x["ts"] <= day_end + 6 * 3600]
                 for x in sorted(mine, key=lambda x: -x["under"]):
                     usual = f", normalt ned til {x['grænse'] + base[x['rum']]:.1f}" if base.get(x["rum"]) is not None else ""
-                    items.append(f"{x['rum']} {x['temp']:.1f} °C {_clock(x['ts'])} (grænse {x['grænse']:.1f}{usual})")
+                    items.append(f"- {x['rum']} {x['temp']:.1f} °C {_clock(x['ts'])} (grænse {x['grænse']:.1f}{usual})")
                     st.setdefault("rum", {})[x["rum"]] = x["under"]
                     rows.append({"kilde": src.name, **x})
-            text = _dk_txt(f"{label}: {hrs:g} røde timer ({span_txt}). "
-                           + ("Planen forventer: " + "; ".join(items) + "." if items else "Planen forventer, at rummene holder."))
+            # Lang tekst (Home Assistants notifikationer, markdown) og kort tekst (telefonen)
+            text = _dk_txt(f"{label}: {hrs:g} røde timer ({span_txt}).\n\n"
+                           + ("Planen forventer:\n" + "\n".join(items) if items else "Planen forventer, at rummene holder."))
+            worst = max(rows, key=lambda x: x["under"]) if rows else None
+            short = _dk_txt(f"{hrs:g} røde timer ({span_txt}). "
+                            + (f"{len(rows)} rum under grænsen – værst {worst['rum']} {worst['temp']:.1f} °C." if worst
+                               else "Rummene forventes at holde."))
             sent.append(d)
             g["dage"] = sent[-10:]
             self.hass.bus.async_fire(EVENT_VARSEL, {
                 "titel": f"Varme: lang rød dag {label.lower()}", "type": "rød_dag", "kilde": "Huset", "dato": d, "røde_timer": hrs,
-                "tekst": text, "nye": [], "værre": [],
+                "tekst": text, "kort": short, "nye": [], "værre": [],
                 "problemer": [{"kilde": x["kilde"], "rum": x["rum"], "kl": _ts_local_iso(x["ts"]), "fra": _ts_local_iso(x["fra_ts"]),
                                "temp": x["temp"], "grænse": x["grænse"], "under": x["under"], "blokeret": x["blokeret"]} for x in rows],
                 "blokeret": [{"fra": _ts_local_iso(a), "til": _ts_local_iso(b)} for a, b in spans],

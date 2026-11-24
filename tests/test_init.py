@@ -1137,7 +1137,8 @@ async def test_varsel_urgent_only(ha: HomeAssistant) -> None:
     await run()
     assert len(events) == 1 and events[0]["nye"] == ["Gang"] and events[0]["titel"] == "Varme: problem inden for 3 timer"
     t = events[0]["tekst"]
-    assert t.startswith("Luft-vand: Gang 19,7 °C") and "Blokeret" in t and "kan ikke dække behovet" in t and "hæver allerede fremløbet 5 °C" in t
+    assert t.startswith("Luft-vand:\n- Gang 19,7 °C") and "Blokeret" in t and "kan ikke dække behovet" in t and "hæver allerede fremløbet 5 °C" in t
+    assert events[0]["kort"].startswith("Gang under grænsen fra")
     await run()
     assert len(events) == 1  # samme problem: ingen ny besked
     plan["problems"].append(dict(prob, rum="Stue", fra_ts=h + 2 * 3600))
@@ -1212,12 +1213,18 @@ async def test_red_day_message(ha: HomeAssistant) -> None:
         c._red_day_msg({s.sid: plan}, now)  # noqa: SLF001
         c._varsel_all({s.sid: plan}, now)  # noqa: SLF001
         await ha.async_block_till_done()
+    red = c._red_q  # noqa: SLF001
+    c._red_q = set()  # noqa: SLF001 – lige efter en genstart: ingen røde data endnu → første kørsel venter
+    await run()
+    assert events == [] and "dage" not in c.air.get("varsel", {})
+    c._red_q = red  # noqa: SLF001
     await run()
     assert events == [] and d1.isoformat() in c.air["varsel"]["dage"]  # første kørsel: kendt dag, ingen besked
     c.air["varsel"] = {"dage": []}
     await run()
     assert len(events) == 1 and events[0]["titel"] == "Varme: lang rød dag i morgen" and events[0]["røde_timer"] == 11
-    assert events[0]["tekst"].startswith("I morgen: 11 røde timer (06:30–10:15, 14:00–21:15). Planen forventer: Gang 18,9 °C")
+    assert events[0]["tekst"].startswith("I morgen: 11 røde timer (06:30–10:15, 14:00–21:15).\n\nPlanen forventer:\n- Gang 18,9 °C")
+    assert events[0]["kort"] == "11 røde timer (06:30–10:15, 14:00–21:15). 1 rum under grænsen – værst Gang 18,9 °C."
     await run()
     assert len(events) == 1  # én gang pr. døgn
     c.air["varsel"] = {"dage": []}

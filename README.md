@@ -120,7 +120,7 @@ For hver vandbåren varmekilde laves en plan for de næste op til 36 timer, hver
 
 **Søg laveste fremløb (0.16.0):** vælg *Fremløb efter start* = *søg laveste fremløb* på den vandbårne kilde. Varmepumpen starter ved retur + 3 °C (mindst 20 °C) og holder målet lavt, så længe rummene holder sig over gulvet. Målet ændres stille og roligt efter rummenes margen og målte tendens (2 timer): +1 °C pr. time, når et rum er på vej under gulvet inden for 3 timer; +2 °C pr. halve time, når et rum er under gulvet og ikke på vej op; +1 °C, når kompressoren stopper (målet er under varmepumpens laveste ydelse); −1 °C hver anden time, når alle rum er mindst 0,5 °C over gulvet og stabile – aldrig over loftet (det lærte fremløb + margen). **Planen regner med søgningens mål** (én sandhed): forudsigelser, »ventet«, banner og anlægsboks passer med det, der faktisk kører, og planen lægger flere timer med lavt fremløb. **Forvarmning går forud:** kan flere timer ved søgningens mål ikke holde rummene gennem en blokering, hæver planen fremløbet (højst 5 °C over målet, aldrig over loftet) – vist som »forvarmer«; søgningen fortsætter bagefter. Et mål, der har holdt alle rum over gulvet i 3 timer, gemmes som *lært laveste fremløb* for udetemperaturen (5 °C-bånd). Anlæg-kortet viser status i klart sprog, mål/målt/loft, en graf 12 timer tilbage og frem (målt fremløb og retur, målet, planens timer, kompressor i drift, blokerede timer), det lærte og »Sådan virker det«; i rumlisten viser en pil rummets tendens, og ◆ markerer rummet, der bestemmer.
 
-**Besked forud (0.19–0.20):** Varmemodel fyrer hændelsen `varmemodel_varsel` med en færdig tekst (`titel`, `tekst`) og data (`type`, `kilde`, `problemer`, `blokeret`, ved lange røde dage også `dato` og `røde_timer`) – send den videre med en automation (se nedenfor). To slags:
+**Besked forud (0.19–0.20):** Varmemodel fyrer hændelsen `varmemodel_varsel` med færdige tekster – `titel`, `kort` (én linje til telefonen) og `tekst` (detaljer, markdown, til Home Assistants notifikationer) – og data (`type`, `kilde`, `problemer`, `blokeret`, ved lange røde dage også `dato` og `røde_timer`) – send den videre med en automation (se nedenfor). To slags:
 - **Lang rød dag** (`type: rød_dag`): røde timer pr. døgn talt pr. kvarter (blokerede timer og blokerede kvarterer, fx over et prisloft). Over 8 røde timer er der noget at være opmærksom på – **én besked pr. døgn**, så snart det er kendt (typisk når morgendagens priser kommer) og før døgnets første røde kvarter. Den nævner de røde perioder og planens laveste temperaturer for de rum, der forudsiges under grænsen, med »normalt ned til« (rummets sædvanlige laveste). Dage, der allerede er kendt, når funktionen tages i brug, springes over.
 - **Problem inden for 3 timer** (`type: snart`): en nødbesked, når planen forudser et nyt, usædvanligt problem, der begynder inden for 3 timer – et rum mindst 0,2 °C under grænsen og mindst 0,3 °C koldere end dets sædvanlige dårlige dag (20 %-fraktilen af døgnenes laveste time minus gulvet, 14 døgns langtidsstatistik, regnet én gang i døgnet). Én samlet besked for huset, højst én pr. 6 timer, ingen gentagelser; rum, der allerede stod i døgnets besked, varsles ikke igen.
 Plan-sensoren har attributten `problemer` (samme rum som advarslerne).
@@ -131,10 +131,15 @@ Plan-sensoren har attributten `problemer` (samme rum som advarslerne).
     - trigger: event
       event_type: varmemodel_varsel
   actions:
+    - action: persistent_notification.create
+      data:
+        notification_id: "varmemodel_{{ trigger.event.data.type }}_{{ trigger.event.data.dato | default('') }}"
+        title: "{{ trigger.event.data.titel }}"
+        message: "{{ trigger.event.data.tekst }}"
     - action: notify.notify
       data:
-        title: "{{ trigger.event.data.titel | default('Varme: problem forude') }}"
-        message: "{{ trigger.event.data.tekst }}"
+        title: "{{ trigger.event.data.titel }}"
+        message: "{{ trigger.event.data.kort }} Detaljer i Home Assistant."
   mode: queued
 ```
 
