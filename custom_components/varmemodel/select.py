@@ -9,13 +9,14 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import VarmemodelConfigEntry
 from homeassistant.const import EntityCategory
 
-from .const import AIR_SELECTS, CONF_ONOFF_TARGET, MODE_CALIBRATED, MODE_FROZEN, SOFT_OPTIONS, SOFT_START
+from .const import AIR_SELECTS, CONF_ONOFF_TARGET, MODE_CALIBRATED, MODE_FROZEN, PRIORITY, SOFT_OPTIONS, SOFT_START
 from .entity import VarmemodelEntity
+from .planner import PRIORITIES
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     c = entry.runtime_data
-    async_add_entities([ModeSelect(c, "mode")])
+    async_add_entities([ModeSelect(c, "mode"), PrioritySelect(c, PRIORITY)])
     from .sensor import SourceEntity  # noqa: PLC0415 – undgår cirkulær import
 
     class AirSelect(SourceEntity, SelectEntity):
@@ -75,3 +76,17 @@ class ModeSelect(VarmemodelEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         await self.coordinator.async_set_mode(option)
+
+
+class PrioritySelect(VarmemodelEntity, SelectEntity):
+    """Husets prioritet: økonomi – balance – komfort. Planen regner selv ud, hvad hvert trin koster og giver, og vælger
+    efter det (ingen prisgrænser) – trinnenes valg lige nu står i »Plan nu« (prioritet)."""
+
+    _attr_options = list(PRIORITIES)
+
+    @property
+    def current_option(self) -> str:
+        return self.coordinator.priority()
+
+    async def async_select_option(self, option: str) -> None:
+        await self.coordinator.async_set_priority(option)

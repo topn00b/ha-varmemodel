@@ -206,6 +206,14 @@
           "frozen": "Frozen"
         }
       },
+      "priority": {
+        "name": "Priority",
+        "state": {
+          "economy": "economy",
+          "balance": "balance",
+          "comfort": "comfort"
+        }
+      },
       "air_fan_day": {
         "name": "Max fan, day"
       },

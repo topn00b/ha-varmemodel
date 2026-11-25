@@ -580,3 +580,82 @@ def test_plan_input_dump_keeps_partial_hours() -> None:
     assert d["hours"][6]["free"] == 0.5 and d["hours"][6]["free_end"] is False and "free" not in d["hours"][5]
     a, b = make_plan(hs, M, [room], 20.0, past_q=[4.0] * 6), plan_from_dump(d)
     assert [x["heat_kw"] for x in a.hours] == [x["heat_kw"] for x in b.hours] and b.hours[6]["heat_kw"] == 3.0
+
+
+def _fake_plans(rows: list[dict[str, tuple[float, float, int]]], costs: list[float] | None = None):
+    """Planer med kendte mankoer: pr. plan {rum: (største manko, gradtimer, timer under)} – til at afprøve valget alene."""
+    from custom_components.varmemodel.planner import Plan
+
+    out = []
+    for i, x in enumerate(rows):
+        p = Plan(cost_kr=(costs[i] if costs else 40.0 + 4 * i), heat_kwh=30.0 + 2 * i, el_kwh=10.0 + i)
+        p.problems = [{"rum": r, "ts": 21 * 3600, "temp": round(20.0 - u, 1), "grænse": 20.0, "under": u, "fra_ts": 0, "blokeret": False,
+                       "gh": gh, "timer": n} for r, (u, gh, n) in x.items() if u > 0]
+        p.deficit = max((u for u, _gh, _n in x.values()), default=0.0)
+        out.append(p)
+    return out
+
+
+def test_priority_buys_a_share_of_what_can_be_gained() -> None:
+    """Prioritet uden prisgrænser: for et rum, der ikke kan holde sin grænse gennem en blokering, køber økonomi intet,
+    balance halvdelen og komfort det hele af det, et højere fremløb kan hente – målt som gennemsnitlig manko i de timer,
+    rummet er under (dybde og varighed), og kun når det er mere end følernes 0,1 °C."""
+    from custom_components.varmemodel.planner import raise_choices
+
+    # Stue: 9 timer under; gennemsnitlig manko 0,28 → 0,18 → 0,11 → 0,09 → 0,07 → 0,06 (tal fra et rigtigt hus 25/11-2026)
+    stue = [(0.38, 2.48, 9), (0.34, 1.65, 9), (0.33, 1.00, 9), (0.32, 0.83, 9), (0.31, 0.64, 9), (0.28, 0.51, 9)]
+    # Gang: svag kreds – hævningerne flytter den næsten ikke (0,37 → 0,30 i snit over 7 timer er under 0,1 °C)
+    gang = [(0.54, 2.58, 7), (0.54, 2.51, 7), (0.53, 2.40, 7), (0.53, 2.32, 7), (0.53, 2.15, 7), (0.52, 2.07, 7)]
+    plans = _fake_plans([{"Stue": s, "Gang": g} for s, g in zip(stue, gang)])
+    assert raise_choices(plans) == {"economy": 0, "balance": 1, "comfort": 3}
+    # Gang alene: intet, følerne kan måle – ingen hævning på noget trin
+    assert raise_choices(_fake_plans([{"Gang": g} for g in gang])) == {"economy": 0, "balance": 0, "comfort": 0}
+    # Kun én hævning at vælge: komfort tager den, når den flytter rummet mere end opløsningen
+    assert raise_choices(plans[:2])["comfort"] == 0 and raise_choices(plans[:3]) == {"economy": 0, "balance": 1, "comfort": 2}
+
+
+def test_priority_always_saves_a_room_that_can_hold_its_limit() -> None:
+    """Et rum, en hævning kan bringe helt op til grænsen, bringes derop på alle trin – også økonomi (grænsen er brugerens
+    krav). Et andet rum, der ikke kan reddes, får derudover sin andel efter trinnet."""
+    from custom_components.varmemodel.planner import raise_choices
+
+    a = [(0.30, 0.9, 4), (0.12, 0.3, 4), (0.0, 0.0, 0), (0.0, 0.0, 0), (0.0, 0.0, 0)]  # holder fra +2 °C
+    b = [(0.80, 6.4, 8), (0.75, 5.6, 8), (0.70, 4.8, 8), (0.60, 3.2, 8), (0.50, 1.6, 8)]  # kan ikke holde: 0,8 → 0,2 i snit
+    assert raise_choices(_fake_plans([{"A": x} for x in a])) == {"economy": 2, "balance": 2, "comfort": 2}
+    assert raise_choices(_fake_plans([{"A": x, "B": y} for x, y in zip(a, b)])) == {"economy": 2, "balance": 3, "comfort": 4}
+
+
+def test_priority_never_picks_a_raise_that_makes_the_house_colder() -> None:
+    """En hævning, der gør det værste rum koldere end uden hævning (planlæggerens støj), vælges aldrig – heller ikke når et
+    andet rum vinder på den. De første ``free`` grader er almindelig drift op til loftet: dem bruger alle trin."""
+    from custom_components.varmemodel.planner import raise_choices
+
+    stue = [(0.50, 4.0, 8), (0.45, 3.2, 8), (0.40, 2.4, 8), (0.20, 0.8, 8)]
+    kold = [(0.60, 1.2, 2), (0.60, 1.2, 2), (0.60, 1.2, 2), (0.75, 1.5, 2)]  # +3 °C gør det værste rum 0,15 °C koldere
+    plans = _fake_plans([{"Stue": s, "Kold": k} for s, k in zip(stue, kold)])
+    assert raise_choices(plans) == {"economy": 0, "balance": 1, "comfort": 2}
+    # Loftet ligger 2 °C over planens udgangspunkt (søgningen står lavt): også økonomi går derop, når det hjælper
+    assert raise_choices(plans, free=2) == {"economy": 2, "balance": 2, "comfort": 2}
+    assert raise_choices(plans, free=1) == {"economy": 1, "balance": 1, "comfort": 2}
+
+
+def test_priority_in_the_plan() -> None:
+    """Hele planen: rummet kan ikke holde sin grænse gennem 14 timers blokering uanset fremløb. Økonomi lader fremløbet stå,
+    balance og komfort hæver – komfort mindst lige så meget som balance – og de tre valg står i planen med pris og virkning."""
+    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, emission_kw_k=0.283, flow_c0=30.0, flow_slope=-0.3)
+    hs = hours(26, price=lambda i: 2.0, t_out=lambda i: 0.0, blocked=lambda i: 9 <= i <= 22)
+    room = PlanRoom(name="Rum A", t_now=19.6, t_min=20.0, heat_now=0.04, heat_delayed=0.04, cool_per_hk=0.0067, margin=0.2)
+    kw = {"flow_margin": 0.0, "red_allowance": 1.0, "flow_raise_max": 10}
+    eco, bal, com = (make_plan(hs, m, [room], 20.5, priority=x, **kw) for x in ("economy", "balance", "comfort"))
+    assert eco.flow_raise == 0 and 0 < bal.flow_raise <= com.flow_raise
+    assert eco.cost_kr < bal.cost_kr <= com.cost_kr and eco.heat_kwh < com.heat_kwh
+    assert [c["trin"] for c in com.choices] == ["economy", "balance", "comfort"]
+    assert [c["hævet"] for c in com.choices] == [0, int(bal.flow_raise), int(com.flow_raise)] and com.choices == eco.choices
+    assert com.choices[0]["kr"] == eco.cost_kr and com.choices[2]["kr"] == com.cost_kr and com.choices[0]["rum"] == "Rum A"
+    assert com.choices[2]["timer"] <= com.choices[0]["timer"] and com.choices[2]["snit"] < com.choices[1]["snit"] <= com.choices[0]["snit"]
+    assert "det hjælper (Rum A i snit 0." in com.reason
+    assert f"fremløbsgrænsen hævet {com.flow_raise:.0f} °C (komfort, +" in com.reason and "fremløbsgrænsen hævet" not in eco.reason
+    # Uden trin (ældre kald) vælges som økonomi; holder rummene, er der intet at vælge imellem
+    assert make_plan(hs, m, [room], 20.5, **kw).flow_raise == 0
+    warm = PlanRoom(name="Rum A", t_now=21.5, t_min=19.0, heat_now=0.04, heat_delayed=0.04, cool_per_hk=0.0067, margin=0.2)
+    assert make_plan(hs, m, [warm], 20.5, priority="comfort", **kw).choices == []

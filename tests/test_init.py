@@ -1864,3 +1864,68 @@ def test_flow_cap_note() -> None:
     assert flow_cap_note(hrs, w, 4.0) == ""  # varmepumpen selv er grænsen
     assert flow_cap_note([{"heat_kw": 0.0, "flow": None}], w, 5.71) == ""  # ingen frie timer
     assert flow_cap_note([{"heat_kw": 3.0, "flow": None}], w, 5.71) == " – med planens fremløb tager gulvet højst 3.0 kW pr. time (varmepumpen kan 5.7 kW)"
+
+
+@pytest.mark.parametrize("expected_lingering_timers", [True])
+async def test_priority_reaches_the_plan_and_preheats_above_the_ceiling(ha: HomeAssistant) -> None:
+    """Prioritet (økonomi – balance – komfort) er husets valg i en dropdown: den følger med til planen sammen med, hvor
+    højt fremløbet kan hæves (det fremløb, varmepumpens største effekt giver – højst varmepumpens eget maksimum), og hvor
+    mange af graderne der er almindelig drift op til loftet. Vælger planen en hævning over loftet, skrives den til
+    varmepumpen, søgningens visning følger med, og »Plan nu« viser de tre trins valg."""
+    import json
+    import math
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from custom_components.varmemodel import coordinator as cm
+
+    c, s = await _lv_entry(ha)
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    c.settings[f"{s.sid}.flow_control"] = True
+    writes: list = []
+    ha.services.async_register("climate", "set_temperature", lambda call: writes.append(call.data["temperature"]))
+    sel = next(x for x in ha.states.async_all("select") if x.attributes.get("options") == ["economy", "balance", "comfort"])
+    assert sel.state == "balance" and c.priority() == "balance"
+    calls: list = []
+    real = cm.make_plan
+
+    def rec(*a, **k):
+        calls.append(k)
+        p = real(*a, **k)
+        if k.get("priority") == "comfort":  # komfort: 2 °C over loftet
+            p.flow_raise = float(k["flow_raise_free"] + 2)
+            p.choices = [{"trin": x, "hævet": k["flow_raise_free"] + n, "kr": 40.0 + 5 * n, "kwh": 30.0, "el_kwh": 10.0, "rum": "Rum A",
+                          "under": 0.4 - 0.1 * n, "temp": 19.6 + 0.1 * n, "ts": 1_795_000_000, "timer": 9 - n}
+                         for n, x in enumerate(("economy", "balance", "comfort"))]
+        return p
+
+    with patch.object(cm, "make_plan", rec):
+        await c.async_replan()
+        hs = c.air[f"hydro:{s.sid}"]
+        k = calls[-1]
+        # uden kalibrering: lært fremløb 34 − 0,6·ude (−2 °C) = 35,2 = loftet; søgningen starter ved retur + 3 = 24 °C
+        assert hs["low_loft"] == 35.2 and k["priority"] == "balance" and k["flow_raise_free"] == math.ceil(35.2 - 24)
+        # højst det fremløb, varmepumpens største effekt giver gennem gulvet: 20,5 + 6 kW ÷ 0,25 kW/K = 44,5 °C
+        assert hs["low_top"] == 44.5 and k["flow_raise_max"] == math.ceil(44.5 - 24)
+        for key in ("since_flow", "last_change"):  # kommandoens fremløb ændres højst hvert kvarter: lad kvarteret være gået
+            if c.commands[s.sid].get(key):
+                c.commands[s.sid][key] -= 3600
+        await ha.services.async_call("select", "select_option", {"entity_id": sel.entity_id, "option": "comfort"}, blocking=True)
+        await ha.async_block_till_done()
+    assert c.priority() == "comfort" and calls[-1]["priority"] == "comfort" and c.settings["priority"] == "comfort"
+    assert ha.states.get(sel.entity_id).state == "comfort"
+    # forvarmningen over loftet står i planens timer og skrives til varmepumpen (24 + 14 = 38 °C; loftet er 35,2)
+    assert {x["flow"] for x in c.plans[s.sid]["hours"] if x["heat_kw"]} == {38.0} and writes[-1] == 38.0
+    v = c.flow_search(s)
+    assert v["forvarmer"] == 14.0 and v["mål_nu"] == 38.0 and v["loft"] == 35.2
+    st = next(x for x in ha.states.async_all("sensor") if x.entity_id.endswith("plan_now"))
+    pr = st.attributes["prioritet"]
+    assert pr["valgt"] == "comfort" and [x["trin"] for x in pr["trin"]] == ["economy", "balance", "comfort"]
+    assert pr["trin"][2]["hævet"] == 14 and pr["trin"][0]["kl"].startswith("20") and "ts" not in pr["trin"][0]
+    # varmepumpens eget maksimum for fremløbsmålet er grænsen, når det ligger lavere
+    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 33, "min_temp": 20, "max_temp": 40})
+    model = c.plan_inputs[s.sid][1]
+    assert c._flow_top(s, model, 20.5) == 40.0  # noqa: SLF001
+    # udgaven gemmes med tallene, så en opdatering kalibrerer ved opstart (en rettelse i kalibreringen virker straks)
+    ver = json.loads((Path(cm.__file__).parent / "manifest.json").read_text(encoding="utf-8"))["version"]
+    assert c._data()["sw"] == ver  # noqa: SLF001

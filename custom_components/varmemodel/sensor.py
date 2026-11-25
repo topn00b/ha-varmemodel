@@ -405,6 +405,10 @@ class PlanNowSensor(SourceEntity, SensorEntity):
                                           "blokering_til": _ts_local(w["block_to"]), "kwh": w["kwh"]} if w else None)(p.get("preload_window")),
             "flow_boost": (lambda b: {"grader": b["k"], "rum": b["rooms"], "siden": _ts_local(b["t"])} if b else None)(p.get("flow_boost")),
             "flow_raise": p.get("flow_raise"),
+            # Prioriteten og hvad hvert trin ville vælge lige nu (pris og virkning) – tom liste: alle trin giver samme plan
+            "prioritet": ({"valgt": p.get("priority"),
+                           "trin": [{**{k: v for k, v in c.items() if k != "ts"}, "kl": _ts_local(c.get("ts"))} for c in p.get("choices") or []]}
+                          if p.get("priority") else None),
             "røde_perioder": [{"fra": _ts_local(a), "til": _ts_local(b)} for a, b in spans] or None,
             "max_pause": p.get("max_pause"), "comfort_offset": p.get("comfort_offset"),
             "history": [{"t": _ts_local(int(k)), "plan": v["p"], "price": v["pr"], "blocked": v["b"]}

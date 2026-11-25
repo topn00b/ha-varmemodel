@@ -81,6 +81,10 @@ class Plan:
     problems: list[dict[str, Any]] = field(default_factory=list)
     trimmed_kwh: float = 0.0  # varme skåret fra husets behov, fordi rummene forudsiges at holde uden
     flow_raise: float = 0.0  # så mange °C er fremløbsgrænsen hævet, fordi rummene ellers forudsiges under grænsen  # første forvarmning: fra/til, blokeringen den dækker og mængden
+    # Hvad hvert trin af prioriteten ville vælge (til visning): trin, hævet (°C), kr, kwh, el_kwh og rummet, der afgør det
+    # (rum, snit = gennemsnitlig manko, under/temp/ts = det laveste punkt, timer under grænsen) – tom, når alle rum holder,
+    # eller fremløbet ikke kan hæves
+    choices: list[dict[str, Any]] = field(default_factory=list)
 
 
 STEP = 0.25  # kWh pr. portion
@@ -144,6 +148,14 @@ def _preload_window(hours: list[PlanHour], q: list[float], label: Callable[[int]
 
 
 FLOW_BOOST_MAX = 5  # fremløb for lavt: højst så mange °C over grænsen
+# Prioritet (økonomi – balance – komfort): hvor meget af det opnåelige planen køber, når et rum forudsiges under sin grænse,
+# og et højere fremløb kan rette det (forvarmning før en blokering, genopvarmning efter). Der er ingen prisgrænser: planen
+# regner alle hævninger igennem – op til det, varmepumpen kan yde – og vælger den laveste, der når trinnets andel af det, der
+# kan hentes. Et rum, der kan bringes helt op til sin grænse, bringes derop på alle trin.
+PRIORITIES = ("economy", "balance", "comfort")
+PRIORITY_SHARE = {"economy": 0.0, "balance": 0.5, "comfort": 1.0}
+PRIORITY_NAMES = {"economy": "økonomi", "balance": "balance", "comfort": "komfort"}
+TEMP_RES = 0.1  # °C: rumfølernes opløsning – mindre forskelle regnes ikke som en virkning
 # Gulvvarme er langsom (op mod 5–6 timer, før en ændring kan mærkes): reserven venter 6 timer og ændrer højst hver 6. time
 FLOW_LOW_OPEN_S = 6 * 3600
 FLOW_BOOST_STEP_S = 6 * 3600
@@ -234,48 +246,124 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
               red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None, comfort: float = 0.0,
               economy: float = 0.0, flow_raise_max: int = FLOW_BOOST_MAX,
-              red_spans: list[tuple[int, int]] | None = None, running: bool | None = None) -> Plan:
-    """Planen. Forudsiger modellen, at et rum kommer under planens grænse, fordi fremløbsgrænsen holder varmen
-    nede, hæves grænsen 1 °C ad gangen (højst ``FLOW_BOOST_MAX``) til rummene holder – i god tid, da gulvet er langsomt.
+              red_spans: list[tuple[int, int]] | None = None, running: bool | None = None,
+              priority: str = "economy", flow_raise_free: int = 0) -> Plan:
+    """Planen. Forudsiger modellen, at et rum kommer under planens grænse, fordi fremløbsgrænsen holder varmen nede,
+    regnes planen igennem med grænsen hævet 1 °C ad gangen (højst ``flow_raise_max``, som kalderen sætter efter det,
+    varmepumpen kan yde) – i god tid, da gulvet er langsomt. ``priority`` (økonomi – balance – komfort) afgør, hvilken
+    hævning der vælges (se ``raise_choices``); de tre trins valg står i ``choices``, så prisen og virkningen kan vises.
 
+    ``flow_raise_free``: så mange af graderne hører til almindelig drift (op til fremløbsloftet, når planen regner med et
+    lavere mål fra en søgning efter laveste fremløb): dem bruger alle trin, når de hjælper.
     ``running``: varmekilden kører lige nu (afgør, om en delvist fri første time kan fortsætte kørslen); None = ukendt, så
     bruges den målte varme i timen før."""
     args = (hours, model, rooms, target, max_pause, past_q, label, boost, boost_hours, red_allowance, preload, comfort, economy)
     base = _plan_once(*args, flow_margin, red_spans=red_spans, running=running)
     if flow_margin is None or base.deficit <= 0.05 or flow_raise_max <= 0:
         return base
-    def under(p: Plan) -> dict[str, float]:
-        """Hvert rums største manko under grænsen (°C)."""
-        return {x["rum"]: x["under"] for x in p.problems}
-
-    best, kb = base, 0
+    plans = [base]
     for k in range(1, flow_raise_max + 1):
         p = _plan_once(*args, flow_margin + k, red_spans=red_spans, running=running)
-        ub, u = under(best), under(p)
-        # Kun hvis det hjælper mærkbart: hver grad ud over den forrige hævning skal give mindst 0,1 °C mindre manko
-        # (ellers kan fremløbet ikke rette det) – for huset (det værste rum) eller for mindst ét rum. Et rum med en svag
-        # kreds må ikke spærre for de andre: før en lang blokering ligger det værste punkt ofte lige efter blokeringen,
-        # hvor forvarmningen næsten ikke når frem, mens andre rum får meget ud af den (24/11-2026: +5 °C gav Stue 0,8 °C,
-        # Gang 0,3 °C).
-        gain = max((ub[r] - u.get(r, 0.0) for r in ub), default=0.0)
-        if (p.deficit <= best.deficit + 1e-9 and sum(u.values()) < sum(ub.values()) - 1e-9
-                and max(best.deficit - p.deficit, gain) >= 0.1 * (k - kb)):
-            best, kb = p, k
-            best.flow_raise = float(k)
-        elif [x["heat_kw"] for x in p.hours] == [x["heat_kw"] for x in best.hours]:
-            # Graden ændrede intet i planen: grænsen ligger under det fremløb, varmepumpens laveste ydelse alligevel giver
-            # (fx når en søgning efter laveste fremløb lige er startet lavt). De grader koster intet og tæller ikke med i
-            # kravet til de næste – ellers kunne planen aldrig forvarme fra et lavt udgangspunkt (24/11-2026).
-            kb = k
+        plans.append(p)
         if p.deficit <= 0.05:
-            break
-    if best.flow_raise:
-        u0, ub = under(base), under(best)
-        rum = max(u0, key=lambda r: u0[r] - ub.get(r, 0.0))
-        best.reason += (f" – fremløbsgrænsen hævet {best.flow_raise:.0f} °C, så rummene forudsiges at holde" if best.deficit <= 0.05
-                        else f" – fremløbsgrænsen hævet {best.flow_raise:.0f} °C: rummene holder ikke helt, men det hjælper"
-                             f" ({rum} {u0[rum] - ub.get(rum, 0.0):.1f} °C mindre under grænsen)")
+            break  # alle rum holder: flere grader giver intet
+        if model.emission_kw_k > 0 and all((model.flow_c0 + model.flow_slope * h.t_out + flow_margin + k - target)
+                                           * model.emission_kw_k >= model.p_max for h in hours):
+            break  # grænsen ligger over det fremløb, varmepumpens største effekt giver: flere grader ændrer intet
+    ks = raise_choices(plans, flow_raise_free)
+    k = ks.get(priority, ks["economy"])
+    best = plans[k]
+    best.flow_raise = float(k)
+    best.choices = _choice_rows(plans, ks)
+    if k:
+        # Rummet, der får mest ud af hævningen – målt som gennemsnitlig manko i de timer, det er under grænsen
+        names, _worst, mean, _hrs = _short([base, best])
+        rum = max(names, key=lambda r: mean[0][r] - mean[1][r])
+        kr = best.cost_kr - base.cost_kr
+        # Trinnet nævnes, når det har betydning (de tre trin vælger ikke det samme)
+        why = f"{PRIORITY_NAMES.get(priority, priority)}, " if len(set(ks.values())) > 1 else ""
+        best.reason += (f" – fremløbsgrænsen hævet {k} °C ({why}{kr:+.1f} kr)"
+                        + (", så rummene forudsiges at holde" if best.deficit <= 0.05
+                           else f": rummene holder ikke helt, men det hjælper ({rum} i snit {mean[0][rum] - mean[1][rum]:.2f} °C"
+                                " mindre under grænsen)"))
     return best
+
+
+def _under(p: Plan) -> dict[str, float]:
+    """Hvert rums største manko under grænsen (°C)."""
+    return {x["rum"]: float(x["under"]) for x in p.problems}
+
+
+def _short(plans: list[Plan]) -> tuple[list[str], list[dict[str, float]], list[dict[str, float]], dict[str, int]]:
+    """Rummenes manko i hver plan: navne, største manko, gennemsnitlig manko og timerne, gennemsnittet er taget over.
+
+    Gennemsnittet er gradtimerne under grænsen delt med det største antal timer, rummet er under i nogen af planerne –
+    samme nævner for alle planer, så de kan sammenlignes. Det måler både dybde og varighed: et rum, der er under sit gulv
+    lige nu, kan ingen plan rette i den første time, men en plan, der henter det hurtigere ind, har færre gradtimer."""
+    names = sorted({x["rum"] for p in plans for x in p.problems})
+    rows = [{x["rum"]: x for x in p.problems} for p in plans]
+    hrs = {r: max(1, max(int(x[r].get("timer", 1)) for x in rows if r in x)) for r in names}
+    worst = [{r: (float(x[r]["under"]) if r in x else 0.0) for r in names} for x in rows]
+    mean = [{r: (float(x[r].get("gh", x[r]["under"])) / hrs[r] if r in x else 0.0) for r in names} for x in rows]
+    return names, worst, mean, hrs
+
+
+def raise_choices(plans: list[Plan], free: int = 0) -> dict[str, int]:
+    """Hvilken hævning af fremløbsgrænsen hvert trin af prioriteten vælger (indeks i ``plans``: 0 = ingen, 1 = +1 °C …).
+
+    Der er ingen prisgrænser. For hvert rum, der forudsiges under sin grænse, ses på den gennemsnitlige manko i de timer,
+    rummet er under (se ``_short``): uden hævning og det bedste, nogen hævning kan give.
+    - Et rum, hævningerne ikke flytter mindst følernes opløsning (fx en svag kreds, eller et rum der er koldt lige nu og
+      hentes lige hurtigt ind uanset), bestemmer ikke.
+    - Et rum, en hævning kan bringe helt op til grænsen, bringes derop på alle trin.
+    - Ellers køber trinnet sin andel af det, der kan hentes: økonomi intet, balance halvdelen, komfort det hele.
+    Der vælges den laveste hævning, der når det for alle rum inden for en halv opløsning (ellers den, der kommer tættest
+    på) – aldrig en, der gør huset koldere end uden hævning (det værste rum eller summen). De første ``free`` grader er
+    almindelig drift op til loftet: dem bruger alle trin, så langt de hjælper."""
+    names, worst, mean, _hrs = _short(plans)
+    tol = TEMP_RES / 2
+    tot0 = sum(mean[0].values())
+    ok = [k for k in range(len(plans))
+          if k == 0 or (plans[k].deficit <= plans[0].deficit + 1e-9 and sum(mean[k].values()) <= tot0 + 1e-9)]
+
+    def pick(cands: list[int], start: int, share: float) -> int:
+        """Den laveste hævning blandt ``cands``, der fra ``start`` henter ``share`` af det, de kan give hvert rum."""
+        goal: dict[str, float | None] = {}
+        for r in names:
+            gain = mean[start][r] - min(mean[k][r] for k in cands)
+            if gain < TEMP_RES - 1e-9:
+                continue  # ingen målbar virkning for rummet
+            # None: rummet kan holde sin grænse – så skal det; ellers trinnets andel af det, der kan hentes
+            goal[r] = None if any(worst[k][r] <= tol for k in cands) else mean[start][r] - share * gain
+
+        def miss(k: int) -> float:
+            return round(sum(max(0.0, worst[k][r] - tol) if g is None else max(0.0, mean[k][r] - g - tol)
+                             for r, g in goal.items()), 6)
+
+        return min(cands, key=lambda k: (miss(k), k))
+
+    k_e = pick([k for k in ok if k <= free], 0, 1.0)  # almindelig drift: det bedste, loftet kan give
+    beyond = [k for k in ok if k >= k_e]
+    return {name: pick(beyond, k_e, share) for name, share in PRIORITY_SHARE.items()}
+
+
+def _choice_rows(plans: list[Plan], ks: dict[str, int]) -> list[dict[str, Any]]:
+    """De tre trins valg til visning: hævning, pris, varme og el – og rummet, der afgør det (det, der vinder mest mellem
+    økonomi og komfort; ellers det koldeste i forhold til sin grænse) med temperatur og tidspunkt i hver plan."""
+    names, _worst, mean, _hrs = _short(plans)
+    if not names:
+        return []
+    lo, hi = mean[ks["economy"]], mean[ks["comfort"]]
+    rum = max(names, key=lambda r: (round(lo[r] - hi[r], 2), lo[r]))
+    rows = []
+    for name in PRIORITIES:
+        p = plans[ks[name]]
+        x = next((y for y in p.problems if y["rum"] == rum), None)
+        rows.append({"trin": name, "hævet": ks[name], "kr": p.cost_kr, "kwh": p.heat_kwh, "el_kwh": p.el_kwh, "rum": rum,
+                     "snit": round(mean[ks[name]][rum], 2),  # gennemsnitlig manko i de timer, rummet er under (det, der vælges efter)
+                     "under": x["under"] if x else 0.0, "temp": x["temp"] if x else None, "ts": x["ts"] if x else None,
+                     "timer": int(x.get("timer", 1)) if x else 0})
+    return rows
 
 
 def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
@@ -464,8 +552,11 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
             plan.warnings.append(f"{r.name}: {s[k]:.1f} °C {lab(hours[k].ts)} er under planens grænse ({limit(r, k):.1f})")
             plan.deficit = max(plan.deficit, round(limit(r, k) - s[k], 2))
             first = next((j for j in range(n) if s[j] < limit(r, j)), k)
+            short = [max(0.0, limit(r, j) - s[j]) for j in range(n)]
+            # gh: gradtimer under grænsen i hele perioden, timer: antal timer under – dybde og varighed (til prioriteten)
             plan.problems.append({"rum": r.name, "ts": hours[k].ts, "temp": round(s[k], 1), "grænse": round(limit(r, k), 1),
-                                  "under": round(limit(r, k) - s[k], 2), "fra_ts": hours[first].ts, "blokeret": bool(hours[k].blocked)})
+                                  "under": round(limit(r, k) - s[k], 2), "fra_ts": hours[first].ts, "blokeret": bool(hours[k].blocked),
+                                  "gh": round(sum(short), 2), "timer": sum(1 for v in short if v > 0)})
     pq, plan.preload, pre_txt = _preload_window(hours, q, lab, red_spans)
     for i, h in enumerate(hours):
         p = round(q[i], 2)  # kWh varme i timen (= kW i en hel time)

@@ -206,6 +206,14 @@
           "frozen": "Fastfrosset"
         }
       },
+      "priority": {
+        "name": "Prioritet",
+        "state": {
+          "economy": "økonomi",
+          "balance": "balance",
+          "comfort": "komfort"
+        }
+      },
       "air_fan_day": {
         "name": "Maks. blæser dag"
       },

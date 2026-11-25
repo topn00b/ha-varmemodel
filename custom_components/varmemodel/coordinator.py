@@ -22,6 +22,7 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_change
 from homeassistant.helpers.storage import Store
+from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
 
 from . import aggregate as agg
@@ -63,7 +64,7 @@ from .air_control import (
 )
 from .command import FLOW_HOLD, MIN_GAP, SLACK, Command, step
 from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices, quarter_prices
-from .planner import FLOW_LOW_OPEN_S, FLOW_MAX as FLOW_MAX_C, PlanHour, PlanRoom, SourceModel, estimate_room, flow_boost_step, make_air_plan, make_plan, simulate_rooms
+from .planner import FLOW_LOW_OPEN_S, FLOW_MAX as FLOW_MAX_C, PRIORITIES, PlanHour, PlanRoom, SourceModel, estimate_room, flow_boost_step, make_air_plan, make_plan, simulate_rooms
 from .const import (
     AIR_BOOST,
     AIR_SOFT_UP_EVERY,
@@ -83,6 +84,8 @@ from .const import (
     HYDRO_SWITCH,
     SOFT_EVAL_S,
     SOFT_FLOOR,
+    PRIORITY,
+    PRIORITY_DEFAULT,
     SOFT_OVER_RETURN_K,
     SOFT_START,
     SOFT_STEP_K,
@@ -387,6 +390,14 @@ class VarmemodelCoordinator:
         self.commands = data.get("commands", {})
         self.air = data.get("air", {})
         self.plant_week = data.get("plant_week")  # varmecentralens snit (7 døgn) – gemmes, så planen har tabet straks efter en genstart
+        # Udgaven, tallene sidst blev regnet med: efter en opdatering kalibreres der ved opstart, så en rettelse i
+        # kalibreringen virker med det samme og ikke først ved nattens kørsel (0.25.2 rettede det lærte fremløb kl. 06:45,
+        # men loftet ville først være flyttet kl. 03:17 – efter aftenens start)
+        try:
+            self._sw = str((await async_get_integration(self.hass, DOMAIN)).version or "")
+        except Exception:  # noqa: BLE001
+            self._sw = ""
+        updated = bool(data) and data.get("sw") != self._sw
         self.plan_stats = data.get("plan_stats", {})
         self.last_known = data.get("last_known", {})
         for sid, s in self.sources.items():
@@ -413,7 +424,7 @@ class VarmemodelCoordinator:
         self._unsubs.append(async_call_later(self.hass, 90, self._on_today))
         self._unsubs.append(async_track_time_change(self.hass, self._on_today, minute=[5, 20, 35, 50], second=0))
         last = self.runs[-1]["at"] if self.runs else 0
-        if time.time() - last > 86400:
+        if time.time() - last > 86400 or updated:
             self._unsubs.append(async_call_later(self.hass, 120, self._on_start_delay))
         else:
             self.status = "ok" if any(s.accepted for s in self.sources.values()) else "waiting"
@@ -445,7 +456,7 @@ class VarmemodelCoordinator:
 
     def _data(self) -> dict[str, Any]:
         return {"collected": self.collected, "sources": {sid: s.as_store() for sid, s in self.sources.items()},
-                "runs": self.runs[-30:], "mode": self.mode, "calib_version": CALIB_VERSION,
+                "runs": self.runs[-30:], "mode": self.mode, "calib_version": CALIB_VERSION, "sw": getattr(self, "_sw", ""),
                 "rooms": self.rooms, "room_heat": self.room_heat, "settings": self.settings, "plan_log": self.plan_log,
                 "fc_log": self.fc_log, "yesterday": self.yesterday, "measures": self.measures,
                 "commands": self.commands, "plan_stats": self.plan_stats, "last_known": self.last_known, "air": self.air,
@@ -563,6 +574,27 @@ class VarmemodelCoordinator:
         self.settings[key] = value
         await self._save()
         await self.async_replan()
+
+    def priority(self) -> str:
+        """Husets prioritet (økonomi – balance – komfort): hvor meget af det opnåelige planen køber, når et højere fremløb
+        kan holde rummene bedre gennem en blokering (se ``planner.raise_choices``)."""
+        v = self.settings.get(PRIORITY)
+        return v if v in PRIORITIES else PRIORITY_DEFAULT
+
+    async def async_set_priority(self, option: str) -> None:
+        self.settings[PRIORITY] = option
+        await self._save()
+        await self.async_replan()
+
+    def _flow_top(self, s: SourceState, model: SourceModel, target: float) -> float:
+        """Det højeste fremløb, det giver mening at planlægge med: det, varmepumpens største effekt giver gennem gulvet –
+        aldrig over det, fremløbsmålet kan sættes til (varmepumpens eget maksimum). Lært og aflæst, ingen fast grænse."""
+        st = self.hass.states.get(s.conf.get(CONF_FLOW_TARGET) or "")
+        hi = _num(st.attributes.get("max_temp", st.attributes.get("max"))) if st is not None else None
+        top = min(FLOW_MAX_C, hi) if hi is not None else FLOW_MAX_C
+        if model.emission_kw_k > 0:
+            top = min(top, target + model.p_max / model.emission_kw_k)
+        return float(top)
 
     async def async_set_mode(self, mode: str) -> None:
         self.mode = mode
@@ -1930,7 +1962,7 @@ class VarmemodelCoordinator:
             plan_now = want
             want = await self._low_flow(s, hs, hs.get("low_loft") or want, pre_start)
             if hs.get("low_raise") and plan_now is not None:
-                want = max(want, min(plan_now, hs.get("low_loft") or plan_now))  # planens forvarmning går forud
+                want = max(want, min(plan_now, hs.get("low_top") or hs.get("low_loft") or plan_now))  # planens forvarmning går forud
             # Opstartsløft og stopværn: varmepumpens egen termostat må ikke nå at stoppe kompressoren (start/stop slider).
             # Søgningens mål er stadig det laveste, der holder rummene; værnet løfter kun det, der skrives – aldrig over loftet
             if pre_start:
@@ -2430,7 +2462,7 @@ class VarmemodelCoordinator:
         sk = self._start_k(hs)
         sk_txt = f"; opstarten løftes til retur + {_k_txt(sk)} °C, lært af varmepumpens opstart" if sk > SOFT_OVER_RETURN_K else ""
         base = low if low is not None else cap or 0
-        eff = min(base + k, hs.get("low_loft") or 99) if k else None
+        eff = min(base + k, hs.get("low_top") or hs.get("low_loft") or 99) if k else None
         # Forvarmningen, som den faktisk står: loftet kan klippe den – fx når søgningen selv har hævet sit mål, siden planen
         # regnede (planen regner igen ved næste kvarter)
         k = max(0.0, float(round(eff - base))) if eff is not None else 0.0
@@ -3186,8 +3218,12 @@ class VarmemodelCoordinator:
             except Exception:  # noqa: BLE001 – uden statistik regnes som før uden de seneste timers varme
                 recent_q, recent_out = {}, {}
             past_q = [recent_q.get(h0 - k * 3600, 0.0) for k in range(6, 0, -1)]
-            fm, raise_max, low_cap = self.setting(CONF_FLOW_MARGIN) + fb["k"], None, None
+            fm, raise_max, raise_free, low_cap = self.setting(CONF_FLOW_MARGIN) + fb["k"], None, 0, None
             hs = self.air.setdefault(f"hydro:{sid}", {})
+            # Så højt kan planen hæve fremløbet (prioriteten afgør, hvor meget af det den bruger)
+            flow_top = self._flow_top(s, model, target)
+            if hours:
+                raise_max = max(0, math.ceil(flow_top - (model.flow_c0 + model.flow_slope * hours[0].t_out + fm)))
             if self.settings.get(f"{sid}.{SOFT_START}", "test") == "lavest" and hours:
                 # Søg laveste fremløb: planen regner med søgningens mål som fremløb (én sandhed for plan, forudsigelser og
                 # visning) – loftet er det lærte fremløb + margen, som planen ellers ville bruge
@@ -3201,16 +3237,24 @@ class VarmemodelCoordinator:
                     # fx gennem en lang blokering (forvarmning går forud for søgningen). Før var grænsen 5 °C over
                     # søgningens mål: lige efter en start (retur + 3 °C) kunne planen så slet ikke forvarme (24/11-2026).
                     fm = low_cap - base_f
-                    raise_max = max(0, math.ceil(hs["low_loft"] - low_cap))
+                    # Op til loftet er almindelig drift (alle trin); derover afgør prioriteten – højst til det fremløb,
+                    # varmepumpens største effekt giver
+                    raise_free = max(0, math.ceil(hs["low_loft"] - low_cap))
+                    hs["low_top"] = round(max(hs["low_loft"], flow_top), 1)
+                    raise_max = max(raise_free, math.ceil(hs["low_top"] - low_cap))
+                else:
+                    hs.pop("low_top", None)
             else:
                 hs.pop("low_loft", None)
+                hs.pop("low_top", None)
             # Kører kilden nu? (kommandoen står på tændt, eller kompressoren kører) – en delvist fri første time bruges kun
             # som fortsættelse af en kørsel, aldrig til en ny start lige før de røde kvarterer
             comp_st = self.hass.states.get(s.eid(CONF_COMPRESSOR) or "")
             running = bool((self.commands.get(sid) or {}).get("on")) or (comp_st is not None and comp_st.state == "on")
             plan_kw = {"past_q": past_q, "boost": boost, "boost_hours": boost_h, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
                        "economy": self.setting(CONF_ECONOMY), "comfort": offset, "flow_margin": fm, "red_spans": self.red_spans,
-                       "running": running, **({"flow_raise_max": raise_max} if raise_max is not None else {})}
+                       "running": running, "priority": self.priority(), "flow_raise_free": raise_free,
+                       **({"flow_raise_max": raise_max} if raise_max is not None else {})}
             # Planens input gemmes (kun i hukommelsen) til diagnostikken, så planen kan genkøres uden for huset
             self.plan_inputs[sid] = (hh, model, rooms, target, {**plan_kw, "max_pause": int(self.setting(CONF_MAX_PAUSE))})
             p = await self.hass.async_add_executor_job(
@@ -3221,7 +3265,7 @@ class VarmemodelCoordinator:
                 for x in p.hours:
                     if x.get("heat_kw") and x.get("flow") is not None:
                         # varmepumpen kører søgningens mål (+ planens forvarmning) i varmetimerne
-                        x["flow"] = float(round(min(low_cap + k, hs["low_loft"])))
+                        x["flow"] = float(round(min(low_cap + k, hs.get("low_top") or hs["low_loft"])))
                 p.reason += (f" – søger laveste fremløb: planen regner med {low_cap:.0f} °C (loft {hs['low_loft']:.0f} °C)"
                              + (f"; forvarmer +{k:.0f} °C, fordi {low_cap:.0f} °C i flere timer ikke holder rummene" if k else ""))
             elif sid:
@@ -3300,7 +3344,8 @@ class VarmemodelCoordinator:
                                               for e in [next((x for x in self.estimates.values() if x["name"] == r.name), None)] if e},
                           "boost": boost_on, "boost_until": boost_note,
                           "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
-                          "preload_window": p.preload, "flow_boost": fb if fb["k"] or fb["rooms"] else None, "flow_raise": p.flow_raise or None, "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset}
+                          "preload_window": p.preload, "flow_boost": fb if fb["k"] or fb["rooms"] else None, "flow_raise": p.flow_raise or None, "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset,
+                          "priority": self.priority(), "choices": p.choices}
             hst = self.air.setdefault(f"hydro:{sid}", {})
             try:
                 # Kompressoren kører siden … (fra historikken – en genstart nulstiller last_changed, så COP ellers skjules)
