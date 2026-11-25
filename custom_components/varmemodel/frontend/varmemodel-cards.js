@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.25.1';
+  const VERSION = '0.25.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -1345,7 +1345,7 @@
       const ca = at(h, main.e('command')); const fs = ca.flow_search;
       if (!fs) return set ? `<div class="pv2">${set}</div>` : '';
       const f = sensorsOf(h, main);
-      const SC = { forvarmer: ['forvarmer', '#d6453d'], holder: ['holder', '#2e9e5b'], hæver: ['hæver', '#e0702a'], sænker: ['sænker', '#3b8ad8'], løfter: ['løfter', '#e0a02a'], start: ['starter', '#e0a02a'], slukket: ['slukket', '#8a9198'] };
+      const SC = { forvarmer: ['forvarmer', '#d6453d'], holder: ['holder', '#2e9e5b'], hæver: ['hæver', '#e0702a'], loft: ['ved loftet', '#e0702a'], sænker: ['sænker', '#3b8ad8'], løfter: ['løfter', '#e0a02a'], start: ['starter', '#e0a02a'], slukket: ['slukket', '#8a9198'] };
       const [stxt, scol] = SC[fs.forvarmer && !fs.slukket ? 'forvarmer' : fs.status] || [fs.status || '–', '#8a9198'];
       const chip = `<span class="pill" style="background:${scol};color:#fff;border-color:${scol}">${esc(stxt)}</span>`;
       const ud = sv(h, f.flow_temp), ind = sv(h, f.return_temp);
@@ -1371,8 +1371,9 @@
         + `• startløftet læres af korte kørsler (stop inden for 20 min. efter en start eller afrimning): målet dengang − returen + 1 °C; en start, der kommer igennem opstarten, sænker det 0,25 °C<br>`
         + `• +1 °C pr. time, når et rum er på vej under gulvet inden for 3 timer (målt tendens over 2 timer)<br>• +2 °C pr. halve time, når et rum er under gulvet og ikke på vej op<br>`
         + `• +1 °C, når kompressoren alligevel stopper efter længere drift (målet er under varmepumpens laveste ydelse)<br>• −1 °C hver anden time, når alle rum er mindst 0,5 °C over gulvet og stabile<br>`
-        + `• forvarmning: kan flere timer ved søgningens mål ikke holde rummene gennem en blokering, hæver planen fremløbet (højst 5 °C) – vist som »forvarmer«<br>`
-        + `• aldrig over loftet (det lærte fremløb + margen). Rummet, der bestemmer, er markeret med ◆ i rumlisten; pilen viser rummets tendens.</div></details></div>`;
+        + `• forvarmning: kan flere timer ved søgningens mål ikke holde rummene gennem en blokering, hæver planen fremløbet (højst til loftet) – vist som »forvarmer«<br>`
+        + `• aldrig over loftet: det fremløb, huset selv brugte ved udetemperaturen, + »Maks. fremløb over det lærte«. Timer, hvor Varmemodel selv satte fremløbet, tæller ikke med i det lærte – ellers ville loftet lære af sig selv og falde. Beder et rum om mere, mens målet står ved loftet, vises »ved loftet«<br>`
+        + `• rummet, der bestemmer, er markeret med ◆ i rumlisten; pilen viser rummets tendens.</div></details></div>`;
       return `<div class="pv2">${box}${set}</div>`;
     }
     airPlan(h, s) {

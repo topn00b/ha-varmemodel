@@ -357,25 +357,37 @@ def fit_power(hours: list[Hour], min_n: int = 20) -> tuple[Fit, Fit]:
 
 
 # ---------------------------------------------------------------- lært fremløb
-def fit_flow(hours: list[Hour], min_n: int = 24, min_spread: float = 3.0) -> Fit:
-    """Det fremløb, huset faktisk har brugt til rumvarme: fremløb = værdi (ved 0 °C ude) + hældning·ude.
+def fit_flow(hours: list[Hour], min_n: int = 24, min_spread: float = 3.0,
+             skip: list[tuple[float, float | None]] | None = None) -> Fit:
+    """Det fremløb, huset selv har brugt til rumvarme: fremløb = værdi (ved 0 °C ude) + hældning·ude.
 
     Kun timer med ren rumopvarmning (kompressoren kørte hele timen, ikke varmt vand). Planen bruger det som
     loft for fremløbet (lavt og jævnt) – modellens egen linje lært af målinger.
+
+    ``skip``: perioder (fra, til – til = None: stadig), hvor styringen selv satte fremløbet. De timer tæller ikke med:
+    en linje lært af dem er styringens eget ekko, og loftet falder lidt for hver kalibrering (25/11-2026: 35,4 → 34,4 °C
+    ved 0 °C ude på to døgn, mens et rum lå under sit gulv). Er der for få timer tilbage, beholdes den seneste værdi.
     """
-    s = [h for h in hours if h.t_flow is not None and h.t_out is not None and _space_heating(h)]
+    own = list(skip or [])
+    s0 = [h for h in hours if h.t_flow is not None and h.t_out is not None and _space_heating(h)]
+    s = [h for h in s0 if not any(a < h.ts + 3600 and (b is None or b > h.ts) for a, b in own)]
+    left_out = len(s0) - len(s)
     x = [h.t_out for h in s]
     y = [h.t_flow for h in s]
     lo, hi = _range(x)
     if len(s) < min_n or (max(x) - min(x) if x else 0) < min_spread:
-        return Fit(None, len(s), t_out_min=lo, t_out_max=hi, note="for få timer eller for lille spredning i udetemperatur")
+        return Fit(None, len(s), t_out_min=lo, t_out_max=hi,
+                   note=("for få timer uden egen styring af fremløbet – den seneste værdi beholdes" if left_out
+                         else "for få timer eller for lille spredning i udetemperatur"))
     ab = theil_sen(x, y)
     if ab is None:
         return Fit(None, len(s), t_out_min=lo, t_out_max=hi, note="kunne ikke tilpasses")
     a, b = ab
     r2, rmse = _r2_rmse(y, [a + b * v for v in x])
-    return Fit(round(a, 2), len(s), r2, rmse and round(rmse, 2), lo, hi, "fit",
-               {"slope": round(b, 3), "formula": "fremløb = værdi + hældning·ude (målt ved ren rumvarme)"})
+    extra: dict[str, Any] = {"slope": round(b, 3), "formula": "fremløb = værdi + hældning·ude (målt ved ren rumvarme)"}
+    if left_out:
+        extra["own_control_hours_left_out"] = left_out  # timer med styringens eget fremløb, der ikke tæller med
+    return Fit(round(a, 2), len(s), r2, rmse and round(rmse, 2), lo, hi, "fit", extra)
 
 
 # ---------------------------------------------------------------- afrimning
@@ -437,7 +449,9 @@ def fit_cooling(hours: list[Hour], min_run: int = 3, min_runs: int = 3) -> Fit:
 
 
 # ---------------------------------------------------------------- samlet
-def calibrate(hours: list[Hour], plant_w_k: float = 0.0, ground: float = DEFAULT_GROUND) -> dict[str, Fit]:
+def calibrate(hours: list[Hour], plant_w_k: float = 0.0, ground: float = DEFAULT_GROUND,
+              flow_skip: list[tuple[float, float | None]] | None = None) -> dict[str, Fit]:
+    """Alle varmekildens tal. ``flow_skip``: perioder, hvor styringen selv satte fremløbet (se ``fit_flow``)."""
     pmax, pmin = fit_power(hours)
     wind = fit_weather(hours)
     wind.extra["sectors"] = fit_wind_sectors(hours)
@@ -447,7 +461,7 @@ def calibrate(hours: list[Hour], plant_w_k: float = 0.0, ground: float = DEFAULT
         "emission": fit_emission(hours),
         "max_power": pmax,
         "min_power": pmin,
-        "flow_learned": fit_flow(hours),
+        "flow_learned": fit_flow(hours, skip=flow_skip),
         "defrost": fit_defrost(hours),
         "cooling": fit_cooling(hours),
     }

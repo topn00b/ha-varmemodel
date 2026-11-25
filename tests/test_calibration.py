@@ -79,6 +79,29 @@ def test_flow_learned_from_measured_flow() -> None:
     assert fit_flow(hs).value is None
 
 
+def test_flow_learned_is_not_an_echo_of_the_control() -> None:
+    """Timer, hvor styringen selv satte fremløbet, tæller ikke med i husets eget fremløb: ellers lærer loftet af det fremløb,
+    det selv har holdt nede, og falder for hver kalibrering (koldt vejr kom samtidig med styringen, så de timer vejer tungt)."""
+    t0 = 1_700_000_000
+    # Huset selv: 35 °C ved 0 °C ude, −0,5 °C pr. grad – mildt vejr (2 … 14 °C)
+    hs = [Hour(ts=t0 + i * 3600, q=4.0, t_out=2 + i % 13, t_flow=35 - 0.5 * (2 + i % 13), comp=60, dhw=0) for i in range(78)]
+    cut = t0 + 78 * 3600
+    # Styringen: 30 °C uanset vejret – og det er blevet koldt (−2 … 2 °C)
+    hs += [Hour(ts=cut + i * 3600, q=4.0, t_out=-2 + i % 5, t_flow=30.0, comp=60, dhw=0) for i in range(60)]
+    echo = fit_flow(hs)
+    own = fit_flow(hs, skip=[(cut + 1200, None)])  # styringen begyndte 20 min. inde i timen: hele timen tæller som styret
+    assert abs(own.value - 35.0) < 0.05 and abs(own.extra["slope"] + 0.5) < 0.01
+    assert own.n == 78 and own.extra["own_control_hours_left_out"] == 60
+    assert echo.value < own.value - 1 and "own_control_hours_left_out" not in echo.extra
+    # En afsluttet periode: kun de timer, den rører, udelades
+    part = fit_flow(hs, skip=[(cut, cut + 10 * 3600)])
+    assert part.n == 78 + 50 and part.extra["own_control_hours_left_out"] == 10
+    # For få timer uden egen styring: ingen ny værdi (den seneste beholdes af kalibreringens vagt), og noten siger hvorfor
+    few = fit_flow(hs, skip=[(t0 + 10 * 3600, None)])
+    assert few.value is None and few.n == 10 and "egen styring" in few.note
+    assert "egen styring" not in fit_flow(hs[:10]).note
+
+
 def test_cooling_time_constant() -> None:
     tau = 400.0
     hours, t_in = [], 21.0

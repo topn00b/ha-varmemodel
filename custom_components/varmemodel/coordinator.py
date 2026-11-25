@@ -709,7 +709,9 @@ class VarmemodelCoordinator:
                 hours = hours_by_source.get(sid, [])
                 s.last_hours = hours
                 if s.kind == SOURCE_HYDRONIC:
-                    fits = await self.hass.async_add_executor_job(calibrate, hours, *self.plant())
+                    # Timer, hvor Varmemodel selv satte fremløbet, tæller ikke med i husets eget fremløb (planens loft)
+                    fits = await self.hass.async_add_executor_job(
+                        partial(calibrate, hours, *self.plant(), flow_skip=self._flow_own(s)))
                     steady, loss = await get_instance(self.hass).async_add_executor_job(self._steady_sync, s)
                     fits["cop_steady"], fits["cop_loss"] = steady, loss
                 else:
@@ -1986,6 +1988,10 @@ class VarmemodelCoordinator:
         (command.py), og skrevet til varmepumpen, når Varmemodel styrer den. ``hours`` er planens timer – en frisk plan eller
         den seneste gode, når planlægningen fejler."""
         sid = s.sid
+        try:
+            self._flow_own(s, now)  # perioderne med Varmemodels eget fremløb føres her, så et skift på kontakten ses inden for et kvarter
+        except Exception:  # noqa: BLE001 – bogføring må aldrig stoppe styringen
+            _LOGGER.debug("%s: perioderne med eget fremløb kunne ikke føres", s.name, exc_info=True)
         cur = next((x for x in hours if x.get("ts") == h0), None)
         blocked = self._blocked_now(cur, now)
         cmd = step(Command.load(self.commands.get(sid)), now, dt_util.now().date().isoformat(),
@@ -2366,6 +2372,10 @@ class VarmemodelCoordinator:
         new = min(max(low + step, SOFT_FLOOR), plan)
         hs["low_step"] = 0.0
         if step and new != low:
+            if step > 0 and new < low:
+                # Loftet er kommet under målet (ny kalibrering eller andet vejr i timen): målet følger loftet ned, selv om
+                # rummene beder om mere – loggen skal sige det, ikke ligne en hævning
+                why = f"loftet er sænket til {_k_txt(plan)} °C – målet følger med ({why})"
             hs.update(low=new, low_t=now, low_why=why, low_hold_since=now, low_step=new - low)  # det nye mål skal holde 3 t, før det læres
             self._low_log(hs, now, new, plan, why)
         hs["low_status"] = status
@@ -2402,6 +2412,10 @@ class VarmemodelCoordinator:
         sts = self._onoff_states(s)
         off = bool(sts) and not next(iter(sts.values()))
         low = hs.get("low")
+        loft = _num(hs.get("low_loft"))
+        if status == "hæver" and low is not None and loft is not None and low >= loft - 0.05:
+            # Rummene beder om mere, men målet står ved loftet: der kommer ingen hævning – sig det, som det er
+            status, nxt_txt = "loft", None
         cap = low if low is not None else self._low_cap(s, hs, self._state_num(self._id(CONF_OUTDOOR)))
         # Næste planlagte start (første varmetime, der ikke er blokeret)
         start_at = None
@@ -2432,6 +2446,13 @@ class VarmemodelCoordinator:
             text = f"Starter ved {f(low)} °C (retur + {SOFT_OVER_RETURN_K:.0f} °C{sk_txt}) – rummene vurderes ved næste planlægning."
         elif status == "løfter":
             text = f"Løfter blødt mod det lærte laveste fremløb (+2 °C pr. kvarter). Nu {f(low)} °C."
+        elif status == "loft":
+            x = min(cold, key=lambda r: r["margen"]) if cold else bind
+            why = (f"{x['navn']} er {abs(x['margen']):.1f} °C under gulvet og ikke på vej op ({x['tendens']:+.2f} °C/t)" if cold
+                   else f"{x['navn']} er på vej under gulvet (nu {x['margen']:+.1f} °C, {x['tendens']:+.2f} °C/t, om 3 t ca. "
+                        f"{x['om_3t']:+.1f} °C)" if x else "rummene beder om mere")
+            text = (f"Holder loftet {f(min(low, loft))} °C – {why}. Søgningen går ikke over loftet: det fremløb, huset selv brugte "
+                    f"ved denne udetemperatur, + »Maks. fremløb over det lærte«.")
         elif status == "hæver" and hs.get("low_stops") and hs.get("low_step"):
             text = f"Hævet til {f(low)} °C – {hs.get('low_why') or 'kompressoren stoppede'}."
         elif status == "hæver" and hs.get("low_stops"):
@@ -2526,6 +2547,35 @@ class VarmemodelCoordinator:
 
     def flow_control(self, s: SourceState) -> bool:
         return bool(self.settings.get(f"{s.sid}.{FLOW_SWITCH}"))
+
+    def _steers_flow(self, s: SourceState) -> bool:
+        """Sætter Varmemodel selv fremløbet for kilden? (fremløbskontakten, eller fuld styring med tænd/sluk)"""
+        return bool(s.conf.get(CONF_FLOW_TARGET) and (self.settings.get(f"{s.sid}.{FLOW_SWITCH}")
+                    or (s.conf.get(CONF_ONOFF_TARGET) and self.settings.get(f"{s.sid}.{HYDRO_SWITCH}"))))
+
+    def _flow_own(self, s: SourceState, now: float | None = None) -> list[tuple[float, float | None]]:
+        """Perioderne, hvor Varmemodel selv har sat fremløbet (fra, til – til = None: stadig); gemmes med varmekilden.
+        De timer tæller ikke med, når husets eget fremløb læres (``fit_flow``) – ellers lærer loftet af det fremløb, det
+        selv har holdt nede. Første gang, mens styringen allerede er i gang (opdatering fra en ældre version), regnes
+        perioden fra søgningens første logpunkt eller den ældste gemte skrivning."""
+        now = time.time() if now is None else now
+        f = self.air.setdefault(f"flow:{s.sid}", {})
+        own = f.get("own")
+        on = self._steers_flow(s)
+        if not isinstance(own, list):
+            own = []
+            if on:
+                hs = self.air.get(f"hydro:{s.sid}") or {}
+                first = [_num(x[0]) for x in (hs.get("low_log") or [])[:1] + (f.get("hist") or [])[:1]
+                         if isinstance(x, (list, tuple)) and x]
+                own.append([min([x for x in first if x] + [now]), None])
+        elif on and (not own or own[-1][1] is not None):
+            own.append([now, None])
+        elif not on and own and own[-1][1] is None:
+            own[-1][1] = now
+        keep = now - COLLECT_KEEP_DAYS * 86400
+        f["own"] = own = [x for x in own if x[1] is None or x[1] >= keep]
+        return [(float(a), None if b is None else float(b)) for a, b in own]
 
     async def async_set_flow_control(self, s: SourceState, on: bool) -> None:
         self.settings[f"{s.sid}.{FLOW_SWITCH}"] = bool(on)
@@ -3176,6 +3226,7 @@ class VarmemodelCoordinator:
                              + (f"; forvarmer +{k:.0f} °C, fordi {low_cap:.0f} °C i flere timer ikke holder rummene" if k else ""))
             elif sid:
                 (self.air.get(f"hydro:{sid}") or {}).pop("low_raise", None)
+            p.reason += flow_cap_note(p.hours, p.warnings, model.p_max)
             if (eco := self.setting(CONF_ECONOMY)) > 0:
                 p.reason += f" – økonomi: rummene må gå {eco:.2f} °C under gulvet"
             # Log: det planlagte for timen (første plan i timen) og rummenes forudsigelse – til »i går« og »!«
@@ -3481,6 +3532,18 @@ def learn_start_k(k: float, short: list[dict[str, Any]], k_min: float, k_max: fl
         if x.get("mål") is not None and x.get("ret0") is not None:
             k = max(k, x["mål"] - x["ret0"] + 1.0)
     return round(min(max(k, k_min), k_max), 2)
+
+
+def flow_cap_note(hours: list[dict[str, Any]], warnings: list[str], p_max: float) -> str:
+    """Tillæg til planens begrundelse, når behovet ikke kan dækkes i de frie timer, og det er planens fremløb (loftet eller
+    søgningens mål) – ikke varmepumpen – der holder effekten nede: så bestemmer fremløbet, hvor meget varme de frie timer
+    kan give, og et højere loft (»Maks. fremløb over det lærte«) giver mere."""
+    kw = [x["heat_kw"] / (x.get("free") or 1.0) for x in hours if x.get("heat_kw")]
+    if "behovet kan ikke dækkes i de frie timer" not in warnings or not kw or max(kw) >= p_max - 0.3:
+        return ""
+    fl = max((x["flow"] for x in hours if x.get("heat_kw") and x.get("flow") is not None), default=None)
+    return (f" – {'med planens fremløb' if fl is None else f'ved {fl:.0f} °C fremløb'} tager gulvet højst {max(kw):.1f} kW pr. time "
+            f"(varmepumpen kan {p_max:.1f} kW)")
 
 
 def start_k_from_log(log: list[Any], t: float, decayed: bool, k_default: float) -> float | None:

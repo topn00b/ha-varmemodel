@@ -1757,3 +1757,110 @@ async def test_partial_hour_before_block_is_planned_and_stopped_at_red(ha: HomeA
     # luft-luft og resten af huset regner stadig timen som blokeret (fælles timer)
     d = c.plan_inputs[s.sid][0]
     assert d[2].free == 0.5 and d[2].blocked is False and d[3].blocked is True
+
+
+async def test_own_flow_periods_are_tracked(ha: HomeAssistant) -> None:
+    """Perioderne med Varmemodels eget fremløb gemmes med varmekilden: ved en opdatering midt i en periode regnes den fra
+    søgningens første logpunkt; kontakten lukker og åbner perioder; gamle perioder ryddes."""
+    c, s = await _lv_entry(ha)
+    f = c.air.setdefault(f"flow:{s.sid}", {})
+    now = time.time()
+    assert c._flow_own(s, now) == []  # noqa: SLF001 – Varmemodel styrer ikke fremløbet
+    # Opdatering fra en ældre version, mens styringen er i gang: fra søgningens første logpunkt
+    f.pop("own")
+    c.settings[f"{s.sid}.flow_control"] = True
+    c.air.setdefault(f"hydro:{s.sid}", {})["low_log"] = [[now - 30 * 3600, 28.0, 35.0, "start"], [now - 3600, 30.0, 35.0, "hævet"]]
+    f["hist"] = [[now - 7200, 29.0]]
+    assert c._flow_own(s, now) == [(now - 30 * 3600, None)]  # noqa: SLF001
+    assert c._flow_own(s, now + 60) == [(now - 30 * 3600, None)]  # noqa: SLF001 – stadig samme periode
+    c.settings[f"{s.sid}.flow_control"] = False
+    assert c._flow_own(s, now + 900) == [(now - 30 * 3600, now + 900)]  # noqa: SLF001
+    c.settings[f"{s.sid}.flow_control"] = True
+    assert c._flow_own(s, now + 1800) == [(now - 30 * 3600, now + 900), (now + 1800, None)]  # noqa: SLF001
+    # Perioder, der sluttede, før de gemte timer begynder, ryddes
+    f["own"] = [[now - 200 * 86400, now - 150 * 86400], [now - 86400, None]]
+    assert c._flow_own(s, now) == [(now - 86400, None)]  # noqa: SLF001
+    # Fuld styring (tænd/sluk) sætter også fremløbet – uden et fremløbsmål styres der intet
+    assert c._steers_flow(s) is True  # noqa: SLF001
+    c.settings[f"{s.sid}.flow_control"] = False
+    assert c._steers_flow(s) is False  # noqa: SLF001
+
+
+async def test_learned_flow_ignores_hours_steered_by_varmemodel(ha: HomeAssistant) -> None:
+    """Kalibreringen: husets eget fremløb (planens loft) læres kun af timer, hvor Varmemodel ikke selv satte fremløbet –
+    25/11-2026 faldt loftet 1 °C på to døgn, fordi det lærte af søgningens egne lave fremløb, mens et rum lå under gulvet."""
+    c, s = await _lv_entry(ha)
+    h0 = int(time.time() // 3600 * 3600)
+    cut = h0 - 60 * 3600
+    hours = [Hour(ts=cut - (78 - i) * 3600, q=4.0, e=1.2, t_out=2 + i % 13, t_in=20.5, t_flow=35 - 0.5 * (2 + i % 13), comp=60, dhw=0)
+             for i in range(78)]
+    hours += [Hour(ts=cut + i * 3600, q=4.0, e=1.2, t_out=-2 + i % 5, t_in=20.5, t_flow=30.0, comp=60, dhw=0) for i in range(60)]
+    real = c._hours_sync  # noqa: SLF001
+
+    def fake() -> dict:
+        out = real()
+        out[s.sid] = hours
+        return out
+
+    c._hours_sync = fake  # noqa: SLF001
+    await c.async_calibrate()
+    echo = s.accepted["flow_learned"]["value"]
+    assert echo < 34.0  # uden styring tæller alle timer med (som før)
+    c.settings[f"{s.sid}.flow_control"] = True
+    c.air.setdefault(f"flow:{s.sid}", {})["own"] = [[cut + 600, None]]
+    s.accepted.pop("flow_learned")
+    await c.async_calibrate()
+    fl = s.accepted["flow_learned"]
+    assert abs(fl["value"] - 35.0) < 0.05 and abs(fl["extra"]["slope"] + 0.5) < 0.01 and fl["extra"]["own_control_hours_left_out"] == 60
+    # Når timerne uden egen styring er gledet ud af vinduet, beholdes den seneste værdi og hældning
+    hours[:] = hours[78:]
+    await c.async_calibrate()
+    fl = s.accepted["flow_learned"]
+    assert abs(fl["value"] - 35.0) < 0.05 and abs(fl["extra"]["slope"] + 0.5) < 0.01 and "egen styring" in fl["note"]
+
+
+async def test_low_flow_at_the_ceiling_says_so(ha: HomeAssistant) -> None:
+    """Søg laveste: beder et rum om mere, mens målet står ved loftet, loves ingen hævning (»Hæver til 36 °C kl. 04:15« stod
+    der natten 25/11-2026, mens loftet var 34 °C) – status »loft« og teksten siger, at loftet holder; og når loftet er
+    kommet under målet, skriver loggen, at målet følger loftet ned, ikke at det blev hævet."""
+    c, s = await _lv_entry(ha)
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    hs = c.air.setdefault(f"hydro:{s.sid}", {})
+    rooms = [{"navn": "Stue", "t": 19.8, "gulv": 20.0, "margen": -0.2, "tendens": 0.0, "om_3t": -0.2}]
+    c._low_rooms_sync = lambda _s: [dict(x) for x in rooms]  # noqa: SLF001
+    await c._low_flow(s, hs, 35.0)  # noqa: SLF001 – start
+    # Under loftet: hævningen loves som før
+    hs.update(low=30.0, low_loft=34.4, low_t=time.time() - 60)
+    assert await c._low_flow(s, hs, 34.4) == 30.0  # noqa: SLF001
+    v = c.flow_search(s)
+    assert v["status"] == "hæver" and v["tekst"].startswith("Hæver til 32 °C") and v["næste_ændring"]
+    # Loftet er kommet under målet (ny kalibrering): målet følger med ned, og loggen siger det
+    hs.update(low=34.8, low_t=time.time() - 3600)
+    assert await c._low_flow(s, hs, 34.4) == 34.4  # noqa: SLF001
+    assert hs["low"] == 34.4 and hs["low_why"].startswith("loftet er sænket til 34.4 °C – målet følger med (Stue er 0.2 °C under")
+    assert hs["low_log"][-1][1:3] == [34.4, 34.4]
+    v = c.flow_search(s)
+    assert v["status"] == "loft" and v["næste_ændring"] is None
+    assert v["tekst"].startswith("Holder loftet 34 °C – Stue er 0,2 °C under gulvet og ikke på vej op") and "Hæver" not in v["tekst"]
+    # På vej under gulvet (ikke under endnu) ved loftet: samme besked med rummets tendens
+    rooms[:] = [{"navn": "Stue", "t": 20.05, "gulv": 20.0, "margen": 0.05, "tendens": -0.03, "om_3t": -0.04}]
+    assert await c._low_flow(s, hs, 34.4) == 34.4  # noqa: SLF001
+    v = c.flow_search(s)
+    assert v["status"] == "loft" and "Stue er på vej under gulvet" in v["tekst"]
+    # Rummene er tilfredse: almindelig »holder«
+    rooms[:] = [{"navn": "Stue", "t": 20.3, "gulv": 20.0, "margen": 0.3, "tendens": 0.0, "om_3t": 0.3}]
+    await c._low_flow(s, hs, 34.4)  # noqa: SLF001
+    assert c.flow_search(s)["status"] == "holder"
+
+
+def test_flow_cap_note() -> None:
+    """Planens begrundelse siger, når det er fremløbet – ikke varmepumpen – der gør, at behovet ikke kan dækkes."""
+    from custom_components.varmemodel.coordinator import flow_cap_note
+
+    w = ["behovet kan ikke dækkes i de frie timer"]
+    hrs = [{"heat_kw": 3.91, "flow": 34.0}, {"heat_kw": 1.95, "flow": 34.0, "free": 0.5}, {"heat_kw": 0.0, "flow": None}]
+    assert flow_cap_note(hrs, w, 5.71) == " – ved 34 °C fremløb tager gulvet højst 3.9 kW pr. time (varmepumpen kan 5.7 kW)"
+    assert flow_cap_note(hrs, [], 5.71) == ""  # behovet dækkes: intet at forklare
+    assert flow_cap_note(hrs, w, 4.0) == ""  # varmepumpen selv er grænsen
+    assert flow_cap_note([{"heat_kw": 0.0, "flow": None}], w, 5.71) == ""  # ingen frie timer
+    assert flow_cap_note([{"heat_kw": 3.0, "flow": None}], w, 5.71) == " – med planens fremløb tager gulvet højst 3.0 kW pr. time (varmepumpen kan 5.7 kW)"
