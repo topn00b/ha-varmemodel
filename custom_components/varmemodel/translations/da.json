@@ -183,6 +183,15 @@
       "cop_today": {
         "name": "COP i dag"
       },
+      "ice_watch": {
+        "name": "Isvagt",
+        "state": {
+          "ok": "normal",
+          "watch": "følg",
+          "ice": "is?",
+          "learning": "lærer"
+        }
+      },
       "flow_learned": {
         "name": "Lært fremløb ved 0 °C ude"
       },

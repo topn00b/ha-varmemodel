@@ -1929,3 +1929,55 @@ async def test_priority_reaches_the_plan_and_preheats_above_the_ceiling(ha: Home
     # udgaven gemmes med tallene, så en opdatering kalibrerer ved opstart (en rettelse i kalibreringen virker straks)
     ver = json.loads((Path(cm.__file__).parent / "manifest.json").read_text(encoding="utf-8"))["version"]
     assert c._data()["sw"] == ver  # noqa: SLF001
+
+
+@pytest.mark.parametrize("expected_lingering_timers", [True])
+async def test_ice_watch_sensor_reports_once(ha: HomeAssistant) -> None:
+    """Isvagten: status og tal står i en føler på varmekilden. Bliver ydelsen ved med at være usædvanligt lav, kommer der
+    én besked; grænserne for »lavt« holdes fast, mens det varer; og efter en normal periode kan en ny tilisning meldes."""
+    ha.states.async_set("binary_sensor.afrimning", "off", {})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data=HOUSE,
+                        subentries_data=[_sub({**HYD, "defrost": "binary_sensor.afrimning", "flow_temp": "sensor.frem"}, "source")])
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    s = next(iter(c.sources.values()))
+    events: list = []
+    ha.bus.async_listen("varmemodel_varsel", lambda ev: events.append(ev.data))
+    now = int(time.time())
+    bounds = {"ren_low": 0.88, "snit_low": 0.86, "ren_normal": 1.01, "snit_normal": 0.98}
+    cyc = [{"t": now - 3000 * (9 - i), "til": now - 3000 * (9 - i) + 2400, "min": 40, "ude": 0.5, "kw": 4.8, "ren": 0.8, "slut": 0.7,
+            "snit": 0.78, "n": 6} for i in range(9)]
+    w = {"status": "ice", "ref_n": 60, "low_run": 9, "low_hours": 6.0, "since": cyc[0]["t"], "bounds": bounds, "ren": 0.8, "snit": 0.78,
+         "slut": 0.7, "latest": cyc[-1]["til"], "cycles": cyc[-8:], "defrost": {"n": 20, "gap_min": 48, "dur_min": 3.5, "last": now - 600},
+         "updated": now}
+    c._ice_sync = lambda _s: ({"123": [0.4, 0.15, 0.5, 33.0, 10]}, dict(w))  # noqa: SLF001
+    await c._on_today(None)  # noqa: SLF001
+    await ha.async_block_till_done()
+    st = next(x for x in ha.states.async_all("sensor") if x.entity_id.endswith("ice_watch"))
+    a = st.attributes
+    assert st.state == "ice" and a["lave_i_træk"] == 9 and a["lav_i_timer"] == 6.0 and a["ren_pct"] == 80 and a["ren_lav_pct"] == 88
+    assert a["ren_normal_pct"] == 101 and len(a["cyklusser"]) == 8 and all(x["lav"] for x in a["cyklusser"]) and a["cyklusser"][0]["ren_pct"] == 80
+    assert a["afrimninger_24t"] == 20 and a["afrimning_hver_min"] == 48 and a["afrimning_varer_min"] == 3.5 and a["siden"].startswith("20")
+    assert len(events) == 1 and events[0]["type"] == "drift" and "ise til" in events[0]["titel"] and "6 timer" in events[0]["kort"]
+    assert "80 %" in events[0]["tekst"] and "ca. hver 48. minut" in events[0]["tekst"] and "3,5 min. ad gangen" in events[0]["tekst"]
+    assert c.air[f"ice:{s.sid}"]["hold"] == bounds and s.slots["123"] == [0.4, 0.15, 0.5, 33.0, 10]
+    await c._on_today(None)  # noqa: SLF001 – samme tilisning: ingen ny besked
+    await ha.async_block_till_done()
+    assert len(events) == 1
+    # normal igen: grænserne slippes, og en ny tilisning meldes igen
+    c._ice_sync = lambda _s: ({}, {**w, "status": "ok", "low_run": 0, "low_hours": 0.0, "since": None})  # noqa: SLF001
+    await c._on_today(None)  # noqa: SLF001
+    await ha.async_block_till_done()
+    assert "hold" not in c.air[f"ice:{s.sid}"] and ha.states.get(st.entity_id).state == "ok" and len(events) == 1
+    c._ice_sync = lambda _s: ({}, {**w, "status": "watch", "low_run": 3, "low_hours": 2.0})  # noqa: SLF001 – følg: vises, men ingen besked
+    await c._on_today(None)  # noqa: SLF001
+    await ha.async_block_till_done()
+    assert ha.states.get(st.entity_id).state == "watch" and c.air[f"ice:{s.sid}"]["hold"] == bounds and len(events) == 1
+    c._ice_sync = lambda _s: ({}, dict(w))  # noqa: SLF001
+    await c._on_today(None)  # noqa: SLF001
+    await ha.async_block_till_done()
+    assert len(events) == 2
+    # uden afrimningsføler er der ingen isvagt
+    assert not [x for x in ha.states.async_all("sensor") if x.entity_id.endswith("ice_watch") and x.entity_id != st.entity_id]

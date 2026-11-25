@@ -183,6 +183,15 @@
       "cop_today": {
         "name": "COP today"
       },
+      "ice_watch": {
+        "name": "Ice watch",
+        "state": {
+          "ok": "normal",
+          "watch": "watch",
+          "ice": "icing?",
+          "learning": "learning"
+        }
+      },
       "flow_learned": {
         "name": "Learned flow at 0 °C outdoor"
       },

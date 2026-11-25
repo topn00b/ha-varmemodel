@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.26.0';
+  const VERSION = '0.27.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -316,6 +316,29 @@
       : '<div class="sm mut">Alle tre trin giver samme plan lige nu: rummene holder deres grænser, eller et højere fremløb ændrer intet.</div>';
     return `<div class="b"><div class="pvh">Prioritet ${sel}<span class="mut sm"> · gemmes i Varmemodel</span></div>${body}`
       + '<div class="sm mut" style="margin-top:4px">Planen regner hver gang alle hævninger af fremløbet igennem – op til det, varmepumpen kan yde. Økonomi: den billigste plan (der hæves kun, når et rum derved kan holde sin grænse). Balance: halvdelen af det, der kan hentes. Komfort: det hele. Ingen prisgrænser – forskelle under følernes 0,1 °C tæller ikke.</div></div>';
+  }
+  // Isvagt: varmepumpens seneste driftscyklusser mod husets egne tidligere – bliver lamelfladen ren efter afrimningen?
+  // Enkelte lave cyklusser er almindelige (tung rim en fugtig aften); det usædvanlige er, at det bliver ved.
+  function iceBox(h, src, open) {
+    const eid = src.e('ice_watch'); const s0 = st(h, eid); if (!s0) return '';
+    const a = s0.attributes || {};
+    const SC = { ok: ['normal', '#2e9e5b'], watch: ['følg', '#e0702a'], ice: ['is?', '#d6453d'], learning: ['lærer', '#8a9198'] };
+    const [txt, col] = SC[s0.state] || [s0.state || '–', '#8a9198'];
+    const chip = `<span class="pill" style="background:${col};color:#fff;border-color:${col}">${esc(txt)}</span>`;
+    const p = (v) => (v == null ? '–' : `${fmt(v, 0)} %`);
+    let line;
+    if (s0.state === 'ice') line = `Usædvanligt lav ydelse i ${fmt(a.lav_i_timer, 0)} timer (${a['lave_i_træk']} cyklusser i træk) – se efter is eller sne på udedelens lameller.`;
+    else if (s0.state === 'watch') line = `${a['lave_i_træk']} cyklusser i træk med lav ydelse siden ${when(a.siden)} – følger, om afrimningen får fladen ren.`;
+    else if (s0.state === 'learning') line = `Lærer varmepumpens normale ydelse at kende (${a.sammenlignet_med_cyklusser ?? 0} af 20 cyklusser).`;
+    else if (s0.state === 'ok') line = `Fladen bliver ren efter afrimning: ${p(a.ren_pct)} af modellens ydelse i den seneste cyklus.`;
+    else line = 'Ingen måling endnu.';
+    const df = a.afrimninger_24t ? `Afrimninger det seneste døgn: ${a.afrimninger_24t}${a.afrimning_hver_min ? `, ca. hver ${a.afrimning_hver_min}. min.` : ''}${a.afrimning_varer_min ? `, ${fmt(a.afrimning_varer_min, 1)} min. ad gangen` : ''}.` : 'Ingen afrimninger det seneste døgn.';
+    const ref = a.ren_normal_pct != null ? ` Normalt ${p(a.ren_normal_pct)} lige efter en afrimning; lavt er under ${p(a.ren_lav_pct)} (ringere end ni ud af ti af husets egne tidligere cyklusser).` : '';
+    const tr = (a.cyklusser || []).slice(-6).reverse().map((c) => `<tr><td>${esc(when(c.start).replace('kl. ', ''))}</td><td class="n">${c.min} min.</td><td class="n">${fmt(c.ude, 1)} °C</td><td class="n">${fmt(c.kw, 1)} kW</td>`
+      + `<td class="n">${c.lav ? `<b style="color:${RE}">${p(c.ren_pct)}</b>` : p(c.ren_pct)}</td><td class="n">${p(c.slut_pct)}</td></tr>`).join('');
+    const tbl = tr ? `<details id="iceCy"${open ? ' open' : ''}><summary class="sm">Seneste cyklusser</summary><div class="wrap"><table><tr><th>start</th><th class="n">længde</th><th class="n">ude</th><th class="n">varme</th><th class="n">ren flade</th><th class="n">sidst</th></tr>${tr}</table></div>`
+      + '<div class="sm mut" style="margin-top:4px">En cyklus går fra en afrimning eller start til den næste. »Ren flade« er ydelsen de første 15 minutter i procent af husets egen COP-model, »sidst« de sidste 10 minutter, når rimen har sat sig. Tre lave i træk vises som »følg«; bliver det ved i seks timer, kommer der én besked.</div></details>' : '';
+    return `<div class="b"><div class="pvh">Isvagt ${chip}</div><div style="margin:4px 0 6px;font-size:14px">${esc(line)}</div><div class="sm mut">${esc(df + ref)}</div>${tbl}</div>`;
   }
   function settingsPanel(h, src, title = 'Indstillinger') {
     let o = '';
@@ -1362,7 +1385,7 @@
     // Søg laveste fremløb: status i klart sprog, mål/målt/loft, graf, lært pr. udetemperatur og »Sådan virker det«
     flowPanel(h, main, vm) {
       if (!main) return '';
-      const set = priorityBox(h, vm, main) + settingsPanel(h, main, 'Indstillinger');
+      const set = iceBox(h, main, this._open && this._open.has('iceCy')) + priorityBox(h, vm, main) + settingsPanel(h, main, 'Indstillinger');
       const ca = at(h, main.e('command')); const fs = ca.flow_search;
       if (!fs) return set ? `<div class="pv2">${set}</div>` : '';
       const f = sensorsOf(h, main);

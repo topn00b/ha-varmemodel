@@ -652,6 +652,88 @@ def cop_today(five: dict[int, dict[str, float | None]], comp: list[tuple[float, 
     }
 
 
+# ---------------------------------------------------------------- isvagt
+# Isvagten sammenligner varmepumpens seneste driftscyklusser med husets egne tidligere – ikke med faste grænser for ydelsen.
+# Tallene her er de eneste valg: hvor langt tilbage »normalt« regnes, hvad »lavt« vil sige i forhold til det, og hvor længe
+# det skal vare, før det vises og meldes.
+ICE_REF_DAYS = 30  # husets egne cyklusser så langt tilbage er sammenligningen
+ICE_RECENT_H = 12  # … bortset fra de seneste timer (dem, der vurderes)
+ICE_MIN_REF = 20  # så mange tidligere cyklusser skal der til, før noget kan kaldes lavt
+ICE_LOW_Q = 0.1  # lav: ringere end ni ud af ti tidligere cyklusser
+ICE_WATCH_N = 3  # så mange lave cyklusser i træk vises som »følg«
+ICE_ALARM_H = 6.0  # så mange driftstimer med lave cyklusser i træk giver besked (en tilisning faldt jævnt i ca. 30 timer)
+
+
+def frost_cycles(slots: list[Slot], cop: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Driftscyklusser ud fra portionerne i stabil drift: fra 10 min. efter en start eller afrimning til næste afrimning,
+    varmt vand eller stop.
+
+    For hver cyklus: start (``t``, afrimningens slut eller kompressorstart), slut (``til``), længde (``min``), ude, kW og
+    ydelsen i forhold til husets egen COP-model (``cop``: a, b, c, d fra ``fit_cop_steady``):
+    - ``ren``: de første 15 min. – fladen lige efter afrimningen. Får afrimningen den ikke ren, er den lav fra starten.
+    - ``slut``: de sidste 10 min. – så meget rim nåede at sætte sig.
+    - ``snit``: hele cyklussen.
+    Cyklusser med under tre portioner (15 min.) tæller ikke."""
+    if not cop or cop.get("a") is None:
+        return []
+    a, b, c, d = (float(cop.get(k) or 0.0) for k in "abcd")
+    rows = sorted((s for s in slots if s.e > 0 and COP_LIMITS[0] <= s.q / s.e <= COP_LIMITS[1]), key=lambda s: s.ts)
+    out: list[dict[str, Any]] = []
+    cur: list[Slot] = []
+
+    def close() -> None:
+        if len(cur) < 3:
+            return
+        r = [(x.q / x.e) / max(1.2, a + b * x.t_out + c * x.t_flow + d * x.q * 12) for x in cur]
+        out.append({"t": int(cur[0].ts - cur[0].run_min * 60), "til": int(cur[-1].ts + 300), "min": round(cur[-1].run_min + 5),
+                    "ude": round(sum(x.t_out for x in cur) / len(cur), 1), "kw": round(sum(x.q for x in cur) * 12 / len(cur), 1),
+                    "ren": round(median(r[:3]), 3), "slut": round(median(r[-2:]), 3), "snit": round(median(r), 3), "n": len(cur)})
+
+    for s in rows:
+        if cur and (s.ts - cur[-1].ts != 300 or s.run_min < cur[-1].run_min):
+            close()
+            cur = []
+        cur.append(s)
+    close()
+    return out
+
+
+def ice_watch(cycles: list[dict[str, Any]], now: float, hold: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Isvagten: er varmepumpens seneste cyklusser usædvanligt svage i forhold til husets egne tidligere?
+
+    »Lav« er en cyklus, hvis rene flade (``ren``) eller hele forløb (``snit``) er ringere end ni ud af ti af de tidligere
+    cyklusser (de seneste ``ICE_REF_DAYS`` døgn, uden de seneste ``ICE_RECENT_H`` timer). Enkelte lave cyklusser er
+    almindelige – tung rim en fugtig aften klarer afrimningen selv. Det usædvanlige er, at det bliver ved:
+    - ``watch``: mindst ``ICE_WATCH_N`` lave cyklusser i træk,
+    - ``ice``: lave cyklusser i træk i mindst ``ICE_ALARM_H`` driftstimer – fladen bliver ikke ren. Pauser tæller ikke med:
+      er varmepumpen iset til, er den det også efter en rød periode, og timerne lægges sammen hen over pausen,
+    - ``ok`` ellers, og ``learning``, mens der er for få tidligere cyklusser at sammenligne med.
+    ``hold``: grænserne fra et løb af lave cyklusser, der er i gang (``bounds`` fra forrige kald) – de holdes fast, til løbet
+    er slut, så en lang tilisning ikke selv flytter grænsen for, hvad der er lavt."""
+    ref = [c for c in cycles if now - ICE_REF_DAYS * 86400 <= c["t"] < now - ICE_RECENT_H * 3600]
+    last = cycles[-1] if cycles else None
+    out: dict[str, Any] = {"status": "learning", "ref_n": len(ref), "low_run": 0, "low_hours": 0.0, "since": None, "bounds": None,
+                           "ren": last["ren"] if last else None, "snit": last["snit"] if last else None,
+                           "slut": last["slut"] if last else None, "latest": last["til"] if last else None, "cycles": cycles[-8:]}
+    bounds = hold
+    if not bounds:
+        if len(ref) < ICE_MIN_REF:
+            return out
+        ren, snit = sorted(c["ren"] for c in ref), sorted(c["snit"] for c in ref)
+        bounds = {"ren_low": ren[int(len(ren) * ICE_LOW_Q)], "snit_low": snit[int(len(snit) * ICE_LOW_Q)],
+                  "ren_normal": round(median(ren), 3), "snit_normal": round(median(snit), 3)}
+    run: list[dict[str, Any]] = []
+    for c in reversed(cycles):
+        if not (c["ren"] < bounds["ren_low"] or c["snit"] < bounds["snit_low"]):
+            break
+        run.append(c)
+    run.reverse()
+    hours = sum(c["til"] - c["t"] for c in run) / 3600  # driftstimer i løbet
+    status = "ice" if len(run) >= ICE_WATCH_N and hours >= ICE_ALARM_H else "watch" if len(run) >= ICE_WATCH_N else "ok"
+    out.update(status=status, low_run=len(run), low_hours=round(hours, 1), since=run[0]["t"] if run else None, bounds=bounds)
+    return out
+
+
 # ---------------------------------------------------------------- COP pr. døgn
 def daily_cop(hours: list[Hour], day_of, steady: Fit | None, days: list[str]) -> dict[str, Any] | None:
     """Varme ÷ el for de givne døgn (lokal dato via ``day_of(ts)``).

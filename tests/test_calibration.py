@@ -7,11 +7,14 @@ import random
 
 from custom_components.varmemodel.calibration import (
     Hour,
+    Slot,
     calibrate,
     fit_cooling,
     fit_flow,
     fit_heat_loss,
+    frost_cycles,
     guard,
+    ice_watch,
     quantile,
     theil_sen,
 )
@@ -395,3 +398,79 @@ def test_room_fit_skips_block_when_hour_before_lacks_temperature() -> None:
     hs = [RoomHour(ts=1_700_000_000 + i * 3600, t_room=None if i % 7 == 0 else 20.0 + 0.1 * (i % 5), t_out=3.0, inputs={"A": 1.0})
           for i in range(24 * 20)]
     fit_room(hs)  # må ikke fejle
+
+
+ICE_COP = {"a": 4.0, "b": 0.1, "c": -0.04, "d": 0.0}  # modellen ved 0,5 °C ude og 33 °C fremløb: COP 2,73
+
+
+def _cycle(t0: int, ratios: list[float]) -> list[Slot]:
+    """Portionerne i én driftscyklus: afrimningen slutter ved ``t0``, første portion 10 min. efter, én pr. 5 min. med den
+    givne ydelse i forhold til modellen."""
+    return [Slot(ts=t0 + 600 + 300 * i, q=0.4, e=0.4 / (2.73 * r), t_out=0.5, t_flow=33.0, run_min=10 + 5 * i) for i, r in enumerate(ratios)]
+
+
+def _cycles(start: int, levels: list[float], minutes: int = 50) -> list[Slot]:
+    """En række cyklusser efter hinanden med hver sit niveau (ydelse i forhold til modellen) – med rim, der sætter sig."""
+    out: list[Slot] = []
+    for i, lv in enumerate(levels):
+        out += _cycle(start + i * minutes * 60, [lv, lv, lv, lv * 0.95, lv * 0.9, lv * 0.85])
+    return out
+
+
+def test_frost_cycles_from_steady_slots() -> None:
+    """Driftscyklusser ud fra portionerne: start ved afrimningens slut, længde, og ydelsen i forhold til husets egen
+    COP-model – den rene flade (første 15 min.), slutningen (sidste 10 min.) og hele cyklussen."""
+    t0 = 1_795_000_200
+    slots = _cycle(t0, [1.10, 1.05, 1.00, 0.95, 0.80, 0.70]) + _cycle(t0 + 3600, [0.90, 0.88, 0.86]) + _cycle(t0 + 7200, [1.0, 1.0])
+    cy = frost_cycles(slots, ICE_COP)
+    assert len(cy) == 2  # to portioner (10 min.) er for lidt til en cyklus
+    assert cy[0]["t"] == t0 and cy[0]["min"] == 40 and cy[0]["til"] == t0 + 600 + 6 * 300 and cy[0]["n"] == 6
+    assert abs(cy[0]["ren"] - 1.05) < 0.005 and abs(cy[0]["slut"] - 0.75) < 0.005 and abs(cy[0]["snit"] - 0.975) < 0.005
+    assert cy[0]["ude"] == 0.5 and cy[0]["kw"] == 4.8
+    assert abs(cy[1]["ren"] - 0.88) < 0.005 and cy[1]["t"] == t0 + 3600
+    assert frost_cycles(slots, None) == [] and frost_cycles(slots, {}) == []  # uden husets COP-model kan intet vurderes
+
+
+def test_ice_watch_compares_with_the_house_itself() -> None:
+    """Isvagten: lav er en cyklus, der er ringere end ni ud af ti af husets egne tidligere. Enkelte lave cyklusser er
+    almindelige; tre i træk vises som »følg«, og først når det har varet seks timer uafbrudt, er det »is«."""
+    now = 1_795_600_000
+    day = 86400
+    # 40 tidligere cyklusser over ti døgn: fire lidt lave (0,90) og resten 0,96–1,08 – husets normale spredning
+    ref = _cycles(now - 11 * day, [0.90] * 4 + [0.96 + 0.01 * (i % 13) for i in range(36)], minutes=6 * 60)
+    few = frost_cycles(_cycles(now - 2 * day, [1.0] * 5), ICE_COP)
+    assert ice_watch(few, now)["status"] == "learning" and ice_watch(few, now)["bounds"] is None
+    ok = frost_cycles(ref + _cycles(now - 4 * 3600, [1.02, 0.80, 1.01]), ICE_COP)
+    w = ice_watch(ok, now)
+    assert w["status"] == "ok" and w["low_run"] == 0 and w["ref_n"] == 40 and 0.89 < w["bounds"]["ren_low"] < 0.97
+    assert abs(w["bounds"]["ren_normal"] - 1.01) < 0.03 and len(w["cycles"]) == 8 and abs(w["ren"] - 1.01) < 0.005
+    # tre lave i træk (to driftstimer): følg – en enkelt normal cyklus bryder løbet
+    watch = ice_watch(frost_cycles(ref + _cycles(now - 3 * 3600, [0.80, 0.78, 0.76]), ICE_COP), now)
+    assert watch["status"] == "watch" and watch["low_run"] == 3 and watch["low_hours"] == 2.0 and watch["since"] == now - 3 * 3600
+    broken = ice_watch(frost_cycles(ref + _cycles(now - 4 * 3600, [0.80, 0.78, 1.00, 0.76]), ICE_COP), now)
+    assert broken["status"] == "ok" and broken["low_run"] == 1
+    # lave cyklusser i træk i seks driftstimer: is – også hen over en pause (rød periode), for isen forsvinder ikke af den
+    low9 = [0.85, 0.82, 0.80, 0.78, 0.76, 0.75, 0.74, 0.72, 0.72]
+    ice = ice_watch(frost_cycles(ref + _cycles(now - 8 * 3600, low9), ICE_COP), now)
+    assert ice["status"] == "ice" and ice["low_run"] == 9 and ice["low_hours"] == 6.0
+    before = ice_watch(frost_cycles(ref + _cycles(now - 26 * 3600, low9[:5]), ICE_COP), now - 22 * 3600)  # før pausen: følg
+    assert before["status"] == "watch" and before["low_run"] == 5
+    split = frost_cycles(ref + _cycles(now - 26 * 3600, low9[:5]) + _cycles(now - 4 * 3600, low9[5:]), ICE_COP)
+    assert ice_watch(split, now, before["bounds"])["status"] == "ice"
+    assert ice_watch(split[:-1], now, before["bounds"])["status"] == "watch"
+
+
+def test_ice_watch_holds_its_bounds_through_a_long_episode() -> None:
+    """En lang tilisning må ikke selv flytte grænsen for, hvad der er lavt: grænserne fra løbets start holdes fast."""
+    now = 1_795_600_000
+    day = 86400
+    ref = _cycles(now - 12 * day, [0.96 + 0.01 * ((i + 5) % 13) for i in range(40)], minutes=6 * 60)
+    start = ice_watch(frost_cycles(ref + _cycles(now - 3 * 3600, [0.84, 0.83, 0.82]), ICE_COP), now)
+    assert start["status"] == "watch"
+    # to døgn senere: 55 lave cyklusser ligger nu blandt de »tidligere« – uden hukommelse ville mange af dem ikke være lave
+    later = now + 2 * day
+    long_ = frost_cycles(ref + _cycles(now - 3 * 3600, [0.84 - 0.001 * i for i in range(58)]), ICE_COP)
+    free = ice_watch(long_, later)
+    held = ice_watch(long_, later, start["bounds"])
+    assert held["status"] == "ice" and held["low_run"] == 58 and held["bounds"] == start["bounds"]
+    assert free["bounds"]["ren_low"] < start["bounds"]["ren_low"]  # grænsen ville være gledet ned

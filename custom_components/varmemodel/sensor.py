@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import VarmemodelConfigEntry
-from .const import FIT_KEYS, SOURCE_HYDRONIC
+from .const import CONF_COMPRESSOR, CONF_DEFROST, FIT_KEYS, SOURCE_HYDRONIC
 from .coordinator import SourceState, VarmemodelCoordinator, after_red
 from .entity import VarmemodelEntity
 
@@ -32,6 +32,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
         if s.kind == SOURCE_HYDRONIC:
             ents += [FitSensor(c, s, k) for k in FIT_KEYS]
             ents += [DailyCopSensor(c, s, "yesterday"), DailyCopSensor(c, s, "week"), CopTodaySensor(c, s)]
+            if s.eid(CONF_DEFROST) and s.eid(CONF_COMPRESSOR):
+                ents.append(IceWatchSensor(c, s))
             ents += [PlanNowSensor(c, s), CommandSensor(c, s), PlanValueSensor(c, s, "plan_flow", "flow", "°C", 1),
                      PlanCostSensor(c, s)]
         else:
@@ -166,6 +168,46 @@ class CopTodaySensor(SourceEntity, SensorEntity):
             "stabil_cop_ifølge_model": d.get("expected_steady"), "stabil_mod_model_pct": d.get("steady_vs_model_pct"),
             "metode": "5-minutters portioner siden midnat; stabil drift = fra 10 min efter start/afrimning til afrimning, varmt vand eller stop",
             "opdateret": d.get("updated"),
+        }
+
+
+class IceWatchSensor(SourceEntity, SensorEntity):
+    """Isvagten: er varmepumpens seneste driftscyklusser usædvanligt svage i forhold til husets egne tidligere?
+
+    ok – watch (mindst tre lave cyklusser i træk) – ice (lave cyklusser uafbrudt i mange timer: fladen bliver ikke ren) –
+    learning (for få tidligere cyklusser at sammenligne med). Tallene er ydelsen i procent af husets egen COP-model."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["ok", "watch", "ice", "learning"]
+
+    def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
+        super().__init__(coordinator, s, "ice_watch")
+
+    @property
+    def native_value(self) -> str | None:
+        v = (self.src.ice or {}).get("status")
+        return v if v in self._attr_options else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        w = self.src.ice or {}
+        b, df = w.get("bounds") or {}, w.get("defrost") or {}
+        pct = lambda v: None if v is None else round(v * 100)  # noqa: E731
+        low = lambda c: bool(b) and (c["ren"] < b["ren_low"] or c["snit"] < b["snit_low"])  # noqa: E731
+        return {
+            "lave_i_træk": w.get("low_run"), "lav_i_timer": w.get("low_hours"), "siden": _ts_local(w.get("since")),
+            "ren_pct": pct(w.get("ren")), "snit_pct": pct(w.get("snit")), "slut_pct": pct(w.get("slut")),
+            "ren_normal_pct": pct(b.get("ren_normal")), "ren_lav_pct": pct(b.get("ren_low")),
+            "snit_normal_pct": pct(b.get("snit_normal")), "snit_lav_pct": pct(b.get("snit_low")),
+            "sammenlignet_med_cyklusser": w.get("ref_n"), "seneste_cyklus": _ts_local(w.get("latest")),
+            "cyklusser": [{"start": _ts_local(c["t"]), "min": c["min"], "ude": c["ude"], "kw": c["kw"], "ren_pct": pct(c["ren"]),
+                           "slut_pct": pct(c["slut"]), "snit_pct": pct(c["snit"]), "lav": low(c)} for c in w.get("cycles") or []],
+            "afrimninger_24t": df.get("n"), "afrimning_hver_min": df.get("gap_min"), "afrimning_varer_min": df.get("dur_min"),
+            "seneste_afrimning": _ts_local(df.get("last")),
+            "metode": "ydelse i stabil drift (5-minutters portioner) i procent af husets egen COP-model; ren = de første 15 min. "
+                      "efter en afrimning eller start, slut = de sidste 10 min., snit = hele cyklussen; lav = ringere end ni ud af ti "
+                      "tidligere cyklusser",
+            "opdateret": _ts_local(w.get("updated")),
         }
 
 

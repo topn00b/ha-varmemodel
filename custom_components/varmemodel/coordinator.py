@@ -27,6 +27,7 @@ from homeassistant.util import dt as dt_util
 
 from . import aggregate as agg
 from .calibration import (
+    ICE_REF_DAYS,
     Fit,
     Hour,
     RoomHour,
@@ -40,7 +41,9 @@ from .calibration import (
     fit_cop_steady,
     fit_heat_loss,
     fit_room,
+    frost_cycles,
     guard,
+    ice_watch,
     steady_slots,
     sun_factor,
     validate_room,
@@ -234,6 +237,7 @@ class SourceState:
     daily: dict[str, Any] = field(default_factory=dict)
     today: dict[str, Any] = field(default_factory=dict)  # dagens COP, regnes hver time
     health: dict[str, Any] = field(default_factory=dict)  # dagens driftstal (starter, korte kørsler, afrimninger …)
+    ice: dict[str, Any] = field(default_factory=dict)  # isvagten: de seneste cyklussers ydelse mod husets egne tidligere
     last_hours: list[Hour] = field(default_factory=list)
     el_backup: dict[str, Any] = field(default_factory=dict)  # faktor og timer for den supplerende elmåler
 
@@ -242,7 +246,7 @@ class SourceState:
 
     def as_store(self) -> dict[str, Any]:
         return {"collected": self.collected, "accepted": self.accepted, "fits": self.fits, "slots": self.slots, "daily": self.daily,
-                "today": {"t": round(time.time()), "v": self.today, "h": self.health}}
+                "today": {"t": round(time.time()), "v": self.today, "h": self.health, "i": self.ice}}
 
     def load(self, d: dict[str, Any]) -> None:
         self.collected = d.get("collected", {})
@@ -255,6 +259,7 @@ class SourceState:
         if (td.get("v") or td.get("h")) and dt_util.as_local(dt_util.utc_from_timestamp(float(td.get("t") or 0))).date() == dt_util.now().date():
             self.today = td.get("v") or {}
             self.health = td.get("h") or {}
+            self.ice = td.get("i") or {}
         # 0.7.0: timemodellen for COP er fjernet; 0.8.0: LG's varmekurve er erstattet af det lærte fremløb
         for k in ("cop", "curve"):
             self.accepted.pop(k, None)
@@ -500,7 +505,82 @@ class VarmemodelCoordinator:
                 s.health = await get_instance(self.hass).async_add_executor_job(self._health_sync, s) or {}
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Dagens driftstal fejlede")
+            try:
+                res = await get_instance(self.hass).async_add_executor_job(self._ice_sync, s)
+                if res:
+                    new, s.ice = res
+                    s.slots.update(new)  # i hovedtråden: de gemte portioner må ikke ændres, mens de gemmes
+                    self._ice_follow(s)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Isvagten fejlede")
         self._notify()
+
+    def _ice_sync(self, s: SourceState) -> tuple[dict[str, list[float]], dict[str, Any]] | None:
+        """Isvagten for en vandbåren kilde: portionerne i stabil drift fra de seneste to døgn (nye), og de seneste
+        driftscyklussers ydelse vurderet mod husets egne tidligere (``frost_cycles``/``ice_watch``). Afrimningerne det
+        seneste døgn følger med til visningen."""
+        heat, el, flow, comp_id, df_id = (s.eid(k) for k in (CONF_HEAT, CONF_ELECTRICITY, CONF_FLOW, CONF_COMPRESSOR, CONF_DEFROST))
+        out = self._id(CONF_OUTDOOR)
+        if not (heat and el and out and flow and comp_id and df_id):
+            return None
+        end = dt_util.utcnow()
+        start = end - timedelta(hours=48)
+        stats = statistics_during_period(self.hass, start, end, {heat, el, out, flow}, "5minute", {"energy": "kWh", "temperature": "°C"}, {"change", "mean"})
+        five: dict[int, dict[str, float | None]] = {}
+        for stat_id, key, fld in ((heat, "q", "change"), (el, "e", "change"), (out, "t_out", "mean"), (flow, "t_flow", "mean")):
+            for x in stats.get(stat_id, []):
+                five.setdefault(int(_ts(x["start"])), {})[key] = _num(x.get(fld))
+
+        def ivs(key: str) -> list[tuple[float, float]]:
+            eid = s.eid(key)
+            if not eid:
+                return []
+            res = history.get_significant_states(self.hass, start, end, [eid], include_start_time_state=True, significant_changes_only=False)
+            ch = [(x.last_changed.timestamp(), x.state == "on") for x in res.get(eid, []) if isinstance(x, State) and x.state not in ("unknown", "unavailable")]
+            return agg.intervals(ch, end.timestamp())
+
+        defrost = ivs(CONF_DEFROST)
+        new = {str(sl.ts): [round(sl.q, 4), round(sl.e, 4), round(sl.t_out, 2), round(sl.t_flow, 2), sl.run_min]
+               for sl in steady_slots(five, ivs(CONF_COMPRESSOR), defrost, ivs(CONF_DHW))}
+        now = end.timestamp()
+        rows = {**dict(s.slots), **new}  # øjebliksbillede af de gemte + de nye
+        slots = [Slot(int(k), *v) for k, v in rows.items() if int(k) >= now - (ICE_REF_DAYS + 1) * 86400]
+        w = ice_watch(frost_cycles(slots, (s.accepted.get("cop_steady") or {}).get("extra")), now,
+                      (self.air.get(f"ice:{s.sid}") or {}).get("hold"))
+        day = [(a, b) for a, b in defrost if b >= now - 86400]
+        gaps = [y[0] - x[0] for x, y in zip(day, day[1:]) if y[0] - x[0] < 4 * 3600]  # længere ophold er pauser, ikke rim
+        w["defrost"] = {"n": len(day), "gap_min": round(median(gaps) / 60) if gaps else None,
+                        "dur_min": round(median(b - a for a, b in day) / 60, 1) if day else None, "last": round(day[-1][1]) if day else None}
+        w["updated"] = round(now)
+        return new, w
+
+    def _ice_follow(self, s: SourceState) -> None:
+        """Isvagtens hukommelse og besked: grænserne for »lavt« holdes fast, mens et løb af lave cyklusser varer (ellers
+        flyttede en lang tilisning selv grænsen), og der sendes én besked, når det har varet usædvanligt længe."""
+        w = s.ice or {}
+        st = self.air.setdefault(f"ice:{s.sid}", {})
+        if w.get("status") in ("watch", "ice") and w.get("bounds"):
+            st["hold"] = w["bounds"]
+        elif w.get("status") in ("ok", "learning"):
+            st.pop("hold", None)
+        key = f"is:{s.sid}"
+        if w.get("status") == "ice":
+            b, df = w["bounds"], w.get("defrost") or {}
+            pct = lambda v: f"{v * 100:.0f} %" if v is not None else "–"  # noqa: E731
+            self._drift_msg(key, "Varme: varmepumpen kan være ved at ise til",
+                            f"{s.name} har ydet usædvanligt lidt i {w['low_hours']:.0f} timer – se efter is på udedelen.",
+                            f"{s.name} har haft {w['low_run']} driftscyklusser i træk med usædvanligt lav ydelse siden "
+                            f"{_clock_hm(w['since'])} ({w['low_hours']:.0f} timer).\n\n"
+                            f"- Lige efter en afrimning yder den {pct(w.get('ren'))} af det, husets egen model venter "
+                            f"(normalt {pct(b.get('ren_normal'))}, lavt under {pct(b.get('ren_low'))}).\n"
+                            f"- Over hele cyklussen: {pct(w.get('snit'))} (normalt {pct(b.get('snit_normal'))}, lavt under {pct(b.get('snit_low'))}).\n"
+                            f"- Afrimninger det seneste døgn: {df.get('n', 0)}"
+                            + (f", ca. hver {df['gap_min']}. minut" if df.get("gap_min") else "")
+                            + (f", {_dk_txt(str(df['dur_min']))} min. ad gangen" if df.get("dur_min") else "") + ".\n\n"
+                            "Sådan ser det ud i tallene, når afrimningen ikke får lamelfladen ren. Se efter is eller sne på "
+                            "udedelens lameller. Beskeden kommer én gang; isvagten på anlæg-kortet viser, når ydelsen er normal igen.")
+        elif w.get("status") == "ok":
+            self._drift_clear(key)
 
     def _health_sync(self, s: SourceState) -> dict[str, Any] | None:
         """Dagens driftstal for en vandbåren kilde: fra historikken (``day_health``) plus Varmemodels egne tællere."""
