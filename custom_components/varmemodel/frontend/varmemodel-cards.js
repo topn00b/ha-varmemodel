@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.31.6';
+  const VERSION = '0.31.7';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -1574,9 +1574,9 @@
         if (vv) g += BOX(265, 10, 245, 100, 'Varmt vand') + TX(327, 56, 'beholder', 'm c') + TX(447, 56, 'laver nu', 'm c') + (p.tank ? P(327, 84, 105, p.tank) : '') + P(447, 84, 110, p.vv);
         g += BOX(10, 125, 500, 235, `${main.name} · ${sc.model || 'varmepumpe'}`);
         g += P(135, 180, 230, p.status) + TX(135, 212, p.plan, 'm c', D.differs ? ` style="fill:${YE};font-weight:700"` : '');
-        // Nederste række: varmepumpens egne ind/ud over sine rør (retur til venstre, fremløb til højre),
-        // lodret over følerne D og A, så de to målinger af samme rør står over for hinanden
-        g += P(385, 180, 230, p.cop) + P(260, 250, 230, p.flow) + P(135, 320, 230, p.ind) + P(385, 320, 230, p.ud);
+        // Varmepumpens egne ind → ud står samlet i midten (de måler inde i varmepumpen – ved varmt vand tankens kreds),
+        // ikke lodret over rørenes følere D og A, så de ikke ligner to målinger af samme rør; flowet nederst mod rørene
+        g += P(385, 180, 230, p.cop) + P(160, 250, 170, p.ind) + TX(260, 256, '→', 'm c') + P(370, 250, 200, p.ud) + P(260, 320, 230, p.flow);
         if (p.drift) g += TX(260, 353, p.drift.lang, 'm c', p.drift.ex);
         const bp = !!c.bypass, bf = !!c.buffer;
         g += PATH('M440 360 V776', 'hot', true) + PATH('M80 780 V364', 'cold', true);
