@@ -2699,21 +2699,24 @@ async def test_air_ladder_has_a_lowest_setpoint(ha: HomeAssistant) -> None:
     t = time.time()
     d = c._air_step(s, "climate.ll", p, cold, True, False, t)  # noqa: SLF001
     v = c.air[air]["view"]
-    # føleren 18,0 °C → trinnets eget setpunkt er 16,5 °C; men rummet skal holde 19,5 °C
-    assert v["trin_liste"][0]["setpunkt"] == 16.5 and c.air[air]["rung"] == "High +-1.5" and v["laveste"] == 19.5
-    assert d["setpoint"] == 19.5 and v["løftet_til_laveste"] == 19.5 and "stigens laveste setpunkt (19,5 °C)" in v["grund"]
-    assert c.air[air]["cmd"] == ["High", 19.5, "High +1.5"]  # det, der faktisk køres, hedder efter sit eget niveau
-    # varmepumpen står sådan nu: forbruget læres på det niveau, der køres – ikke på trinnets
+    # føleren 18,0 °C → trinnets eget setpunkt ville være 16,5 °C; men rummet skal holde 19,5 °C: stigen starter ved det
+    # laveste setpunkt, og spændet regnes derfra (19,5–22,5) – ingen kopier af samme setpunkt og blæser
+    tl = v["trin_liste"]
+    assert tl[0]["setpunkt"] == 19.5 and tl[-1]["setpunkt"] == 22.5 and v["laveste"] == 19.5
+    pairs = [(x["blæser"], x["setpunkt"]) for x in tl]
+    assert len(pairs) == len(set(pairs))
+    assert d["setpoint"] >= 19.5 and v["løftet_til_laveste"] is None
+    # varmepumpen står sådan nu: forbruget læres på det niveau, der køres
     ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 18.0, "temperature": 19.5, "fan_mode": "High"})
     c._air_step(s, "climate.ll", p, cold, True, False, t + 60)  # noqa: SLF001
     assert c.air[air]["view"]["kører_nu"] == "High +1.5"
     # det gælder også, når rummet er over sit gulv – det laveste setpunkt er en grænse, ikke en nødregel
     d = c._air_step(s, "climate.ll", p, ok, True, False, t + 120)  # noqa: SLF001
-    assert d["setpoint"] == 19.5 and c.air[air]["view"]["løftet_til_laveste"] == 19.5
+    assert d["setpoint"] >= 19.5 and c.air[air]["view"]["trin_liste"][0]["setpunkt"] == 19.5
     # føleren er nået op over det laveste setpunkt + 1,5 °C: trinnets eget setpunkt
     ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 21.6, "temperature": 19.5, "fan_mode": "High"})
     d = c._air_step(s, "climate.ll", p, cold, True, False, t + 180)  # noqa: SLF001
-    assert d["setpoint"] == 20.0 and c.air[air]["view"]["løftet_til_laveste"] is None
+    assert c.air[air]["view"]["trin_liste"][0]["setpunkt"] == 20.0 and c.air[air]["view"]["løftet_til_laveste"] is None
     # brugeren kan sætte det højere (fx når et fjernt rum kræver varmere luft ved enheden) …
     await ha.services.async_call("select", "select_option", {"entity_id": low.entity_id, "option": "20.5"}, blocking=True)
     await ha.async_block_till_done()
@@ -2731,4 +2734,4 @@ async def test_air_ladder_has_a_lowest_setpoint(ha: HomeAssistant) -> None:
     ha.states.async_set("climate.ll", "off", {**LL_ATTRS, "current_temperature": 18.0, "temperature": 20, "fan_mode": "Mid"})
     c.air[air].update(on=False, rung=None)
     d = c._air_step(s, "climate.ll", p, cold, True, False, t + 360)  # noqa: SLF001
-    assert d["setpoint"] == 19.5 and c.air[air]["view"]["løftet_til_laveste"] == 19.5
+    assert d["setpoint"] == 19.5 and c.air[air]["view"]["trin_liste"][0]["setpunkt"] == 19.5

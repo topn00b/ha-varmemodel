@@ -2458,8 +2458,11 @@ class VarmemodelCoordinator:
             anchor = prev_a if prev_a is not None and abs(want_a - prev_a) <= stp / 2 + AIR_ANCHOR_HYST else round(want_a / stp) * stp
         anchor = round(anchor, 2)
         a["anchor"] = anchor
-        sp_min = round(min(max(lo, anchor), top), 2)
-        sp_max = max(sp_min, min(top, anchor + AIR_SPAN))
+        # Stigen starter aldrig under det laveste setpunkt, og spændet regnes derfra: ellers bliver trin under det laveste
+        # til kopier (samme setpunkt og blæser) og toppen kun ankeret + spændet (gangen 18,5 → 19,5–20,0 i stedet for 19,5–22,5)
+        base = max(anchor, sp_low) if sp_low is not None else anchor
+        sp_min = round(min(max(lo, base), top), 2)
+        sp_max = max(sp_min, min(top, base + AIR_SPAN))
         fmin = self.air_setting(s, "air_fan_min")
         ladder = build_ladder(fans, cap, sp_min, sp_max, stp, quiet, fmin if fmin in fans else None)
         prio = self.air_setting(s, AIR_PRIORITY)
@@ -2592,7 +2595,7 @@ class VarmemodelCoordinator:
                                                             if up_every else {}))
             if not start_learned:
                 reason = reason.replace(" (lært for udetemperaturen)", "")
-            if reason.endswith("øverste trin") and sp_max >= top - 1e-6 and anchor + AIR_SPAN > top + 1e-6:
+            if reason.endswith("øverste trin") and sp_max >= top - 1e-6 and base + AIR_SPAN > top + 1e-6:
                 # stigen er skåret af ved brugerens højeste setpunkt: sig det, så grænsen kan findes og flyttes
                 reason += f" (stigens højeste setpunkt, {top:.1f} °C)"
             if prev is not None and i is not None:
