@@ -2418,6 +2418,14 @@ async def test_heat_up_follows_the_return_by_priority(ha: HomeAssistant) -> None
     ha.states.async_set("sensor.frem", "27.0")
     await c._flow_apply(s, plan, False)
     assert calls[-1] == 27.0 and hs["guard"] is None  # 21,5 + 4 = 25,5 ville være et fald: loftet står på opstartens 27
+    # løftet efter en afrimning (længe efter starten) hæver målet, mens det står på – men flytter ikke loftet
+    hs.update(start_t=time.time() - 7200, df_off_t=time.time() - 700)
+    hs["appr"]["start_t"] = hs["start_t"]
+    await c._flow_apply(s, plan, False)
+    assert hs["appr"]["v"] == 27.0
+    ha.states.async_set("sensor.retur", "23.5")
+    await c._flow_apply(s, plan, False)
+    assert calls[-1] == 29.0 and hs["guard"] == {"mål": 29.0, "grund": "opstart"} and hs["appr"]["v"] == 27.5
 
 
 async def test_economy_plans_with_the_heat_pumps_calm_power(ha: HomeAssistant) -> None:

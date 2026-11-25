@@ -2605,8 +2605,11 @@ class VarmemodelCoordinator:
             if g is not None and min(g, cap) > want:
                 want = min(g, cap)
                 hs["guard"] = {"mål": want, "grund": why}
-                if why == "opstart" and appr is not None and appr.get("v") is not None:
-                    appr["v"] = max(appr["v"], want)  # opstartens løft tæller med, så målet ikke falder, når opstarten er slut
+                if (why == "opstart" and appr is not None and appr.get("v") is not None
+                        and time.time() - (_num(hs.get("start_t")) or 0) <= START_PHASE_S + 300):
+                    # Startens løft tæller med i loftet, så målet ikke falder, når opstarten er slut. Løftet efter en
+                    # afrimning tæller ikke – ellers ville loftet krybe en grad op for hver afrimning
+                    appr["v"] = max(appr["v"], want)
             if appr is not None and appr.get("aktiv"):
                 self._appr_later(s)  # returen stiger, mens gulvet varmes: følg den
             hs["soft"] = True
