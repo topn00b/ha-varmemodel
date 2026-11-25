@@ -288,7 +288,6 @@
     ['Blæser: laveste og højeste (støj)', ['air_fan_min', 'air_fan_day', 'air_fan_night', 'air_night_start', 'air_night_end']],
     ['Stigens temperaturer', ['air_ref', 'air_sp_low', 'air_sp_top']],
     ['Lameller', ['air_swing_v', 'air_swing_h']],
-    ['Ventilation (følger nat/dag ovenfor)', ['air_vent_control', 'air_vent_rooms', 'air_vent_day', 'air_vent_night']],
   ];
   // Kortets egne navne (uafhængigt af HA's systemsprog)
   const SET_NAMES = {
@@ -1371,11 +1370,19 @@
           if (['fan', 'switch', 'input_boolean'].includes(dom)) return `<button class="tg2${s0.state === 'on' ? ' on' : ''}" data-act="${esc(eid)}">${s0.state === 'on' ? 'til' : 'fra'}</button>`;
           return `<span class="v" data-e="${esc(eid)}">${esc(s0.state)}</span>`;
         };
+        // Styrer Varmemodel ventilationen, vises dens valg og status her (ingen håndbetjening, den skrives over hvert kvarter)
+        const vs = va.ventilation_styring;
+        const sel = (k, lbl) => { const e = s.e(k); const s0 = st(h, e); return s0 ? `<div class="sr"><span>${lbl}</span><span>${ctl(e)}</span></div>` : ''; };
+        const vctl = vs && vs.styrer;
         L += `<div class="b"><div class="pvh">Ventilation<span class="mut sm"> · fordeler varmen · ${va.ventilation === 'til' ? 'kører' : 'står'}</span></div>`
-          + `<div class="sr"><span>Tilstand</span><span>${ctl(va.ventilation_entitet)}</span></div>`
-          + (va.ventilation_hastighed_entitet ? `<div class="sr"><span>Hastighed</span><span>${ctl(va.ventilation_hastighed_entitet)}</span></div>` : '')
-          + `<div class="sm" style="margin-top:4px">${va.ventilation_virkning_pct != null ? `Med ventilation ${va.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(va.ventilation_virkning_pct, 0)} % varme i rummene pr. kWh el` : 'Effekten på varmen pr. kWh el læres (samme trin med og uden ventilation)'}</div>`
-          + (c.assist_automation ? `<div class="sm mut">Styres af <span class="v" data-e="${esc(c.assist_automation)}">${esc(at(h, c.assist_automation).friendly_name || c.assist_automation)}</span> (${(st(h, c.assist_automation) || {}).state === 'on' ? 'til' : 'fra'})</div>` : '') + '</div>';
+          + sel('air_vent_control', 'Varmemodel styrer ventilationen')
+          + (vctl
+            ? sel('air_vent_rooms', 'Henter varme til') + sel('air_vent_day', 'Maks. hastighed dag') + sel('air_vent_night', 'Maks. hastighed nat')
+              + `<div class="sm" style="margin-top:4px">${vs.til ? `<b>Til</b> · hastighed ${esc(vs.maks)}` : '<b>Fra</b>'} · maks. nu ${esc(vs.maks)} (${vs.nat ? 'nat' : 'dag'}) · ${esc(vs.grund || '')}</div>`
+            : `<div class="sr"><span>Tilstand</span><span>${ctl(va.ventilation_entitet)}</span></div>`
+              + (va.ventilation_hastighed_entitet ? `<div class="sr"><span>Hastighed</span><span>${ctl(va.ventilation_hastighed_entitet)}</span></div>` : ''))
+          + `<div class="sm mut" style="margin-top:4px">${va.ventilation_virkning_pct != null ? `Med ventilation ${va.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(va.ventilation_virkning_pct, 0)} % varme i rummene pr. kWh el` : 'Effekten på varmen pr. kWh el læres (samme trin med og uden ventilation)'}</div>`
+          + (c.assist_automation && !vctl ? `<div class="sm mut">Styres af <span class="v" data-e="${esc(c.assist_automation)}">${esc(at(h, c.assist_automation).friendly_name || c.assist_automation)}</span> (${(st(h, c.assist_automation) || {}).state === 'on' ? 'til' : 'fra'})</div>` : '') + '</div>';
       }
       // kWh el over tid: sidste 24 timer (farvet efter pris) og planen de næste 12 timer, dagene under
       const eid = sensorsOf(h, s).electricity_energy; const rows = this.kwh(h, eid);
@@ -1437,7 +1444,6 @@
             + '</table></div><div class="sm mut">°C pr. kWh el (antal kvarterer). Får et rum tydeligt mindre ved en lav blæser, så sæt »Min. blæser« derefter – tallene samles fra i dag og bruges ikke til styring endnu.</div></details>';
         }
         S += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, ${asa.min_blæser ? `blæser ${esc(asa.min_blæser)}–${esc(asa.maks_blæser || '–')}` : `maks. blæser ${esc(asa.maks_blæser || '–')}`}${asa.prioritet ? ` · ${esc(OPT_NAMES[asa.prioritet] || asa.prioritet)}` : ''} · nu trin ${cur ?? '–'}${asa.el_mål_w ? ` · planens el-mål ${fmt(asa.el_mål_w, 0)} W${asa.mål_trin != null ? ` (trin ${asa.mål_trin})` : ' (lærer stadig trinene)'}` : ''}${asa.kører_nu ? ` · kører ${esc(String(asa.kører_nu).replace(/ \+(-?)(\d+)\.(\d)$/, (m, ng, i1, d1) => ` ${ng ? '−' : '+'}${i1},${d1}`))}` : ''}${asa.afrimninger_24t != null ? ` · afrimninger det seneste døgn: ${asa.afrimninger_24t}${asa.seneste_afrimning ? ` (seneste ${when(asa.seneste_afrimning)})` : ''}` : ''}</span></div>`
-          + (asa.ventilation_styring ? (() => { const v = asa.ventilation_styring; return `<div class="sm" style="margin-bottom:4px"><b>Ventilation</b> ${v.til ? `til · trin ${esc(v.maks)}` : 'fra'} · maks. nu ${esc(v.maks)} (${v.nat ? 'nat' : 'dag'}; dag ${esc(v.maks_dag)} / nat ${esc(v.maks_nat)}) · ${esc((v.rum || []).join(' + '))} · ${esc(v.grund || '')}${v.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke ventilationen)</span>'}</div>`; })() : '')
           + `<div class="sm" style="margin-bottom:4px">${asa.ventilation ? `Ventilation ${esc(asa.ventilation)}${asa.ventilation_virkning_pct != null ? ` · med ventilation ${asa.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(asa.ventilation_virkning_pct, 0)} % varme pr. kWh el` : ' · effekten læres'} · ` : ''}${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div><div class="sm mut" style="margin-top:4px"><b style="color:var(--info-color,#3b82c4)">Fyldt blå</b> = trinnet nu · <b>stiplet ramme</b> = planens mål-trin · <span style="color:#f2711c">orange bjælke</span> = lært forbrug (W) · ✕ = var ikke nok for lidt siden. ${asa['føler'] ? `Temperaturerne måles fra føleren ved enheden (${esc(OPT_NAMES[asa['føler']] || asa['føler'])}, nu ${fmt(asa['føler_temp'], 1)} °C): laveste trin ligger ${fmt(asa.laveste_under_føleren, 1)} °C under den – dér kører varmepumpen på sin laveste effekt uden selv at stoppe – og setpunkterne følger føleren, så et trin er et bestemt arbejde for varmepumpen. Tallet i parentes er trinnets afstand til føleren. ${num(asa.laveste) !== null ? `Laveste setpunkt: ${fmt(asa.laveste, 1)} °C – der skal mindst være så varmt ved enheden, som rummene skal holde; ↑ = trinnets eget setpunkt ligger lavere og holdes dér. ` : ''}Højeste setpunkt: ${fmt(asa.top, 1)} °C. ` : ''}<b>Op</b>, når et rum er under sit gulv: først blæseren et trin op; fra højeste blæser den næste temperatur – stadig på højeste blæser. <b>Ned</b>, når alle rum har overskud: ét trin ad gangen gennem alle blæsere på temperaturen, før temperaturen falder – så stigen finder den kombination af temperatur og blæser, der lige netop holder rummene. Et trin, der lige var for lidt, prøves først igen, når overskuddet har holdt dobbelt så længe. % = varme i rummene pr. kWh el i forhold til det bedste trin (lært af rumfølerne, efter afkøling og opdrift fra stueplanen). <b>(delt)</b> = målt på samme temperatur med en anden blæser; <b>(skøn)</b> = mellem de nærmeste lærte temperaturer. Når trinene er målt, går stigen mod det trin, der dækker planens varme for mindst el. Prioritet: <b>økonomi</b> – et trin prøves i 30 min., og der skrues kun op, når det kolde rum stiger langsommere, end planen regner med; <b>balance</b> – der skrues op, når det stiger under 0,2 °C/t; <b>komfort</b> – et trin op hvert kvarter, til rummet er over gulvet.</div>${rft}</div>`;
       }
       L += settingsPanel(h, s);
