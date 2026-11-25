@@ -2553,7 +2553,8 @@ class VarmemodelCoordinator:
                 # efter niveau, ikke efter plads: skærer toppen stigen af, er midten stadig samme arbejde for varmepumpen –
                 # eller stigens øverste trin, hvis den ikke når så højt)
                 mid_i = locate(rungs, rungs[-1][0], _lvl(AIR_SPAN * AIR_SOFT_SHARE - below), order)
-                mid = len(ladder) - 1 if learned or mid_i is None else mid_i
+                # planen har brug for mere end midten for at nå gulvet (se _air_plan): så er midten ikke et loft
+                mid = len(ladder) - 1 if learned or mid_i is None or a.get("plan_uncapped") else mid_i
                 if tgt is not None:
                     tgt = min(tgt, mid)
                 # Bund: under gulvet køres aldrig under planens trin (dets forbrug dækker planens varme) – lavere trin kan ikke
@@ -2622,7 +2623,7 @@ class VarmemodelCoordinator:
             starts[b] = label(ladder[min(i, len(ladder) - 1)])
         # Det trin, der faktisk kører nu (matches på blæser og setpunkt), og forbruget pr. trin ud fra elmåleren
         act = None
-        if st is not None and st.state == "heat":
+        if st is not None and st.state == "heat" and attrs.get("preset_mode") != "powerful":  # powerful er ikke et trin: læres ikke
             nm = "quiet" if (quiet and attrs.get("preset_mode") == "quiet") else attrs.get("fan_mode")
             sp_a, cmd = _num(attrs.get("temperature")), a.get("cmd")
             if cmd and nm == cmd[0] and sp_a is not None and abs(sp_a - float(cmd[1])) < 0.01:
@@ -2711,8 +2712,22 @@ class VarmemodelCoordinator:
             # det, stigen har sat: sådan kendes trinnet igen på klimaentiteten ved næste kvarter (navnet er det, der
             # faktisk køres – også når setpunktet er løftet til gulvet)
             a["cmd"] = [cur.preset or cur.fan, sp_out, rel(cur.preset or cur.fan, sp_out)]
+        presets = attrs.get("preset_modes") or []
+        # Powerful – ikke et trin på stigen, men mere luft, når det trænger: alle rum under gulvet (plus forvarmning før
+        # en blokering), eller planen skal bruge mere end midten for at nå gulvet før blokeringen. Kun på højeste blæser,
+        # og kun når højeste blæser er tilladt nu (nat/dag). Panasonicen slår den selv fra efter ca. 20 min. – den sættes
+        # igen ved næste kvarter
+        pw_why = None
+        if a["on"] and cur is not None and "powerful" in presets and not boost and fans and cap == fans[-1] and cur.fan == cap:
+            if margins and all(v < 0 for v in margins.values()):
+                pw_why = "alle rum er under gulvet"
+            elif a.get("plan_uncapped"):
+                pw_why = "forvarmning – planen skal bruge mere end midten for at nå gulvet før blokeringen"
+        if pw_why:
+            out["preset"] = "powerful"
+            a["view"]["grund"] = f"{a['view']['grund']} – powerful: {pw_why}"
+        a["view"]["powerful"] = pw_why
         if boost:
-            presets = attrs.get("preset_modes") or []
             out.update(on=True, preset="powerful" if "powerful" in presets else out.get("preset"))
         a["view"]["jeg_fryser"] = boost
         return out
@@ -3921,7 +3936,9 @@ class VarmemodelCoordinator:
         ast = self.air.get(s.sid) or {}
         curve = [tuple(x) for x in (ast.get("eff_curve") or [])]
         cap_w = ast.get("soft_cap_w")
-        if self.air_setting(s, AIR_PRIORITY) != "comfort" and cap_w and len(curve) < 3:
+        e_full = e_max
+        capped = self.air_setting(s, AIR_PRIORITY) != "comfort" and bool(cap_w) and len(curve) < 3
+        if capped:
             # Nødløsning, indtil stigens virkning pr. trin er lært: planen regner med højst midterste trin
             e_max = max(e_min + 0.05, min(e_max, cap_w / 1000))
         try:
@@ -3929,10 +3946,19 @@ class VarmemodelCoordinator:
         except Exception:  # noqa: BLE001
             rq = {}
         past = [rq.get(h0 - k * 3600, 0.0) for k in range(6, 0, -1)]
-        p = await self.hass.async_add_executor_job(
-            partial(make_air_plan, hours, show, e_min, e_max, past_q=past, label=_clock,
-                    comfort=self.setting(CONF_COMFORT_OFFSET), red_allowance=self.setting(CONF_RED_ALLOWANCE),
-                    economy=self.setting(CONF_ECONOMY), eff_curve=curve if len(curve) >= 3 else None, red_spans=self.red_spans))
+        mk = lambda em: partial(make_air_plan, hours, show, e_min, em, past_q=past, label=_clock,  # noqa: E731
+                                comfort=self.setting(CONF_COMFORT_OFFSET), red_allowance=self.setting(CONF_RED_ALLOWANCE),
+                                economy=self.setting(CONF_ECONOMY), eff_curve=curve if len(curve) >= 3 else None, red_spans=self.red_spans)
+        p = await self.hass.async_add_executor_job(mk(e_max))
+        ast["plan_uncapped"] = False
+        if capped and p.problems and e_full > e_max + 1e-6:
+            # Loftet må aldrig koste gulvet: kan rummene ikke nå gulvet (plus margen) med midterste trin – fx før en lang
+            # blokering – regnes planen med kildens fulde effekt. Den vælger stadig de billigste timer og går ned, når
+            # rummene har overskud; stigen må så også gå over midten
+            p2 = await self.hass.async_add_executor_job(mk(e_full))
+            if len(p2.problems) <= len(p.problems):
+                p, e_max = p2, e_full
+                ast["plan_uncapped"] = True
         if (eco := self.setting(CONF_ECONOMY)) > 0:
             p.reason += f" – økonomi: rummene må gå {eco:.2f} °C under gulvet"
         plan = {"kind": "air_air", "hours": p.hours, "rooms": p.rooms, "rooms_planned": [r.name for r in show if r.t_min > -50],
