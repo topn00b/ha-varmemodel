@@ -261,6 +261,9 @@
       "air_ref": {
         "name": "Sensor at the unit"
       },
+      "air_sp_low": {
+        "name": "Lowest setpoint"
+      },
       "air_sp_top": {
         "name": "Highest setpoint"
       },

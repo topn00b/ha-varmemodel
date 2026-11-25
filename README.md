@@ -364,6 +364,7 @@ Med `source: <varmekildens navn>` viser kortet kun den varmekilde: dens rum, pla
 | *Min. blæser* (valg, 0.29.0) | den laveste blæser, stigen må bruge – fx når et fjernt rum ikke får del i varmen ved lav blæser. Trinene under den (og *quiet*) udgår; standard er den laveste (ingen grænse). Ligger den over *Maks. blæser* (fx om natten), vinder maks., og stigen er kun setpunkter |
 | *Maks. blæser dag / nat* (valg) | hvor meget den må larme – hastighederne læses fra klimaentiteten |
 | *Føler ved enheden* (valg, 0.31.0) | føleren, stigens temperaturer måles fra: enhedens egen (standard) eller føleren i et af kildens rum – vælg det rum, varmepumpen hænger i, hvis dets føler sidder tæt på den (mange enheder melder kun hele grader) |
+| *Laveste setpunkt* (valg, 0.31.1) | stigens bund – modstykket til toppen. Standard og laveste mulige: det højeste gulv blandt de rum, kilden betjener; der skal mindst være så varmt ved enheden, som rummene skal holde |
 | *Højeste setpunkt* (valg, 0.31.0) | stigens top. Standard: rummenes højeste gulv + 3 °C |
 | *Nat begynder / slutter* (tid) | standard 22:00–07:00 |
 | *Lameller op/ned og side* (valg) | »uændret« eller en fast stilling |
@@ -377,6 +378,7 @@ Med `source: <varmekildens navn>` viser kortet kun den varmekilde: dens rum, pla
 - **Ned**, når alle rum har overskud: ét trin ad gangen gennem alle blæsere på temperaturen, før temperaturen falder en halv grad (fx 20,5 High → 20,5 HighMid → 20,5 Mid → 20,0 High → …) – så stigen finder den kombination af temperatur og blæser, der lige netop holder rummene.
 - Et trin, der lige har vist sig ikke at være nok (et rum under gulvet, der ikke steg), prøves ikke igen med det samme: der gås først ned til det, når overskuddet har holdt dobbelt så længe (90 min. på trinnet) – eller efter et stop.
 - Trinnet huskes som blæser + niveau, så det findes igen, når stigen bygges om (nat/dag, min. blæser, toppen).
+- **Laveste setpunkt (0.31.1):** setpunktet sættes aldrig under *Laveste setpunkt* – og det kan ikke vælges lavere end det højeste gulv blandt de rum, kilden betjener: rummene kan ikke blive varmere end luften, de får varmen fra. Er føleren ved enheden kold (fx efter en lang blokering), ligger trinnets eget setpunkt under det, og setpunktet holdes så på det laveste – varmepumpen arbejder hårdt, til der er varmt nok ved enheden, og derefter tager trinnets eget setpunkt over. Trinnet er det samme hele vejen; forbruget læres på det niveau, der faktisk køres.
 
 **Mest varme pr. kWh el uden ekstra følere:** for hvert trin lærer Varmemodel, hvor meget rummene stiger pr. kWh el – målt ændring minus det, rummet ville have gjort uden varmepumpen (afkøling mod ude, gratis varme som opdrift fra etagen under, naborum). Det læres kun, når trinnet har kørt i mindst 45 min. Når to eller flere trin er lært, vælger stigen det trin, der dækker planens varme for mindst el – og svarer dermed selv på, om lav blæser i mange timer eller høj i få er billigst. Kortet viser virkningen pr. trin i % af det bedste.
 

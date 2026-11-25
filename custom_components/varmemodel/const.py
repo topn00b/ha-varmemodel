@@ -183,10 +183,11 @@ CONF_CLIMATE = "climate"
 CONF_EL_POWER = "el_power"  # luft-luft: eleffekt (W) – til forbrug pr. trin (energimålere er for grove pr. kvarter)
 CONF_ASSIST = "assist_fan"  # luft-luft: ventilation der fordeler varmen (til/fra-tilstand)
 CONF_ASSIST_SPEED = "assist_fan_speed"  # valgfri: dens hastighed (0 = står)
-AIR_SELECTS = ("air_priority", "air_fan_min", "air_fan_day", "air_fan_night", "air_swing_v", "air_swing_h", "air_ref", "air_sp_top")
+AIR_SELECTS = ("air_priority", "air_fan_min", "air_fan_day", "air_fan_night", "air_swing_v", "air_swing_h", "air_ref", "air_sp_low", "air_sp_top")
 AIR_REF = "air_ref"  # føleren ved enheden, som stigens temperaturer måles fra: enhedens egen eller et af kildens rum
 AIR_REF_UNIT = "enheden"  # valget »enhedens egen føler«
 AIR_SP_TOP = "air_sp_top"  # stigens højeste setpunkt (°C) – standard: rummenes højeste gulv + AIR_SPAN
+AIR_SP_LOW = "air_sp_low"  # stigens laveste setpunkt (°C) – aldrig under rummenes højeste gulv: der skal mindst være så varmt ved enheden, som de rum, den betjener, skal holde
 AIR_ANCHOR_BELOW = 1.5  # stigens laveste trin ligger så langt under føleren ved enheden: varmepumpen kører på sin laveste effekt (længere nede stopper og starter den selv)
 AIR_ANCHOR_HYST = 0.1  # ankeret flytter først, når føleren er så langt forbi afrundingens grænse (ellers skifter setpunktet frem og tilbage)
 AIR_SPAN = 3.0  # stigens temperaturer: fra laveste trin og så mange °C op (højst til stigens top)

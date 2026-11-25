@@ -2599,8 +2599,8 @@ async def test_air_ladder_sensor_and_top_are_choices(ha: HomeAssistant) -> None:
     c, s, air = await _air_ref_entry(ha)
     ref = next(x for x in ha.states.async_all("select") if "luft_luft" in x.entity_id and x.attributes.get("options", [None])[0] == "enheden")
     assert ref.state == "enheden" and ref.attributes["options"] == ["enheden", "Loft", "Reposen"]
-    top = next(x for x in ha.states.async_all("select") if "luft_luft" in x.entity_id and "22.5" in x.attributes.get("options", []))
-    assert top.state == "22.5" and top.attributes["options"][0] == "16.0" and top.attributes["options"][-1] == "30.0"
+    top = next(x for x in ha.states.async_all("select") if "luft_luft" in x.entity_id and x.attributes.get("options", [None])[0] == "16.0")
+    assert top.state == "22.5" and top.attributes["options"][-1] == "30.0"
     p = SimpleNamespace(hours=[{"blocked": False, "t_out": 2.0, "el_kw": None} for _ in range(6)], rooms={"Loft": [19.0] * 6})
     cold = [PlanRoom("Loft", 19.0, 19.5, 0.7, 0.0, 0.02, margin=0.3, t_max=22.5)]
     c._air_step(s, "climate.ll", p, cold, True, False, time.time())  # noqa: SLF001
@@ -2680,10 +2680,11 @@ async def test_calibration_after_an_update_survives_a_reload(ha: HomeAssistant) 
     assert c._sw_cal == c._sw and c._data()["sw"] == c._sw  # noqa: SLF001
 
 
-async def test_air_setpoint_is_at_least_the_rooms_floor_while_a_room_is_cold(ha: HomeAssistant) -> None:
-    """Er et rum under sit gulv, og er der koldere ved enheden end rummenes gulv (fx efter en lang blokering), sættes
-    setpunktet mindst på gulvet – rummene kan ikke blive varmere end luften, de får varmen fra. Trinnet er det samme, og
-    når føleren er nået op, tager trinnets eget setpunkt over. Økonomi lader trinnet råde."""
+async def test_air_ladder_has_a_lowest_setpoint(ha: HomeAssistant) -> None:
+    """Stigen har et laveste setpunkt – modstykket til det højeste: brugerens valg, men aldrig under det højeste gulv blandt
+    de rum, kilden betjener (der skal mindst være så varmt ved enheden, som rummene skal holde). Ligger trinnets eget
+    setpunkt under det (føleren ved enheden er kold, fx efter en lang blokering), holdes setpunktet på det laveste. Trinnet
+    er det samme, og når føleren er nået op, tager trinnets eget setpunkt over. Det gælder altid og for alle prioriteter."""
     from types import SimpleNamespace
 
     from custom_components.varmemodel.planner import PlanRoom
@@ -2692,28 +2693,42 @@ async def test_air_setpoint_is_at_least_the_rooms_floor_while_a_room_is_cold(ha:
     p = SimpleNamespace(hours=[{"blocked": False, "t_out": 2.0, "el_kw": None} for _ in range(6)], rooms={"Loft": [18.0] * 6})
     cold = [PlanRoom("Loft", 18.0, 19.5, 0.7, 0.0, 0.02, margin=0.3, t_max=22.5)]
     ok = [PlanRoom("Loft", 19.6, 19.5, 0.7, 0.0, 0.02, margin=0.3, t_max=22.5)]
+    low = next(x for x in ha.states.async_all("select") if "luft_luft" in x.entity_id and x.attributes.get("options", [None])[0] == "19.5")
+    assert low.state == "19.5" and low.attributes["options"][-1] == "30.0"  # ikke lavere end rummets gulv
     ha.states.async_set("climate.ll", "off", {**LL_ATTRS, "current_temperature": 18.0, "temperature": 20, "fan_mode": "Mid"})
     t = time.time()
     d = c._air_step(s, "climate.ll", p, cold, True, False, t)  # noqa: SLF001
     v = c.air[air]["view"]
-    # føleren 18,0 °C → laveste trin 16,5 °C; men rummet skal op på 19,5 °C: setpunktet løftes dertil
-    assert v["trin_liste"][0]["setpunkt"] == 16.5 and c.air[air]["rung"] == "High +-1.5"
-    assert d["setpoint"] == 19.5 and v["mindst_gulvet"] == 19.5 and "mindst på rummenes gulv (19,5 °C)" in v["grund"]
+    # føleren 18,0 °C → trinnets eget setpunkt er 16,5 °C; men rummet skal holde 19,5 °C
+    assert v["trin_liste"][0]["setpunkt"] == 16.5 and c.air[air]["rung"] == "High +-1.5" and v["laveste"] == 19.5
+    assert d["setpoint"] == 19.5 and v["løftet_til_laveste"] == 19.5 and "stigens laveste setpunkt (19,5 °C)" in v["grund"]
     assert c.air[air]["cmd"] == ["High", 19.5, "High +1.5"]  # det, der faktisk køres, hedder efter sit eget niveau
     # varmepumpen står sådan nu: forbruget læres på det niveau, der køres – ikke på trinnets
     ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 18.0, "temperature": 19.5, "fan_mode": "High"})
     c._air_step(s, "climate.ll", p, cold, True, False, t + 60)  # noqa: SLF001
     assert c.air[air]["view"]["kører_nu"] == "High +1.5"
-    # rummet er over gulvet: trinnets eget setpunkt
+    # det gælder også, når rummet er over sit gulv – det laveste setpunkt er en grænse, ikke en nødregel
     d = c._air_step(s, "climate.ll", p, ok, True, False, t + 120)  # noqa: SLF001
-    assert d["setpoint"] == 16.5 and c.air[air]["view"]["mindst_gulvet"] is None
-    # føleren er nået op over gulvet + 1,5 °C: intet løft, selv om rummet stadig er koldt
+    assert d["setpoint"] == 19.5 and c.air[air]["view"]["løftet_til_laveste"] == 19.5
+    # føleren er nået op over det laveste setpunkt + 1,5 °C: trinnets eget setpunkt
     ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 21.6, "temperature": 19.5, "fan_mode": "High"})
     d = c._air_step(s, "climate.ll", p, cold, True, False, t + 180)  # noqa: SLF001
-    assert d["setpoint"] == 20.0 and c.air[air]["view"]["mindst_gulvet"] is None
-    # økonomi: trinnet råder (roligere, senere fremme)
+    assert d["setpoint"] == 20.0 and c.air[air]["view"]["løftet_til_laveste"] is None
+    # brugeren kan sætte det højere (fx når et fjernt rum kræver varmere luft ved enheden) …
+    await ha.services.async_call("select", "select_option", {"entity_id": low.entity_id, "option": "20.5"}, blocking=True)
+    await ha.async_block_till_done()
+    d = c._air_step(s, "climate.ll", p, cold, True, False, t + 240)  # noqa: SLF001
+    assert d["setpoint"] == 20.5 and c.air[air]["view"]["laveste"] == 20.5
+    # … men aldrig under rummenes gulv, og aldrig over stigens højeste setpunkt
+    c.settings[f"{air}.air_sp_low"] = "17.0"
+    assert c.air_setting(s, "air_sp_low") == "19.5"
+    c.settings[f"{air}.air_sp_low"], c.settings[f"{air}.air_sp_top"] = "23.0", "21.0"
+    d = c._air_step(s, "climate.ll", p, cold, True, False, t + 300)  # noqa: SLF001
+    assert d["setpoint"] == 21.0
+    # økonomi: samme grænse (prioriteten bestemmer tempoet, ikke hvad der er fysisk muligt)
+    c.settings.pop(f"{air}.air_sp_low"); c.settings.pop(f"{air}.air_sp_top")
     c.settings[f"{air}.air_priority"] = "economy"
     ha.states.async_set("climate.ll", "off", {**LL_ATTRS, "current_temperature": 18.0, "temperature": 20, "fan_mode": "Mid"})
     c.air[air].update(on=False, rung=None)
-    d = c._air_step(s, "climate.ll", p, cold, True, False, t + 240)  # noqa: SLF001
-    assert d["setpoint"] < 19.5 and c.air[air]["view"]["mindst_gulvet"] is None
+    d = c._air_step(s, "climate.ll", p, cold, True, False, t + 360)  # noqa: SLF001
+    assert d["setpoint"] == 19.5 and c.air[air]["view"]["løftet_til_laveste"] == 19.5

@@ -89,6 +89,7 @@ from .const import (
     AIR_REF,
     AIR_REF_UNIT,
     AIR_SPAN,
+    AIR_SP_LOW,
     AIR_SP_TOP,
     AIR_SOFT_UP_EVERY,
     AIR_SOFT_MIN_RISE,
@@ -2293,14 +2294,20 @@ class VarmemodelCoordinator:
         if key == AIR_REF:
             # føleren ved enheden: dens egen, eller føleren i et af kildens rum (det, varmepumpen hænger i)
             return [AIR_REF_UNIT, *[r["name"] or r["key"] for r in self.rooms_cfg if self.room_source(r) is s]]
-        if key == AIR_SP_TOP:
+        if key in (AIR_SP_TOP, AIR_SP_LOW):
             lo, hi, stp = float(a.get("min_temp") or 16), float(a.get("max_temp") or 30), float(a.get("target_temp_step") or 0.5)
+            if key == AIR_SP_LOW and (base := self._air_floor_base(s)) is not None:
+                lo = base  # det laveste setpunkt kan ikke være lavere end det, rummene skal holde
             return [f"{lo + k * stp:.1f}" for k in range(int(round((hi - lo) / stp)) + 1)]
         return []
 
     def air_setting(self, s: SourceState, key: str) -> Any:
         """En luft-luft-indstilling for kilden (gemt i Varmemodel), ellers standarden."""
         v = self.settings.get(f"{s.sid}.{key}")
+        if key == AIR_SP_LOW:
+            # brugerens valg – men aldrig under rummenes højeste gulv (hæves gulvene, følger det laveste setpunkt med)
+            low = [x for x in (_num(v), self._air_floor_base(s)) if x is not None]
+            return f"{max(low):.1f}" if low else None
         if v is not None:
             return v
         if key == AIR_SWITCH:
@@ -2324,9 +2331,9 @@ class VarmemodelCoordinator:
             return fans[-2] if len(fans) > 1 else fans[-1]
         return UNCHANGED
 
-    def _air_top_default(self, s: SourceState) -> str:
-        """Stigens højeste setpunkt, når brugeren ikke har valgt et: rummenes højeste gulv + AIR_SPAN (inden for
-        klimaentitetens grænser) – som teksten i valglisten."""
+    def _air_floor_base(self, s: SourceState) -> float | None:
+        """Det højeste gulv blandt de rum, kilden betjener, som setpunkt (afrundet til klimaentitetens trin og inden for
+        dens grænser): så varmt skal der mindst være ved enheden, før rummene kan holde deres gulv. None uden rum med gulv."""
         st = self.hass.states.get(self.air_climate(s) or "")
         a = st.attributes if st else {}
         lo, hi, stp = float(a.get("min_temp") or 16), float(a.get("max_temp") or 30), float(a.get("target_temp_step") or 0.5)
@@ -2336,8 +2343,15 @@ class VarmemodelCoordinator:
                 t = self._state_num(r["min_entity"]) if r["min_entity"] else (_num(r["min"]) if r["min"] is not None else None)
                 if t is not None:
                     floors.append(t)
-        base = max(lo, round((max(floors) if floors else 20.0) / stp) * stp)
-        return f"{min(hi, base + AIR_SPAN):.1f}"
+        return min(hi, max(lo, round(max(floors) / stp) * stp)) if floors else None
+
+    def _air_top_default(self, s: SourceState) -> str:
+        """Stigens højeste setpunkt, når brugeren ikke har valgt et: rummenes højeste gulv + AIR_SPAN (inden for
+        klimaentitetens grænser) – som teksten i valglisten."""
+        st = self.hass.states.get(self.air_climate(s) or "")
+        hi = float((st.attributes if st else {}).get("max_temp") or 30)
+        base = self._air_floor_base(s)
+        return f"{min(hi, (base if base is not None else 20.0) + AIR_SPAN):.1f}"
 
     def _air_ref(self, s: SourceState, attrs: Any = None) -> tuple[float | None, str, str | None]:
         """Føleren ved enheden, som stigens temperaturer måles fra: (temperatur, navn, entitet med historik).
@@ -2430,8 +2444,10 @@ class VarmemodelCoordinator:
         ref, ref_name, _ref_eid = self._air_ref(s, attrs)
         below = AIR_ANCHOR_BELOW if ref is not None else 0.0
         floors = [r.t_min for r in show if r.t_min > -50]
-        # rummenes højeste gulv som setpunkt: så varmt skal der mindst være ved enheden, før rummene kan nå deres gulv
-        base_fl = min(top, max(lo, round(max(floors) / stp) * stp)) if floors else None
+        # Stigens laveste setpunkt – modstykket til toppen: brugerens valg, men aldrig under rummenes højeste gulv. Der
+        # skal mindst være så varmt ved enheden, som de rum, den betjener, skal holde – ellers kan de ikke nå deres gulv.
+        low_v = [x for x in (_num(self.settings.get(f"{s.sid}.{AIR_SP_LOW}")), round(max(floors) / stp) * stp if floors else None) if x is not None]
+        sp_low = min(top, max(lo, max(low_v))) if low_v else None
         if ref is None:
             # ingen føler ved enheden: fra rummenes højeste gulv
             anchor = round((max(floors) if floors else 20.0) / stp) * stp
@@ -2658,7 +2674,7 @@ class VarmemodelCoordinator:
                      "ude_bånd": b,
                      # føleren ved enheden, som trinenes temperaturer måles fra, og stigens grænser
                      "føler": ref_name if ref is not None else None, "føler_temp": None if ref is None else round(ref, 1),
-                     "laveste_under_føleren": below if ref is not None else None, "top": top,
+                     "laveste_under_føleren": below if ref is not None else None, "top": top, "laveste": sp_low,
                      "top_entitet_valg": self.air_setting(s, AIR_SP_TOP),
                      # det trin, der senest viste sig ikke at være nok (prøves ikke igen med det samme)
                      "ikke_nok": find(a.get("not_enough")) if a.get("on") else None,
@@ -2678,17 +2694,16 @@ class VarmemodelCoordinator:
                          "afrimninger": [{"start": _ts_local_iso(x), "min": round((y - x) / 60), "laveste_w": z} for x, y, z in df_.get("list") or []]}
                         if (df_ := a.get("defrost")) else {})}
         out: dict[str, Any] = {"step": i}
-        a["view"]["mindst_gulvet"] = None
+        a["view"]["løftet_til_laveste"] = None
         if a["on"] and cur is not None:
             sp_out = cur.setpoint
-            if (prio != "economy" and not boost and base_fl is not None and sp_out < base_fl
-                    and margins and min(margins.values()) < 0):
-                # Et rum er under sit gulv, og der er koldere ved enheden end rummenes gulv (fx efter en lang blokering):
-                # setpunktet sættes mindst på gulvet – rummene kan ikke blive varmere end luften, de får varmen fra. Trinnet
-                # er det samme; når føleren er nået op, tager trinnets eget setpunkt over. Økonomi lader trinnet råde.
-                sp_out = base_fl
-                a["view"]["mindst_gulvet"] = base_fl
-                a["view"]["grund"] = f"{a['view']['grund']} – setpunktet holdes mindst på rummenes gulv ({_dk_txt(f'{base_fl:.1f}')} °C), mens et rum er under sit gulv"
+            if sp_low is not None and sp_out < sp_low:
+                # Trinnets eget setpunkt ligger under stigens laveste (føleren ved enheden er kold, fx efter en lang
+                # blokering): setpunktet holdes på det laveste. Trinnet er det samme; når føleren er nået op, tager
+                # trinnets eget setpunkt over.
+                sp_out = sp_low
+                a["view"]["løftet_til_laveste"] = sp_low
+                a["view"]["grund"] = f"{a['view']['grund']} – setpunktet holdes på stigens laveste setpunkt ({_dk_txt(f'{sp_low:.1f}')} °C)"
             out.update(setpoint=sp_out, fan_mode=cur.fan, preset=cur.preset)
             # det, stigen har sat: sådan kendes trinnet igen på klimaentiteten ved næste kvarter (navnet er det, der
             # faktisk køres – også når setpunktet er løftet til gulvet)

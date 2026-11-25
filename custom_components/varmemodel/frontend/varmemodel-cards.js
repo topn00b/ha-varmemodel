@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.31.0';
+  const VERSION = '0.31.1';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -286,7 +286,7 @@
     ['Styring', ['air_control', 'air_boost', 'air_priority', 'hydro_control', 'flow_control']],
     ['Fremløb', ['soft_start']],
     ['Blæser: laveste og højeste (støj)', ['air_fan_min', 'air_fan_day', 'air_fan_night', 'air_night_start', 'air_night_end']],
-    ['Stigens temperaturer', ['air_ref', 'air_sp_top']],
+    ['Stigens temperaturer', ['air_ref', 'air_sp_low', 'air_sp_top']],
     ['Lameller', ['air_swing_v', 'air_swing_h']],
   ];
   // Kortets egne navne (uafhængigt af HA's systemsprog)
@@ -294,7 +294,7 @@
     air_control: 'Varmemodel styrer', air_boost: 'Jeg fryser', flow_control: 'Varmemodel styrer fremløb', hydro_control: 'Varmemodel styrer varmepumpen', air_fan_day: 'Maks. blæser dag', air_fan_night: 'Maks. blæser nat',
     air_night_start: 'Nat begynder', air_night_end: 'Nat slutter', air_swing_v: 'Lameller op/ned', air_swing_h: 'Lameller side',
     air_priority: 'Prioritet', air_fan_min: 'Min. blæser', soft_start: 'Fremløb efter start',
-    air_ref: 'Føler ved enheden', air_sp_top: 'Højeste setpunkt',
+    air_ref: 'Føler ved enheden', air_sp_low: 'Laveste setpunkt', air_sp_top: 'Højeste setpunkt',
   };
   // Valgenes navne på kortet (værdien, der gemmes, er uændret)
   const OPT_NAMES = { fra: 'fra (planens fremløb)', til: 'blød start', test: 'test: hver anden blød', lavest: 'søg laveste fremløb',
@@ -452,7 +452,7 @@
         const a = s0.attributes || {}; const dom = eid.split('.')[0]; const name = SET_NAMES[k] || String(a.friendly_name || k).replace(src.name, '').trim();
         let ctl = '';
         // (et setpunkt vises som temperatur; værdien, der gemmes, er uændret)
-        const on = (x) => (k === 'air_sp_top' && num(x) !== null ? `${fmt(num(x), 1)} °C` : (OPT_NAMES[x] || x));
+        const on = (x) => ((k === 'air_sp_top' || k === 'air_sp_low') && num(x) !== null ? `${fmt(num(x), 1)} °C` : (OPT_NAMES[x] || x));
         if (dom === 'select') ctl = `<select data-svc="select.select_option" data-eid="${esc(eid)}">${(a.options || []).map((x) => `<option value="${esc(x)}"${x === s0.state ? ' selected' : ''}>${esc(on(x))}</option>`).join('')}</select>`;
         else if (dom === 'number') ctl = `<input type="number" data-svc="number.set_value" data-eid="${esc(eid)}" value="${esc(s0.state)}" min="${a.min}" max="${a.max}" step="${a.step}"><span class="mut sm"> ${esc(a.unit_of_measurement || '')}</span>`;
         else if (dom === 'time') ctl = `<input type="time" data-svc="time.set_value" data-eid="${esc(eid)}" value="${esc(String(s0.state).slice(0, 5))}">`;
@@ -1426,7 +1426,8 @@
           const sep = prevSp !== null && prevSp !== x.setpunkt ? ' style="border-top:1px solid var(--divider-color,#8884);margin-top:2px;padding-top:2px"' : '';
           prevSp = x.setpunkt;
           const nv = num(x.niveau); const nk = asa.trin != null && x.trin === asa.ikke_nok;
-          tr += `<div class="tr${x.trin === cur ? ' on' : ''}${x.trin === asa.mål_trin ? ' mt' : ''}"${sep}><span class="tn">${x.trin}</span><span class="tl2"${nk ? ' title="var ikke nok for lidt siden – prøves ikke igen med det samme"' : ''}>${esc(x.blæser || '')} · ${fmt(x.setpunkt, 1)} °C${asa['føler'] && nv !== null ? ` <span class="mut">(${sgn(nv, 1)})</span>` : ''}${nk ? ' <span class="mut">✕</span>' : ''}</span>`
+          const lowSp = num(asa.laveste); const up = lowSp !== null && num(x.setpunkt) !== null && x.setpunkt < lowSp;
+          tr += `<div class="tr${x.trin === cur ? ' on' : ''}${x.trin === asa.mål_trin ? ' mt' : ''}"${sep}><span class="tn">${x.trin}</span><span class="tl2"${nk ? ' title="var ikke nok for lidt siden – prøves ikke igen med det samme"' : ''}>${esc(x.blæser || '')} · ${up ? `<span title="trinnets eget setpunkt er ${fmt(x.setpunkt, 1)} °C – holdes på stigens laveste setpunkt">${fmt(lowSp, 1)} °C ↑</span>` : `${fmt(x.setpunkt, 1)} °C`}${asa['føler'] && nv !== null ? ` <span class="mut">(${sgn(nv, 1)})</span>` : ''}${nk ? ' <span class="mut">✕</span>' : ''}</span>`
             + `<span class="tbar"><i style="width:${w !== null ? Math.round((100 * w) / wmx) : 0}%${x.w_kilde && x.w_kilde !== 'trin' ? ';opacity:.45' : ''}"></i></span><span class="tw">${w !== null ? `${fmt(w, 0)} W${mk(x.w_kilde)} · ${fmt(w / 1000, 2)} kWh el/t` : '<span class="mut">ikke lært</span>'}${num(x.grader_pr_kwh_el) !== null && eb > 0 ? ` · <b title="rummenes varme pr. kWh el i forhold til det bedste trin">${fmt((100 * x.grader_pr_kwh_el) / eb, 0)} %</b>${mk(x.virkning_kilde)}` : ''}</span></div>`;
         }
         // Rummenes varme pr. kWh el for hver blæser: viser, om et fjernt rum får del i varmen ved lav blæser
@@ -1438,7 +1439,7 @@
             + '</table></div><div class="sm mut">°C pr. kWh el (antal kvarterer). Får et rum tydeligt mindre ved en lav blæser, så sæt »Min. blæser« derefter – tallene samles fra i dag og bruges ikke til styring endnu.</div></details>';
         }
         S += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, ${asa.min_blæser ? `blæser ${esc(asa.min_blæser)}–${esc(asa.maks_blæser || '–')}` : `maks. blæser ${esc(asa.maks_blæser || '–')}`}${asa.prioritet ? ` · ${esc(OPT_NAMES[asa.prioritet] || asa.prioritet)}` : ''} · nu trin ${cur ?? '–'}${asa.el_mål_w ? ` · planens el-mål ${fmt(asa.el_mål_w, 0)} W${asa.mål_trin != null ? ` (trin ${asa.mål_trin})` : ' (lærer stadig trinene)'}` : ''}${asa.kører_nu ? ` · kører ${esc(String(asa.kører_nu).replace(/ \+(-?)(\d+)\.(\d)$/, (m, ng, i1, d1) => ` ${ng ? '−' : '+'}${i1},${d1}`))}` : ''}${asa.afrimninger_24t != null ? ` · afrimninger det seneste døgn: ${asa.afrimninger_24t}${asa.seneste_afrimning ? ` (seneste ${when(asa.seneste_afrimning)})` : ''}` : ''}</span></div>`
-          + `<div class="sm" style="margin-bottom:4px">${asa.ventilation ? `Ventilation ${esc(asa.ventilation)}${asa.ventilation_virkning_pct != null ? ` · med ventilation ${asa.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(asa.ventilation_virkning_pct, 0)} % varme pr. kWh el` : ' · effekten læres'} · ` : ''}${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div><div class="sm mut" style="margin-top:4px"><b style="color:var(--info-color,#3b82c4)">Fyldt blå</b> = trinnet nu · <b>stiplet ramme</b> = planens mål-trin · <span style="color:#f2711c">orange bjælke</span> = lært forbrug (W) · ✕ = var ikke nok for lidt siden. ${asa['føler'] ? `Temperaturerne måles fra føleren ved enheden (${esc(OPT_NAMES[asa['føler']] || asa['føler'])}, nu ${fmt(asa['føler_temp'], 1)} °C): laveste trin ligger ${fmt(asa.laveste_under_føleren, 1)} °C under den – dér kører varmepumpen på sin laveste effekt uden selv at stoppe – og setpunkterne følger føleren, så et trin er et bestemt arbejde for varmepumpen. Tallet i parentes er setpunktets afstand til føleren. Højeste setpunkt: ${fmt(asa.top, 1)} °C. ` : ''}<b>Op</b>, når et rum er under sit gulv: først blæseren et trin op; fra højeste blæser den næste temperatur – stadig på højeste blæser. <b>Ned</b>, når alle rum har overskud: ét trin ad gangen gennem alle blæsere på temperaturen, før temperaturen falder – så stigen finder den kombination af temperatur og blæser, der lige netop holder rummene. Et trin, der lige var for lidt, prøves først igen, når overskuddet har holdt dobbelt så længe. % = varme i rummene pr. kWh el i forhold til det bedste trin (lært af rumfølerne, efter afkøling og opdrift fra stueplanen). <b>(delt)</b> = målt på samme temperatur med en anden blæser; <b>(skøn)</b> = mellem de nærmeste lærte temperaturer. Når trinene er målt, går stigen mod det trin, der dækker planens varme for mindst el. Prioritet: <b>økonomi</b> – et trin prøves i 30 min., og der skrues kun op, når det kolde rum stiger langsommere, end planen regner med; <b>balance</b> – der skrues op, når det stiger under 0,2 °C/t; <b>komfort</b> – et trin op hvert kvarter, til rummet er over gulvet.</div>${rft}</div>`;
+          + `<div class="sm" style="margin-bottom:4px">${asa.ventilation ? `Ventilation ${esc(asa.ventilation)}${asa.ventilation_virkning_pct != null ? ` · med ventilation ${asa.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(asa.ventilation_virkning_pct, 0)} % varme pr. kWh el` : ' · effekten læres'} · ` : ''}${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div><div class="sm mut" style="margin-top:4px"><b style="color:var(--info-color,#3b82c4)">Fyldt blå</b> = trinnet nu · <b>stiplet ramme</b> = planens mål-trin · <span style="color:#f2711c">orange bjælke</span> = lært forbrug (W) · ✕ = var ikke nok for lidt siden. ${asa['føler'] ? `Temperaturerne måles fra føleren ved enheden (${esc(OPT_NAMES[asa['føler']] || asa['føler'])}, nu ${fmt(asa['føler_temp'], 1)} °C): laveste trin ligger ${fmt(asa.laveste_under_føleren, 1)} °C under den – dér kører varmepumpen på sin laveste effekt uden selv at stoppe – og setpunkterne følger føleren, så et trin er et bestemt arbejde for varmepumpen. Tallet i parentes er trinnets afstand til føleren. ${num(asa.laveste) !== null ? `Laveste setpunkt: ${fmt(asa.laveste, 1)} °C – der skal mindst være så varmt ved enheden, som rummene skal holde; ↑ = trinnets eget setpunkt ligger lavere og holdes dér. ` : ''}Højeste setpunkt: ${fmt(asa.top, 1)} °C. ` : ''}<b>Op</b>, når et rum er under sit gulv: først blæseren et trin op; fra højeste blæser den næste temperatur – stadig på højeste blæser. <b>Ned</b>, når alle rum har overskud: ét trin ad gangen gennem alle blæsere på temperaturen, før temperaturen falder – så stigen finder den kombination af temperatur og blæser, der lige netop holder rummene. Et trin, der lige var for lidt, prøves først igen, når overskuddet har holdt dobbelt så længe. % = varme i rummene pr. kWh el i forhold til det bedste trin (lært af rumfølerne, efter afkøling og opdrift fra stueplanen). <b>(delt)</b> = målt på samme temperatur med en anden blæser; <b>(skøn)</b> = mellem de nærmeste lærte temperaturer. Når trinene er målt, går stigen mod det trin, der dækker planens varme for mindst el. Prioritet: <b>økonomi</b> – et trin prøves i 30 min., og der skrues kun op, når det kolde rum stiger langsommere, end planen regner med; <b>balance</b> – der skrues op, når det stiger under 0,2 °C/t; <b>komfort</b> – et trin op hvert kvarter, til rummet er over gulvet.</div>${rft}</div>`;
       }
       L += settingsPanel(h, s);
       const R = `<div class="sm" style="margin-bottom:6px">${(c.hours || [0, 3, 6, 12]).map((x) => `<span class="pill${x === k ? ' on' : ''}" data-k="${x}">${x === 0 ? 'nu' : `om ${x} t`}</span>`).join(' ')}</div>`

@@ -261,6 +261,9 @@
       "air_ref": {
         "name": "Føler ved enheden"
       },
+      "air_sp_low": {
+        "name": "Laveste setpunkt"
+      },
       "air_sp_top": {
         "name": "Højeste setpunkt"
       },
