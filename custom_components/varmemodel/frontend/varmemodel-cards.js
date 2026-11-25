@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.27.1';
+  const VERSION = '0.28.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -339,6 +339,42 @@
     const tbl = tr ? `<details id="iceCy"${open ? ' open' : ''}><summary class="sm">Seneste cyklusser</summary><div class="wrap"><table><tr><th>start</th><th class="n">længde</th><th class="n">ude</th><th class="n">varme</th><th class="n">ren flade</th><th class="n">sidst</th></tr>${tr}</table></div>`
       + '<div class="sm mut" style="margin-top:4px">En cyklus går fra en afrimning eller start til den næste. »Ren flade« er ydelsen de første 15 minutter i procent af husets egen COP-model, »sidst« de sidste 10 minutter, når rimen har sat sig. Tre lave i træk vises som »følg«; bliver det ved i seks timer, kommer der én besked.</div></details>' : '';
     return `<div class="b"><div class="pvh">Isvagt ${chip}</div><div style="margin:4px 0 6px;font-size:14px">${esc(line)}</div><div class="sm mut">${esc(df + ref)}</div>${tbl}</div>`;
+  }
+  // Varmt vand: Varmemodels anbefaling ud fra tankens lærte model, priserne og blokeringerne – ved siden af det,
+  // varmepumpen faktisk står på. Kun anbefaling (Varmemodel styrer ikke varmt vand); de tre temperaturer er brugerens.
+  function hotWaterBox(h, vm, src, open) {
+    const eid = src.e('hot_water'); const s0 = st(h, eid); if (!s0) return '';
+    const a = s0.attributes || {};
+    const SC = { off: ['fra', '#8a9198'], normal: [`varm til ${fmt(a['mål'], 0)} °C`, '#e0702a'], high: [`højt: ${fmt(a['mål'], 0)} °C`, '#d6453d'] };
+    const [txt, col] = SC[s0.state] || ['–', '#8a9198'];
+    const chip = `<span class="pill" style="background:${col};color:#fff;border-color:${col}">${esc(txt)}</span>`;
+    const nr = a['næste_opvarmning']; const low = a.laveste;
+    let line = a.tank == null ? 'Tankføleren svarer ikke.' : `Tanken er ${fmt(a.tank, 1)} °C. `;
+    if (a.tank != null) {
+      line += nr ? `Næste opvarmning ${when(nr.kl)} til ${fmt(nr['mål'], 0)} °C (ca. ${nr.min} min., ${fmt(nr.kwh_el, 1)} kWh el, ${fmt(nr.kr, 1)} kr).` : 'Ingen opvarmning i planen.';
+      if (a.bad_nu) line += ' »Bad nu« er slået til.';
+    }
+    const under = a.timer_under_mindst ? `<span class="amber">Under »mindst« (${fmt(a.mindst, 0)} °C) fra ${when(a.under_fra)} i ${a.timer_under_mindst} t – der kan ikke varmes i blokerede timer.</span> ` : '';
+    const lo = low ? `Laveste i planen: ${fmt(low.tank, 1)} °C ${when(low.kl)}. ` : '';
+    const AN = { off: 'fra', normal: 'til', high: 'til (højt)' };
+    const act = a.varmepumpen_nu ? `Varmepumpen står nu på ${AN[a.varmepumpen_nu] || a.varmepumpen_nu}${a.varmepumpens_mål != null && a.varmepumpen_nu !== 'off' ? ` (mål ${fmt(a.varmepumpens_mål, 0)} °C)` : ''} – ${a.enig ? 'som anbefalingen' : 'anbefalingen er en anden'}. ` : '';
+    const runs = (a.plan || []).filter((x) => x.varmer).slice(0, 8).map((x) => `<tr><td>${esc(when(x.t).replace('kl. ', ''))}</td><td class="n">${fmt(x['mål'], 0)} °C</td><td class="n">${x.min} min.</td><td class="n">${fmt(x.kwh_el, 1)} kWh el</td><td class="n">${fmt(x.kr, 1)} kr</td><td class="n">${fmt(x.slut, 1)} °C</td></tr>`).join('');
+    const m = a.tank_model || {};
+    const top = (m.forbrug_pr_time || []).map((v, i) => [i, v]).filter((x) => x[1] >= 0.3).sort((x, y) => y[1] - x[1]).slice(0, 4).map(([i, v]) => `kl. ${hh(i)} (${fmt(v, 1)} °C)`).join(', ');
+    const learned = m['lært_af_timer'] || m['lært_af_opvarmninger']
+      ? `Lært af ${m['lært_af_timer']} timer og ${m['lært_af_opvarmninger']} opvarmninger: taber ${fmt(m.tab_pct_pr_time, 1)} % af overtemperaturen pr. time, varmes ${fmt(m.opvarmning_grader_pr_min, 2)} °C pr. minut for ${fmt(m.kwh_el_pr_grad, 2)} kWh el pr. grad, og varmepumpen går i gang ${fmt(m['startgrænse'], 1)} °C under målet.${top ? ` Størst forbrug ${top}.` : ''}`
+      : 'Tanken er ikke lært endnu – planen regner med standardtal, til der er nogle døgns målinger.';
+    const ctl = ['dhw_min', 'dhw_normal', 'dhw_high'].map((k, i) => {
+      const e = vm && vm.e(k); const x = st(h, e); if (!x) return '';
+      const xa = x.attributes || {};
+      return `<div class="sr"><span>${['Mindst', 'Normalt', 'Højt (bad nu, før lange blokeringer)'][i]}</span><span><input type="number" data-svc="number.set_value" data-eid="${esc(e)}" value="${esc(x.state)}" min="${xa.min}" max="${xa.max}" step="${xa.step}"><span class="mut sm"> °C</span></span></div>`;
+    }).join('');
+    const det = `<details id="vvPlan"${open ? ' open' : ''}><summary class="sm">Plan, tank og indstillinger</summary>`
+      + (runs ? `<div class="wrap"><table><tr><th>opvarmning</th><th class="n">mål</th><th class="n">varer</th><th class="n">el</th><th class="n">pris</th><th class="n">tank efter timen</th></tr>${runs}</table></div>` : '')
+      + `<div class="sm mut" style="margin:4px 0">${esc(learned)}</div>${ctl ? `<div class="sg">${ctl}</div>` : ''}`
+      + '<div class="sm mut" style="margin-top:4px">Planen lægger opvarmningerne i de billigste frie timer, så tanken er mindst »mindst«, når en time begynder – og fylder op tæt på en lang blokering. Økonomi varmer kun til »normalt«; balance må også bruge »højt«; komfort holder desuden tanken tæt på »normalt«. Prioritet vælges i boksen ovenfor.</div></details>';
+    return `<div class="b"><div class="pvh">Varmt vand ${chip}<span class="mut sm"> · anbefaling</span></div><div style="margin:4px 0 6px;font-size:14px">${esc(line)}</div>`
+      + `<div class="sm">${under}<span class="mut">${esc(lo + act)}Varmemodel styrer ikke varmt vand endnu.</span></div>${det}</div>`;
   }
   function settingsPanel(h, src, title = 'Indstillinger') {
     let o = '';
@@ -1385,7 +1421,7 @@
     // Søg laveste fremløb: status i klart sprog, mål/målt/loft, graf, lært pr. udetemperatur og »Sådan virker det«
     flowPanel(h, main, vm) {
       if (!main) return '';
-      const set = iceBox(h, main, this._open && this._open.has('iceCy')) + priorityBox(h, vm, main) + settingsPanel(h, main, 'Indstillinger');
+      const set = iceBox(h, main, this._open && this._open.has('iceCy')) + priorityBox(h, vm, main) + hotWaterBox(h, vm, main, this._open && this._open.has('vvPlan')) + settingsPanel(h, main, 'Indstillinger');
       const ca = at(h, main.e('command')); const fs = ca.flow_search;
       if (!fs) return set ? `<div class="pv2">${set}</div>` : '';
       const f = sensorsOf(h, main);

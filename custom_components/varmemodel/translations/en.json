@@ -192,6 +192,14 @@
           "learning": "learning"
         }
       },
+      "hot_water": {
+        "name": "Hot water",
+        "state": {
+          "off": "off",
+          "normal": "normal",
+          "high": "high"
+        }
+      },
       "flow_learned": {
         "name": "Learned flow at 0 °C outdoor"
       },
@@ -276,6 +284,15 @@
       },
       "economy": {
         "name": "Economy: rooms may drop below the floor by"
+      },
+      "dhw_min": {
+        "name": "Hot water: minimum"
+      },
+      "dhw_normal": {
+        "name": "Hot water: normal"
+      },
+      "dhw_high": {
+        "name": "Hot water: high"
       }
     },
     "binary_sensor": {
@@ -331,6 +348,10 @@
             "compressor": "Compressor running",
             "defrost": "Defrost",
             "dhw": "Domestic hot water",
+            "dhw_temp": "Hot water tank temperature",
+            "dhw_switch": "Hot water on/off on the heat pump",
+            "dhw_target": "Hot water target temperature on the heat pump",
+            "dhw_boost": "Bath now (hot water at once)",
             "electricity_backup": "Additional electricity meter (e.g. cloud)",
             "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)",
             "onoff_target": "On/off target (climate Varmemodel switches to heat / off)",
@@ -340,6 +361,10 @@
             "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
             "compressor": "Used for full running hours, starts and splitting heat between rooms.",
             "dhw": "Hours with hot water are excluded from space heating.",
+            "dhw_temp": "With it Varmemodel learns the tank (loss, use, heating) and plans hot water – as a recommendation only at first.",
+            "dhw_switch": "Used to show what the heat pump is set to next to the plan.",
+            "dhw_target": "A sensor or entity with the target set in the heat pump. Also used to learn how far below the target the tank must be before the heat pump heats.",
+            "dhw_boost": "While on, the recommendation is “high” – also in a blocked hour.",
             "electricity_backup": "Used for hours where the main meter has no data, e.g. before it was installed. Scaled automatically to the main meter using the hours where both have data.",
             "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)",
             "onoff_target": "On/off target (climate Varmemodel switches to heat / off)",

@@ -15,6 +15,10 @@ CONF_RETURN = "return_temp"
 CONF_COMPRESSOR = "compressor"
 CONF_DEFROST = "defrost"
 CONF_DHW = "dhw"
+CONF_DHW_TEMP = "dhw_temp"  # varmtvandstankens temperatur (°C) – med den lærer Varmemodel tanken og lægger en plan for varmt vand
+CONF_DHW_SWITCH = "dhw_switch"  # varmt vand til/fra på varmepumpen (til sammenligning med planen)
+CONF_DHW_TARGET = "dhw_target"  # varmt vands måltemperatur på varmepumpen (til sammenligning og til varmepumpens startgrænse)
+CONF_DHW_BOOST = "dhw_boost"  # »bad nu«: varmt vand til »højt« med det samme, også i en blokeret time
 CONF_WINDOW_DAYS = "window_days"
 CONF_WEATHER = "weather"
 
@@ -160,6 +164,14 @@ SETTINGS = (
     ("cold_caution", 0, 30, 1, "%", 10),
     # Lavt og jævnt: højst så mange °C over det fremløb, modellen har lært huset bruger ved timens udetemperatur
     ("flow_margin", -5, 5, 0.5, "°C", 0.0),
+)
+
+# Varmt vand (tal-entiteter, kun når en vandbåren kilde har en tankføler): brugerens tre temperaturer – alt andet om tanken
+# læres af målinger (dhw.learn_tank)
+DHW_SETTINGS = (
+    ("dhw_min", 25, 55, 0.5, "°C", 40.0),  # mindst: så varm skal tanken være, når en time begynder
+    ("dhw_normal", 30, 60, 0.5, "°C", 45.0),  # normalt: målet for en almindelig opvarmning
+    ("dhw_high", 35, 65, 0.5, "°C", 50.0),  # højt: »bad nu« og opfyldning før en lang blokering
 )
 
 # Luft-luft-styring (pr. varmekilde, kun når der er en klimaentitet): tal, valg, tider og kontakten

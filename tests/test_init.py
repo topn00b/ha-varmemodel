@@ -1993,3 +1993,67 @@ async def test_ice_watch_sensor_reports_once(ha: HomeAssistant) -> None:
     assert len(events) == 2
     # uden afrimningsføler er der ingen isvagt
     assert not [x for x in ha.states.async_all("sensor") if x.entity_id.endswith("ice_watch") and x.entity_id != st.entity_id]
+
+
+@pytest.mark.parametrize("expected_lingering_timers", [True])
+async def test_hot_water_plan_is_a_recommendation(ha: HomeAssistant) -> None:
+    """Varmt vand: med en tankføler på den vandbårne kilde lægger Varmemodel en plan for varmt vand og viser den som en
+    anbefaling (fra / normalt / højt) ved siden af det, varmepumpen faktisk står på. Brugerens tre temperaturer er
+    indstillinger; »bad nu« giver »højt« med det samme. Varmemodel skriver intet til varmepumpen."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0 + 0.1 * (k % 5)} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.tank", "43.0", {"state_class": "measurement", "unit_of_measurement": "°C"})
+    ha.states.async_set("switch.vv", "off", {})
+    ha.states.async_set("sensor.vv_maal", "45.0", {})
+    ha.states.async_set("input_boolean.bad", "off", {})
+    hyd = {**HYD, "dhw_temp": "sensor.tank", "dhw": "binary_sensor.vv", "dhw_switch": "switch.vv", "dhw_target": "sensor.vv_maal",
+           "dhw_boost": "input_boolean.bad"}
+    calls: list = []
+    for dom, srv in (("switch", "turn_on"), ("switch", "turn_off"), ("climate", "set_temperature"), ("water_heater", "set_temperature")):
+        ha.services.async_register(dom, srv, lambda call: calls.append(call))
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"}, subentries_data=[_sub(hyd, "source")])
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    s = next(iter(c.sources.values()))
+    await c.async_replan()
+    await ha.async_block_till_done()
+    get = lambda: next(x for x in ha.states.async_all("sensor") if x.entity_id.endswith("hot_water"))  # noqa: E731
+    st = get()
+    a = st.attributes
+    # varm tank: ingen opvarmning nu; varmepumpen står også på fra – enige
+    assert st.state == "off" and a["tank"] == 43.0 and a["varmepumpen_nu"] == "off" and a["enig"] is True
+    assert (a["mindst"], a["normalt"], a["højt"]) == (40.0, 45.0, 50.0) and a["prioritet"] == "balance" and len(a["plan"]) >= 20
+    assert a["tank_model"]["opvarmning_grader_pr_min"] == 0.3 and a["tank_model"]["lært_af_timer"] == 0  # endnu intet lært: standardmodellen
+    assert a["næste_opvarmning"] and a["næste_opvarmning"]["mål"] in (45.0, 50.0) and a["timer_under_mindst"] == 0
+    nums = {x.entity_id.split(".")[1].split("_", 1)[1]: x.state for x in ha.states.async_all("number") if "hot_water" in x.entity_id}
+    assert len(nums) == 3
+    # kold tank: varm nu – varmepumpen står stadig på fra, så de er uenige
+    ha.states.async_set("sensor.tank", "36.0", {"state_class": "measurement", "unit_of_measurement": "°C"})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    a = get().attributes
+    assert get().state == "normal" and a["mål"] == 45.0 and a["plan"][0]["varmer"] and a["enig"] is False
+    # varmepumpen står på til med mål 45: enige igen
+    ha.states.async_set("switch.vv", "on", {})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert get().attributes["varmepumpen_nu"] == "normal" and get().attributes["enig"] is True
+    # »mindst« sat langt ned: tanken holder hele perioden, ingen opvarmning
+    c.settings["dhw_min"] = 25.0
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert get().state == "off" and get().attributes["mindst"] == 25.0 and get().attributes["opvarmninger"] == 0
+    # »bad nu«: højt med det samme
+    ha.states.async_set("input_boolean.bad", "on", {})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert get().state == "high" and get().attributes["mål"] == 50.0 and get().attributes["bad_nu"] is True
+    assert not calls and c.dhw[s.sid]["plan"]["state"] == "high"  # kun anbefaling: intet er skrevet til varmepumpen

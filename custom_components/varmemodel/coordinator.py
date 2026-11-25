@@ -48,6 +48,7 @@ from .calibration import (
     sun_factor,
     validate_room,
 )
+from .dhw import DhwHour, TankModel, learn_tank, plan_dhw
 from .air_control import (
     LEARN_HOLD,
     W_SETTLE,
@@ -104,6 +105,11 @@ from .const import (
     CONF_COMPRESSOR,
     CONF_DEFROST,
     CONF_DHW,
+    CONF_DHW_BOOST,
+    CONF_DHW_SWITCH,
+    CONF_DHW_TARGET,
+    CONF_DHW_TEMP,
+    DHW_SETTINGS,
     CONF_ELECTRICITY,
     CONF_ELECTRICITY_BACKUP,
     CONF_FLOW,
@@ -303,6 +309,7 @@ class VarmemodelCoordinator:
         self.valve_since: dict[str, float] = {}  # termostaten kalder på varme siden (rummets nøgle)
         self.flow_boost: dict[str, dict[str, Any]] = {}  # fremløb for lavt: °C over grænsen pr. vandbåren kilde
         self.estimates: dict[str, dict[str, Any]] = {}  # rumføler væk i over 30 min. -> forudsagt temperatur nu
+        self.dhw: dict[str, dict[str, Any]] = {}  # varmt vand pr. vandbåren kilde: planen (anbefaling), tanken nu og varmepumpens tilstand
         self.missing_data: dict[str, Any] = {}  # datapunkter der har manglet i over 30 min. (»Mangler data«)
         self._started = time.time()
         self.device_ids: dict[str | None, str] = {}  # underpunkt (None = huset) -> enheds-id i HA
@@ -524,6 +531,82 @@ class VarmemodelCoordinator:
                 _LOGGER.exception("Isvagten fejlede")
         self._notify()
 
+    # ------------------------------------------------------------ varmt vand
+    def _dhw_learn_sync(self, s: SourceState) -> dict[str, Any] | None:
+        """Tankens model lært af de seneste ti døgns målinger (``dhw.learn_tank``): tanktemperaturen, varmepumpens
+        opvarmninger, målet i varmepumpen og elmåleren."""
+        tank, dhw, tgt, el = (s.eid(k) for k in (CONF_DHW_TEMP, CONF_DHW, CONF_DHW_TARGET, CONF_ELECTRICITY))
+        if not tank:
+            return None
+        end = dt_util.utcnow()
+        start = end - timedelta(days=10)
+        ids = [e for e in (tank, dhw, tgt) if e]
+        res = history.get_significant_states(self.hass, start, end, ids, include_start_time_state=True, significant_changes_only=False)
+        temps = [(z.last_updated.timestamp(), v) for z in res.get(tank, []) if isinstance(z, State) and (v := _num(z.state)) is not None]
+        ch = [(z.last_changed.timestamp(), z.state == "on") for z in res.get(dhw, []) if isinstance(z, State) and z.state not in ("unknown", "unavailable")] if dhw else []
+        runs = agg.intervals(ch, end.timestamp()) if ch else []
+        targets = []
+        plain = bool(tgt) and tgt.split(".", 1)[0] in ("sensor", "number", "input_number")  # ellers står målet i attributten temperature
+        for z in res.get(tgt, []) if tgt else []:
+            if isinstance(z, State) and (v := _num(z.state) if plain else _num(z.attributes.get("temperature"))) is not None:
+                targets.append((z.last_updated.timestamp(), v))
+        cum: list[tuple[float, float]] = []
+        if el and runs:
+            st = statistics_during_period(self.hass, start, end, {el}, "5minute", {"energy": "kWh"}, {"change"})
+            tot = 0.0
+            for x in st.get(el, []):
+                cum.append((_ts(x["start"]), tot))
+                tot += max(0.0, _num(x.get("change")) or 0.0)
+        plant = self._state_num(self._id(CONF_PLANT_ROOM)) if self._id(CONF_PLANT_ROOM) else None
+        prev = (self.air.get(f"dhw:{s.sid}") or {}).get("model")
+        m = learn_tank(temps, runs, lambda ts: dt_util.as_local(dt_util.utc_from_timestamp(ts)).hour, plant if plant is not None else 20.0,
+                       targets=targets or None, el=cum or None, prev=TankModel.from_dict(prev) if prev else None)
+        return {**m.as_dict(), "t": round(end.timestamp())}
+
+    async def _dhw_plan(self, s: SourceState, hours: list[PlanHour], now: float) -> None:
+        """Planen for varmt vand (kun anbefaling – Varmemodel styrer ikke varmt vand): med en tankføler læres tanken af
+        målingerne, og opvarmningerne lægges i de billigste frie timer, så tanken holder »mindst« – også gennem en lang
+        blokering, så godt det kan lade sig gøre. Ved siden af vises, hvad varmepumpen faktisk står på."""
+        tank_e = s.eid(CONF_DHW_TEMP)
+        if not tank_e or not hours:
+            self.dhw.pop(s.sid, None)
+            return
+        st = self.air.setdefault(f"dhw:{s.sid}", {})
+        if not st.get("model") or now - float((st.get("model") or {}).get("t") or 0) > 86400:
+            # Læres ved første plan og derefter en gang i døgnet (og ved kalibreringen)
+            m = await get_instance(self.hass).async_add_executor_job(self._dhw_learn_sync, s)
+            if m:
+                st["model"] = m
+        tank = self._state_num(tank_e)
+        if tank is None:
+            self.dhw[s.sid] = {**(self.dhw.get(s.sid) or {}), "tank": None, "updated": now}
+            return
+        model = TankModel.from_dict(st.get("model"))
+        t_min, t_normal, t_high = (self.setting(k) for k in ("dhw_min", "dhw_normal", "dhw_high"))
+        boost_st = self.hass.states.get(s.eid(CONF_DHW_BOOST) or "")
+        boost = boost_st is not None and boost_st.state == "on"
+        run_min = max(1.0, (t_normal - t_min) / model.heat) if model.heat > 0 else 30.0  # en almindelig opvarmnings længde
+
+        def blocked(h: PlanHour) -> bool:
+            # en delvist fri time kan bruges, når den frie del ligger først og er lang nok til en opvarmning
+            return h.blocked or (h.free < 1 and (h.free_end or h.free * 60 < run_min))
+
+        hrs = [DhwHour(ts=h.ts, price=h.price, blocked=blocked(h), hour=dt_util.as_local(dt_util.utc_from_timestamp(h.ts)).hour) for h in hours]
+        frac0 = min(1.0, max(0.0, (hrs[0].ts + 3600 - now) / 3600))
+        plan = await self.hass.async_add_executor_job(
+            partial(plan_dhw, hrs, tank, model, t_min, t_normal, t_high, self.priority(), boost, frac0))
+        # Varmepumpen nu: til/fra og målet, så anbefalingen kan sammenlignes med den nuværende styring
+        sw = self.hass.states.get(s.eid(CONF_DHW_SWITCH) or "")
+        tg = self.hass.states.get(s.eid(CONF_DHW_TARGET) or "")
+        tg_v = None if tg is None else (_num(tg.state) if tg.domain in ("sensor", "number", "input_number") else _num(tg.attributes.get("temperature")))
+        on = None if sw is None or sw.state in ("unknown", "unavailable") else (
+            sw.state not in ("off", "idle") if sw.domain == "water_heater" else sw.state == "on")
+        actual = None if on is None else ("off" if not on else "high" if tg_v is not None and tg_v >= t_high - 0.25 and t_high > t_normal else "normal")
+        self.dhw[s.sid] = {"plan": plan, "tank": tank, "model": st.get("model"), "learned": bool(model.hours or model.runs),
+                           "limits": {"min": t_min, "normal": t_normal, "high": t_high}, "boost": boost, "priority": self.priority(),
+                           "actual": {"state": actual, "target": tg_v}, "agree": None if actual is None else actual == plan["state"],
+                           "updated": now}
+
     def _air_defrost_sync(self, s: SourceState) -> dict[str, Any] | None:
         """Det seneste døgns afrimninger for en luft-luft-varmepumpe uden afrimningsføler, læst af el-effekten
         (``power_defrosts``). »Kører« er halvdelen af det laveste lærte trin; slukket-effekten er den laveste, der er set."""
@@ -673,7 +756,7 @@ class VarmemodelCoordinator:
 
     def setting(self, key: str) -> float:
         """Planens indstilling: tal-entiteten, ellers opsætningen, ellers standarden."""
-        default = next(d for k, *_, d in SETTINGS if k == key)
+        default = next(d for k, *_, d in (*SETTINGS, *DHW_SETTINGS) if k == key)
         v = self.settings.get(key, self.conf.get(key))
         try:
             return float(v) if v is not None else float(default)
@@ -3460,6 +3543,10 @@ class VarmemodelCoordinator:
                           "boost_delta": boost, "red_allowance": self.setting(CONF_RED_ALLOWANCE),
                           "preload_window": p.preload, "flow_boost": fb if fb["k"] or fb["rooms"] else None, "flow_raise": p.flow_raise or None, "max_pause": int(self.setting(CONF_MAX_PAUSE)), "comfort_offset": offset,
                           "priority": self.priority(), "choices": p.choices}
+            try:
+                await self._dhw_plan(s, hh, now)
+            except Exception:  # noqa: BLE001 – varmt vand må aldrig vælte varmeplanen
+                _LOGGER.exception("%s: planen for varmt vand fejlede", s.name)
             hst = self.air.setdefault(f"hydro:{sid}", {})
             try:
                 # Kompressoren kører siden … (fra historikken – en genstart nulstiller last_changed, så COP ellers skjules)

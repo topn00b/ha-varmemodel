@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import VarmemodelConfigEntry
-from .const import SETTINGS
+from .const import CONF_DHW_TEMP, DHW_SETTINGS, SETTINGS, SOURCE_HYDRONIC
 from .coordinator import VarmemodelCoordinator
 from .entity import VarmemodelEntity
 
@@ -18,6 +18,9 @@ from .entity import VarmemodelEntity
 async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     c = entry.runtime_data
     async_add_entities([SettingNumber(c, *s) for s in SETTINGS])
+    # Varmt vand: brugerens tre temperaturer – kun når en vandbåren kilde har en tankføler
+    if any(s.kind == SOURCE_HYDRONIC and s.eid(CONF_DHW_TEMP) for s in c.sources.values()):
+        async_add_entities([SettingNumber(c, *s) for s in DHW_SETTINGS])
 
 
 class SettingNumber(VarmemodelEntity, NumberEntity):

@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import VarmemodelConfigEntry
-from .const import CONF_COMPRESSOR, CONF_DEFROST, FIT_KEYS, SOURCE_HYDRONIC
+from .const import CONF_COMPRESSOR, CONF_DEFROST, CONF_DHW_TEMP, FIT_KEYS, SOURCE_HYDRONIC
 from .coordinator import SourceState, VarmemodelCoordinator, after_red
 from .entity import VarmemodelEntity
 
@@ -34,6 +34,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
             ents += [DailyCopSensor(c, s, "yesterday"), DailyCopSensor(c, s, "week"), CopTodaySensor(c, s)]
             if s.eid(CONF_DEFROST) and s.eid(CONF_COMPRESSOR):
                 ents.append(IceWatchSensor(c, s))
+            if s.eid(CONF_DHW_TEMP):
+                ents.append(HotWaterSensor(c, s))
             ents += [PlanNowSensor(c, s), CommandSensor(c, s), PlanValueSensor(c, s, "plan_flow", "flow", "°C", 1),
                      PlanCostSensor(c, s)]
         else:
@@ -208,6 +210,51 @@ class IceWatchSensor(SourceEntity, SensorEntity):
                       "efter en afrimning eller start, slut = de sidste 10 min., snit = hele cyklussen; lav = ringere end ni ud af ti "
                       "tidligere cyklusser",
             "opdateret": _ts_local(w.get("updated")),
+        }
+
+
+class HotWaterSensor(SourceEntity, SensorEntity):
+    """Varmt vand: Varmemodels anbefaling nu – fra, normalt eller højt – ud fra tankens lærte model, priserne og
+    blokeringerne. Kun anbefaling: Varmemodel styrer ikke varmt vand. Attributterne har planen time for time, tankens
+    forudsigelse, den lærte model og hvad varmepumpen faktisk står på."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["off", "normal", "high"]
+    _attr_icon = "mdi:water-boiler"
+
+    def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
+        super().__init__(coordinator, s, "hot_water")
+
+    @property
+    def _d(self) -> dict[str, Any]:
+        return self.coordinator.dhw.get(self.src.sid) or {}
+
+    @property
+    def native_value(self) -> str | None:
+        v = (self._d.get("plan") or {}).get("state")
+        return v if v in self._attr_options else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        d = self._d
+        p, m, lim, act = d.get("plan") or {}, d.get("model") or {}, d.get("limits") or {}, d.get("actual") or {}
+        nr, low = p.get("next_run"), p.get("lowest")
+        return {
+            "tank": d.get("tank"), "mål": p.get("target"),
+            "næste_opvarmning": {"kl": _ts_local(nr["ts"]), "mål": nr["target"], "min": nr["min"], "kwh_el": nr["el"], "kr": nr["kr"]} if nr else None,
+            "laveste": {"kl": _ts_local(low["ts"]), "tank": low["tank"]} if low else None,
+            "timer_under_mindst": p.get("under_hours"), "under_fra": _ts_local(p.get("under_from")),
+            "opvarmninger": p.get("runs"), "kwh_el": p.get("el"), "kr": p.get("kr"),
+            "plan": [{"t": _ts_local(x["ts"]), "mål": x["target"], "varmer": x["run"], "min": x["min"], "kwh_el": x["el"], "kr": x["kr"],
+                      "start": x["start"], "slut": x["tank"], "blokeret": x["blocked"]} for x in p.get("hours") or []],
+            "mindst": lim.get("min"), "normalt": lim.get("normal"), "højt": lim.get("high"),
+            "prioritet": d.get("priority"), "bad_nu": d.get("boost"),
+            "varmepumpen_nu": act.get("state"), "varmepumpens_mål": act.get("target"), "enig": d.get("agree"),
+            "tank_model": ({"tab_pct_pr_time": round(100 * float(m.get("loss") or 0), 2), "omgivelser": m.get("amb"), "forbrug_pr_time": m.get("draw"),
+                            "opvarmning_grader_pr_min": m.get("heat"), "kwh_el_pr_grad": m.get("el"), "startgrænse": m.get("gap"),
+                            "lært_af_timer": m.get("hours"), "lært_af_opvarmninger": m.get("runs"), "lært": _ts_local(m.get("t"))} if m else None),
+            "styring": "kun anbefaling – Varmemodel styrer ikke varmt vand",
+            "opdateret": _ts_local(d.get("updated")),
         }
 
 
