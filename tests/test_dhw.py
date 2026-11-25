@@ -127,9 +127,9 @@ def test_tank_may_be_cold_outside_the_hours_of_use() -> None:
     # en lang blokering næste dag (fra kl. 7:30) flytter ikke opvarmningen til aftenen: kl. 21 er uden for brugstiden
     blk = plan_dhw(hrs(12, start_hour=21, blocked=lambda i: i >= 10), 38.7, M, 40.0, 45.0, 50.0, "economy", use=use)
     assert [x["ts"] for x in blk["hours"] if x["run"]][:1] == [8 * 3600] and blk["hours"][9]["start"] >= 44.0
-    # en opvarmning, der allerede er i gang uden for brugstiden, regnes færdig (ellers sidder varmen fast i varmepumpen)
+    # en opvarmning, der er gået i gang uden for brugstiden, stoppes: rumvarmen rider på den varme, der allerede er lavet
     run = plan_dhw(h, 38.7, M, 40.0, 45.0, 50.0, "economy", use=use, running=45.0)
-    assert run["state"] == "normal" and run["hours"][0]["run"] and not any(x["run"] for x in run["hours"][1:8])
+    assert run["state"] == "off" and not run["hours"][0]["run"]
     # »bad nu« varmer altid
     assert plan_dhw(h, 38.7, M, 40.0, 45.0, 50.0, "economy", boost=True, use=use)["state"] == "high"
     # den lærte brugstid: timerne med målbart forbrug; før noget er lært: hele døgnet
