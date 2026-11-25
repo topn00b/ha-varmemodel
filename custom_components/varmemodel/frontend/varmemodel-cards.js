@@ -891,7 +891,8 @@
       if (live !== null && exp !== null && live < exp - 0.5) this._low[main.name] = this._low[main.name] || Date.now(); else delete this._low[main.name];
       const lowMin = this._low[main.name] ? (Date.now() - this._low[main.name]) / 60e3 : 0;
       const planHeat = pst === 'heat', actHeat = compOn && !dhw;
-      const differs = pst !== 'unknown' && (planHeat !== actHeat);
+      // varmt vand er ikke en afvigelse: rumvarmen holder pause, mens tanken varmes (planen regner med det)
+      const differs = pst !== 'unknown' && !dhw && (planHeat !== actHeat);
       const pumpOn = cfg.pump_running ? isOn(h, cfg.pump_running) : null;
       const bal = compOn && onMin >= 15 && !defr && !dhw && pumpOn !== false;
       Object.assign(D, { f, cfg, pa, pst, flow, ret, compOn, onMin, defr, dhw, clim, hpk, ep, steady, live, exp, lowMin, differs, pumpOn, bal,
