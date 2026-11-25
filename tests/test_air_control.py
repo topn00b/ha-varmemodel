@@ -23,13 +23,66 @@ from custom_components.varmemodel.air_control import (
 FANS = fan_options(["Auto", "Low", "LowMid", "Mid", "HighMid", "High"])
 
 
-def test_ladder_fan_first_then_setpoint() -> None:
+def test_ladder_has_every_fan_on_every_temperature() -> None:
+    """Stigen: for hver temperatur alle blæsere fra laveste til højeste – først den laveste temperatur."""
     lad = build_ladder(FANS, "High", 20.0, 23.0, 0.5, quiet=True)
     assert lad[0].preset == "quiet" and [x.fan for x in lad[1:6]] == FANS
-    assert all(x.setpoint == 20.0 for x in lad[:6]) and lad[-1].fan == "High" and lad[-1].setpoint == 23.0
-    assert len(lad) == 12
+    assert all(x.setpoint == 20.0 for x in lad[:6]) and lad[6].preset == "quiet" and lad[6].setpoint == 20.5
+    assert lad[-1].fan == "High" and lad[-1].setpoint == 23.0 and len(lad) == 6 * 7
     night = build_ladder(FANS, "HighMid", 20.0, 23.0, 0.5, quiet=True)
-    assert max(x.fan or "" for x in night if x.fan) != "High" and night[-1].fan == "HighMid" and len(night) == 11
+    assert max(x.fan or "" for x in night if x.fan) != "High" and night[-1].fan == "HighMid" and len(night) == 5 * 7
+    # ned ad stigen: alle blæsere på en temperatur, før temperaturen falder en halv grad
+    day = build_ladder(FANS, "High", 20.0, 20.5, 0.5, floor="Mid")
+    assert [(x.fan, x.setpoint) for x in reversed(day)] == [("High", 20.5), ("HighMid", 20.5), ("Mid", 20.5),
+                                                            ("High", 20.0), ("HighMid", 20.0), ("Mid", 20.0)]
+
+
+def test_up_takes_the_fan_first_and_then_the_next_temperature_on_the_top_fan() -> None:
+    """Op, når et rum mangler varme: blæseren et trin op; fra højeste blæser den næste temperatur – stadig på højeste
+    blæser. Ned går ét trin ad gangen (alle blæsere), så den nye temperaturs lavere blæsere prøves på vej ned."""
+    from custom_components.varmemodel.air_control import top_of, up_from
+
+    lad = build_ladder(FANS, "High", 20.0, 21.0, 0.5, floor="Mid")  # Mid, HighMid, High × 20,0 / 20,5 / 21,0
+    seq, i = [], 0
+    for _ in range(5):
+        seq.append((lad[i].fan, lad[i].setpoint))
+        i = up_from(lad, i)
+    assert seq == [("Mid", 20.0), ("HighMid", 20.0), ("High", 20.0), ("High", 20.5), ("High", 21.0)]
+    assert up_from(lad, len(lad) - 1) == len(lad) - 1 and top_of(lad, 3) == 5 and top_of(lad, 5) == 5
+    # i stigen: et rum under gulvet tager springet; planens mål følges uden at gå forbi det
+    i, ch, _ds, why = choose_step(2, len(lad), {"A": -0.3}, False, UP_EVERY, 0, None, up_to=up_from(lad, 2))
+    assert i == 5 and "højeste blæser" in why
+    i, _c, _d, why = choose_step(1, len(lad), {"A": -0.3}, False, UP_EVERY, 0, None, up_to=up_from(lad, 1))
+    assert i == 2 and "et trin op" in why and "højeste blæser" not in why
+    assert choose_step(2, len(lad), {"A": 0.2}, False, UP_EVERY, 0, None, target=3, up_to=up_from(lad, 2))[0] == 3
+    assert choose_step(2, len(lad), {"A": 0.2}, False, UP_EVERY, 0, None, target=8, up_to=up_from(lad, 2))[0] == 5
+    # uden op-trin (ældre kald): som før, ét trin
+    assert choose_step(2, len(lad), {"A": -0.3}, False, UP_EVERY, 0, None)[0] == 3
+
+
+def test_a_step_that_was_not_enough_is_not_tried_again_at_once() -> None:
+    """Var trinnet under ikke nok for lidt siden, går stigen først ned til det, når overskuddet har holdt dobbelt så længe."""
+    ok = {"A": 0.6}
+    t = DOWN_GAP + DOWN_HOLD
+    assert choose_step(5, 9, ok, True, t, 0, 0)[0] == 4  # uden bund: ned efter 45 min.
+    i, _c, _d, why = choose_step(5, 9, ok, True, t, 0, 0, floor=5)
+    assert i == 5 and "ikke nok" in why
+    assert choose_step(5, 9, ok, True, 2 * DOWN_GAP, 0, 0, floor=5)[0] == 4  # overskuddet bliver ved: prøv igen
+    assert choose_step(6, 9, ok, True, t, 0, 0, floor=5)[0] == 5  # ned til bunden er altid tilladt
+
+
+def test_a_step_is_found_again_when_the_ladder_is_rebuilt() -> None:
+    """Trinnet huskes som (blæser, niveau): bygges stigen om (nat/dag, min. blæser, toppen), findes det nærmeste igen."""
+    from custom_components.varmemodel.air_control import locate
+
+    order = ["quiet", "Low", "LowMid", "Mid", "HighMid", "High"]
+    day = [(f, lv) for lv in (-1.5, -1.0, -0.5) for f in ("Mid", "HighMid", "High")]
+    night = [(f, lv) for lv in (-1.5, -1.0, -0.5) for f in ("Mid", "HighMid")]
+    assert locate(day, "HighMid", -1.0, order) == 4 and locate(night, "HighMid", -1.0, order) == 3
+    assert locate(night, "High", -1.0, order) == 3  # natten har ikke High: højeste, der ikke er højere
+    assert locate(day, "Low", -0.5, order) == 6  # under stigens laveste blæser: den laveste
+    assert locate(day, "High", 2.0, order) == 8 and locate(day, "Mid", -3.0, order) == 0  # uden for stigen: nærmeste niveau
+    assert locate([], "High", 0.0, order) is None
 
 
 def test_night_window_over_midnight() -> None:
@@ -180,15 +233,15 @@ def test_defrosts_are_read_from_the_power_curve() -> None:
 
 
 def test_min_fan_shapes_the_ladder() -> None:
-    """Min. blæser: trinene under den – og »quiet« – udgår (et fjernt rum får ikke del i varmen ved lav blæser). Ligger
-    den over maks. blæser (fx om natten), vinder maks.: stigen er så kun setpunkter."""
+    """Min. blæser: blæserne under den – og »quiet« – udgår (et fjernt rum får ikke del i varmen ved lav blæser). Ligger
+    den over maks. blæser (fx om natten), vinder maks.: stigen er så kun temperaturer."""
     fans = ["Low", "LowMid", "Mid", "HighMid", "High"]
     full = build_ladder(fans, "High", 19.5, 22.5, 0.5, quiet=True)
-    assert [(x.preset or x.fan) for x in full[:6]] == ["quiet", "Low", "LowMid", "Mid", "HighMid", "High"] and len(full) == 12
+    assert [(x.preset or x.fan) for x in full[:6]] == ["quiet", "Low", "LowMid", "Mid", "HighMid", "High"] and len(full) == 6 * 7
     mid = build_ladder(fans, "High", 19.5, 22.5, 0.5, quiet=True, floor="Mid")
-    assert [(x.preset or x.fan, x.setpoint) for x in mid[:4]] == [("Mid", 19.5), ("HighMid", 19.5), ("High", 19.5), ("High", 20.0)] and len(mid) == 9
+    assert [(x.preset or x.fan, x.setpoint) for x in mid[:4]] == [("Mid", 19.5), ("HighMid", 19.5), ("High", 19.5), ("Mid", 20.0)] and len(mid) == 3 * 7
     assert all(x.fan in ("Mid", "HighMid", "High") and x.preset is None for x in mid)
-    # min. = maks.: kun setpunkter
+    # min. = maks.: kun temperaturer
     top = build_ladder(fans, "High", 19.5, 22.5, 0.5, quiet=True, floor="High")
     assert {x.fan for x in top} == {"High"} and [x.setpoint for x in top] == [19.5, 20.0, 20.5, 21.0, 21.5, 22.0, 22.5]
     # natten har lavere maks. end min.: støjgrænsen vinder
@@ -197,6 +250,8 @@ def test_min_fan_shapes_the_ladder() -> None:
     # »quiet« som min. (eller ingen): som før
     assert build_ladder(fans, "High", 19.5, 22.5, 0.5, quiet=True, floor="quiet") == full
     assert build_ladder(fans, "High", 19.5, 22.5, 0.5, quiet=True, floor=None) == full
+    # en varmepumpe uden blæservalg: ét trin pr. temperatur
+    assert [(x.fan, x.preset, x.setpoint) for x in build_ladder([], None, 20.0, 20.5, 0.5)] == [(None, None, 20.0), (None, None, 20.5)]
 
 
 def test_what_one_step_learns_is_shared_with_the_others() -> None:

@@ -627,7 +627,8 @@ async def test_air_ladder_shadow_and_control(ha: HomeAssistant) -> None:
     await c.async_replan()
     await ha.async_block_till_done()
     step = next(s for s in ha.states.async_all("sensor") if s.entity_id.endswith("ladder_step") or s.entity_id.endswith("air_step"))
-    assert step.state == "0" and len(step.attributes["trin_liste"]) == 1 + 3 + 6  # quiet, 3 blæsere, setpunkt 20,5–23
+    # en start begynder på højeste blæser (trin 3 = High på den laveste temperatur); quiet + 3 blæsere på hver af 7 temperaturer
+    assert step.state == "3" and len(step.attributes["trin_liste"]) == (1 + 3) * 7
     assert not calls  # kun anbefaling, så længe kontakten er slået fra
     # Afrimninger uden afrimningsføler læses af el-effekten hvert kvarter og står på trin-føleren
     assert "afrimninger_24t" not in step.attributes
@@ -647,7 +648,7 @@ async def test_air_ladder_shadow_and_control(ha: HomeAssistant) -> None:
     sw = next(s for s in ha.states.async_all("switch") if s.entity_id.endswith("controls"))
     await ha.services.async_call("switch", "turn_on", {"entity_id": sw.entity_id}, blocking=True)
     await ha.async_block_till_done()
-    assert ("hvac", "heat") in calls and ("preset", "quiet") in calls
+    assert ("hvac", "heat") in calls and ("fan", "High") in calls
     # »Jeg fryser«: øverste trin med powerful – også selvom planen ikke varmer
     ha.states.async_set("climate.ll", "heat", {"fan_modes": ["Auto", "Low", "Mid", "High"], "preset_modes": ["none", "quiet", "powerful"],
                                                 "swing_modes": ["Auto", "Up"], "temperature": 20, "fan_mode": "Low", "preset_mode": "quiet"})
@@ -2227,14 +2228,15 @@ async def test_air_priority_min_fan_and_shared_steps(ha: HomeAssistant) -> None:
     assert c.air_setting(s, "air_priority") == "economy" and sel("priority").state == "economy"
     step = lambda: next(x for x in ha.states.async_all("sensor") if x.entity_id.endswith("ladder_step") or x.entity_id.endswith("air_step"))  # noqa: E731
     assert step().attributes["prioritet"] == "economy" and step().attributes["min_blæser"] is None
-    assert len(step().attributes["trin_liste"]) == 1 + 3 + 6  # quiet, 3 blæsere, 6 setpunkter
+    assert len(step().attributes["trin_liste"]) == (1 + 3) * 7  # quiet + 3 blæsere på hver af 7 temperaturer
     # min. blæser: »quiet« og de lave blæsere udgår
     mf = sel("min_fan")
     assert mf.state == "quiet" and mf.attributes["options"] == ["quiet", "Low", "Mid", "High"]
     await ha.services.async_call("select", "select_option", {"entity_id": mf.entity_id, "option": "Mid"}, blocking=True)
     await ha.async_block_till_done()
     lst = step().attributes["trin_liste"]
-    assert [x["blæser"] for x in lst[:3]] == ["Mid", "High", "High"] and len(lst) == 2 + 6 and step().attributes["min_blæser"] == "Mid"
+    assert [(x["blæser"], x["setpunkt"]) for x in lst[:3]] == [("Mid", 19.5), ("High", 19.5), ("Mid", 20.0)]
+    assert len(lst) == 2 * 7 and step().attributes["min_blæser"] == "Mid"
     # det, der er lært med en anden blæser, deles: forbrug og virkning på samme setpunkt over gulvet – og starttrinnet
     c.air[air]["w"] = {"Mid +0.5": 300, "Mid +2.0": 600}
     c.air[air]["eff"] = {"Mid +0.5": [5.0, 10.0, 12], "Mid +2.0": [3.0, 10.0, 12]}
@@ -2249,8 +2251,8 @@ async def test_air_priority_min_fan_and_shared_steps(ha: HomeAssistant) -> None:
     assert by[("High", 20.0)]["grader_pr_kwh_el"] == 0.5 and by[("High", 20.0)]["målinger"] == 12
     assert (by[("High", 20.5)]["w"], by[("High", 20.5)]["w_kilde"]) == (400, "skøn") and by[("High", 20.5)]["virkning_kilde"] == "skøn"
     assert a["starttrin"] == {"0": "Mid +1.0"}
-    if c.commands[air].get("on"):  # planen varmer (rummet er under gulvet): starter på samme setpunkt over gulvet med dagens blæser
-        assert a["trin"] == next(k for k, x in enumerate(a["trin_liste"]) if (x["blæser"], x["setpunkt"]) == ("High", 20.5))
+    if c.commands[air].get("on"):  # planen varmer (rummet er under gulvet): starter på det lærte trin
+        assert a["trin"] == next(k for k, x in enumerate(a["trin_liste"]) if (x["blæser"], x["setpunkt"]) == ("Mid", 20.5))
 
 
 @pytest.mark.parametrize("expected_lingering_timers", [True])
@@ -2484,3 +2486,234 @@ async def test_compare_with_even_operation_is_kept_per_day(ha: HomeAssistant) ->
     assert c.air[f"cmp:{s.sid}"] == before
     st = ha.states.get(er.async_get(ha).async_get_entity_id("sensor", DOMAIN, f"{c.entry.entry_id}_{s.sid}_plan_cost"))
     assert st is not None
+
+
+async def _air_ref_entry(ha: HomeAssistant) -> tuple:
+    """Et hus med en luft-luft-kilde, hvis klimaentitet melder sin egen temperatur, et rum med gulv og et rum ved enheden."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.rum_2", "19.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.rum_3", "21.2", {"state_class": "measurement"})
+    ha.states.async_set("climate.ll", "off", {**LL_ATTRS, "current_temperature": 21.0, "temperature": 20, "fan_mode": "Mid"})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub(HYD, "source"), _sub({**AIR, "climate": "climate.ll"}, "source")])
+    e.add_to_hass(ha)
+    air = next(sid for sid, x in e.subentries.items() if x.data.get("source_type") == "air_air")
+    from homeassistant.config_entries import ConfigSubentry
+    ha.config_entries.async_add_subentry(e, ConfigSubentry(data={"name": "Loft", "temperature": "sensor.rum_2", "heat_source": air,
+                                                                 "minimum": 19.5, "maximum": 22.5}, subentry_type="room", title="Loft", unique_id=None))
+    ha.config_entries.async_add_subentry(e, ConfigSubentry(data={"name": "Reposen", "temperature": "sensor.rum_3", "heat_source": air,
+                                                                 "in_plan": False}, subentry_type="room", title="Reposen", unique_id=None))
+    for svc in ("set_hvac_mode", "set_fan_mode", "set_temperature", "set_preset_mode"):
+        ha.services.async_register("climate", svc, lambda call: None)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    c._recent_sync = lambda s, a, b: ({}, {})
+    c.settings[f"{air}.air_fan_day"] = c.settings[f"{air}.air_fan_night"] = "High"
+    c.settings[f"{air}.air_priority"] = "comfort"
+    return c, c.sources[air], air
+
+
+LL_ATTRS = {"fan_modes": ["Auto", "Mid", "HighMid", "High"], "preset_modes": ["none"], "swing_modes": ["Auto", "Up"],
+            "min_temp": 16, "max_temp": 30, "target_temp_step": 0.5}
+
+
+async def test_air_ladder_is_measured_from_the_sensor_at_the_unit(ha: HomeAssistant) -> None:
+    """Luft-luft-stigen måles fra føleren ved enheden: laveste trin ligger 1,5 °C under den, setpunkterne følger føleren, og
+    trinnets navn (blæser + niveau) følger trinnet. Op: blæseren først, så næste temperatur på højeste blæser. Ned: alle
+    blæsere på temperaturen, før temperaturen falder – og et trin, der lige var for lidt, prøves ikke igen med det samme."""
+    from types import SimpleNamespace
+
+    from custom_components.varmemodel.air_control import DOWN_GAP, UP_EVERY
+    from custom_components.varmemodel.planner import PlanRoom
+
+    c, s, air = await _air_ref_entry(ha)
+    p = SimpleNamespace(hours=[{"blocked": False, "t_out": 2.0, "el_kw": None} for _ in range(6)], rooms={"Loft": [19.0] * 6})
+    cold = [PlanRoom("Loft", 19.0, 19.5, 0.7, 0.0, 0.02, margin=0.3, t_max=22.5)]
+    warm = [PlanRoom("Loft", 20.2, 19.5, 0.7, 0.0, 0.02, margin=0.3, t_max=22.5)]
+    t = time.time()
+    d = c._air_step(s, "climate.ll", p, cold, True, False, t)  # noqa: SLF001
+    v = c.air[air]["view"]
+    # føleren 21,0 °C → laveste trin 19,5 °C; toppen er rummets gulv + 3 °C; 7 temperaturer × 3 blæsere
+    assert v["føler"] == "enheden" and v["føler_temp"] == 21.0 and v["laveste_under_føleren"] == 1.5 and v["top"] == 22.5
+    assert [(x["blæser"], x["setpunkt"], x["niveau"]) for x in v["trin_liste"][:4]] == [("Mid", 19.5, -1.5), ("HighMid", 19.5, -1.5),
+                                                                                       ("High", 19.5, -1.5), ("Mid", 20.0, -1.0)]
+    assert len(v["trin_liste"]) == 21 and v["trin_liste"][-1]["setpunkt"] == 22.5 and v["trin_liste"][-1]["niveau"] == 1.5
+    # en start begynder på højeste blæser
+    assert d["step"] == 2 and (d["fan_mode"], d["setpoint"]) == ("High", 19.5) and c.air[air]["rung"] == "High +-1.5"
+    # op fra en lav blæser: blæseren først …
+    c.air[air].update(rung="Mid +-1.5", changed=t)
+    seq = []
+    for k in range(1, 4):
+        d = c._air_step(s, "climate.ll", p, cold, True, False, t + k * UP_EVERY)  # noqa: SLF001
+        seq.append((d["fan_mode"], d["setpoint"]))
+    # … og fra højeste blæser den næste temperatur – stadig på højeste blæser
+    assert seq == [("HighMid", 19.5), ("High", 19.5), ("High", 20.0)]
+    assert "højeste blæser" in c.air[air]["view"]["grund"] and c.air[air]["not_enough"] == "High +-1.5" and c.air[air]["view"]["ikke_nok"] == 2
+    # varmepumpen står nu, som stigen satte den, og føleren stiger: trinnet er det samme, setpunktet følger føleren
+    t += 3 * UP_EVERY
+    ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 21.3, "temperature": 20.0, "fan_mode": "High"})
+    d = c._air_step(s, "climate.ll", p, cold, True, False, t + 60)  # noqa: SLF001
+    assert d["setpoint"] == 20.0 and c.air[air]["view"]["kører_nu"] == "High +-1.0"  # 0,3 °C: inden for afrundingen
+    ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 21.6, "temperature": 20.0, "fan_mode": "High"})
+    d = c._air_step(s, "climate.ll", p, cold, True, False, t + 120)  # noqa: SLF001
+    v = c.air[air]["view"]
+    assert (d["fan_mode"], d["setpoint"]) == ("High", 20.5) and c.air[air]["rung"] == "High +-1.0" and v["kører_nu"] == "High +-1.0"
+    assert v["trin_liste"][0]["setpunkt"] == 20.0 and len(v["trin_liste"]) == 18  # stigen er flyttet en halv grad op; toppen står fast
+    ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 21.6, "temperature": 20.5, "fan_mode": "High"})
+    # ned, når rummet har overskud: først blæseren på samme temperatur …
+    c._air_step(s, "climate.ll", p, warm, True, False, t + 180)  # noqa: SLF001 – overskuddet begynder
+    d = c._air_step(s, "climate.ll", p, warm, True, False, t + DOWN_GAP + 60)  # noqa: SLF001
+    assert (d["fan_mode"], d["setpoint"]) == ("HighMid", 20.5)
+    t2 = t + DOWN_GAP + 60
+    ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 21.6, "temperature": 20.5, "fan_mode": "HighMid"})
+    c._air_step(s, "climate.ll", p, warm, True, False, t2 + 60)  # noqa: SLF001
+    d = c._air_step(s, "climate.ll", p, warm, True, False, t2 + DOWN_GAP)  # noqa: SLF001
+    assert (d["fan_mode"], d["setpoint"]) == ("Mid", 20.5)
+    # … og trinnet under (højeste blæser på temperaturen under) var ikke nok for lidt siden: det prøves ikke med det samme
+    t3 = t2 + DOWN_GAP
+    c._air_step(s, "climate.ll", p, warm, True, False, t3 + 60)  # noqa: SLF001
+    d = c._air_step(s, "climate.ll", p, warm, True, False, t3 + DOWN_GAP)  # noqa: SLF001
+    assert (d["fan_mode"], d["setpoint"]) == ("Mid", 20.5) and "ikke nok" in c.air[air]["view"]["grund"]
+    d = c._air_step(s, "climate.ll", p, warm, True, False, t3 + 2 * DOWN_GAP)  # noqa: SLF001 – overskuddet blev ved
+    assert (d["fan_mode"], d["setpoint"]) == ("High", 20.0) and c.air[air]["not_enough"] is None
+    # slukket: hukommelsen nulstilles, og næste start begynder forfra
+    c._air_step(s, "climate.ll", p, warm, False, False, t3 + 2 * DOWN_GAP + 60)  # noqa: SLF001
+    assert c.air[air]["on"] is False and c.air[air]["not_enough"] is None
+
+
+async def test_air_ladder_sensor_and_top_are_choices(ha: HomeAssistant) -> None:
+    """Føleren ved enheden og stigens højeste setpunkt er valg på kilden. Vælges et rums føler, måles trinene fra den – og
+    det lærte samles forfra, for trinenes niveauer betyder nu noget andet."""
+    from types import SimpleNamespace
+
+    from custom_components.varmemodel.planner import PlanRoom
+
+    c, s, air = await _air_ref_entry(ha)
+    ref = next(x for x in ha.states.async_all("select") if "luft_luft" in x.entity_id and x.attributes.get("options", [None])[0] == "enheden")
+    assert ref.state == "enheden" and ref.attributes["options"] == ["enheden", "Loft", "Reposen"]
+    top = next(x for x in ha.states.async_all("select") if "luft_luft" in x.entity_id and "22.5" in x.attributes.get("options", []))
+    assert top.state == "22.5" and top.attributes["options"][0] == "16.0" and top.attributes["options"][-1] == "30.0"
+    p = SimpleNamespace(hours=[{"blocked": False, "t_out": 2.0, "el_kw": None} for _ in range(6)], rooms={"Loft": [19.0] * 6})
+    cold = [PlanRoom("Loft", 19.0, 19.5, 0.7, 0.0, 0.02, margin=0.3, t_max=22.5)]
+    c._air_step(s, "climate.ll", p, cold, True, False, time.time())  # noqa: SLF001
+    c.air[air]["w"] = {"Mid +-1.5": 320}
+    await ha.services.async_call("select", "select_option", {"entity_id": ref.entity_id, "option": "Reposen"}, blocking=True)
+    await ha.async_block_till_done()
+    assert c._air_ref(s) == (21.2, "Reposen", "sensor.rum_3")  # noqa: SLF001
+    c._air_step(s, "climate.ll", p, cold, True, False, time.time())  # noqa: SLF001
+    v = c.air[air]["view"]
+    # 21,2 °C − 1,5 = 19,7 → 19,5 °C; det lærte er væk
+    assert v["føler"] == "Reposen" and v["føler_temp"] == 21.2 and v["trin_liste"][0]["setpunkt"] == 19.5 and "Mid +-1.5" not in (c.air[air].get("w") or {})
+    # er rummets føler væk i længere tid, bruges enhedens egen
+    c.last_known.pop("sensor.rum_3", None)
+    ha.states.async_set("sensor.rum_3", "unavailable")
+    assert c._air_ref(s)[:2] == (21.0, "enheden")  # noqa: SLF001
+    ha.states.async_set("sensor.rum_3", "21.2", {"state_class": "measurement"})
+    # toppen: et højere setpunkt giver flere temperaturer (aldrig mere end 3 °C over laveste trin)
+    await ha.services.async_call("select", "select_option", {"entity_id": top.entity_id, "option": "21.0"}, blocking=True)
+    await ha.async_block_till_done()
+    c._air_step(s, "climate.ll", p, cold, True, False, time.time())  # noqa: SLF001
+    v = c.air[air]["view"]
+    assert v["top"] == 21.0 and v["trin_liste"][-1]["setpunkt"] == 21.0 and len(v["trin_liste"]) == 4 * 3
+    # uden nogen føler ved enheden: fra rummenes gulv
+    ha.states.async_set("climate.ll", "off", {**LL_ATTRS, "temperature": 20, "fan_mode": "Mid"})
+    c.settings[f"{air}.air_ref"] = "enheden"
+    c._air_step(s, "climate.ll", p, cold, False, False, time.time())  # noqa: SLF001
+    v = c.air[air]["view"]
+    assert v["føler"] is None and v["trin_liste"][0]["setpunkt"] == 19.5 and v["trin_liste"][0]["niveau"] == 0.0
+
+
+async def test_air_history_names_steps_by_distance_to_the_sensor(ha: HomeAssistant) -> None:
+    """Forbrug og virkning pr. trin læres også af historikken – med samme navne som stigen: blæser + setpunktets afstand
+    til føleren ved enheden (et rums føler, ellers klimaentitetens egen temperatur)."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from custom_components.varmemodel import coordinator as co
+
+    c, s, _air = await _air_ref_entry(ha)
+    t0 = float(int(time.time() // 900 * 900) - 6 * 3600)
+    utc = dt_util.utc_from_timestamp
+
+    def row(ts: float, state: str, **attrs) -> SimpleNamespace:  # noqa: ANN003
+        return SimpleNamespace(last_updated=utc(ts), state=state, attributes=attrs)
+
+    clim = [row(t0, "heat", fan_mode="High", temperature=21.0, preset_mode="none", current_temperature=21.0),
+            # kun enhedens temperatur opdateres: indstillingen er den samme
+            row(t0 + 1800, "heat", fan_mode="High", temperature=21.0, preset_mode="none", current_temperature=21.0),
+            row(t0 + 7200, "heat", fan_mode="HighMid", temperature=20.0, preset_mode="none", current_temperature=22.0),
+            row(t0 + 14400, "off", fan_mode="HighMid", temperature=20.0, preset_mode="none", current_temperature=21.0)]
+    room = [row(t0 - 60, "22.0"), row(t0 + 7200, "21.6")]
+    stats = {"sensor.ll_w": [{"start": t0 + k * 300, "mean": 430.0 if k < 24 else 320.0} for k in range(48)]}
+    with patch.object(co.history, "get_significant_states", return_value={"climate.ll": clim, "sensor.rum_3": room}), \
+            patch.object(co, "statistics_during_period", return_value=stats):
+        own = c._air_backfill_sync("climate.ll", "sensor.ll_w", None, 0.5, t0, t0 + 14400)  # noqa: SLF001
+        by_room = c._air_backfill_sync("climate.ll", "sensor.ll_w", "sensor.rum_3", 0.5, t0, t0 + 14400)  # noqa: SLF001
+    # enhedens egen temperatur: 21,0 − 21,0 = 0,0 og 20,0 − 22,0 = −2,0; de første 15 min. efter et skift tæller ikke
+    assert sorted(own) == ["High +0.0", "HighMid +-2.0"] and len(own["High +0.0"]) == 21 and set(own["HighMid +-2.0"]) == {320.0}
+    # rummets føler: 21,0 − 22,0 = −1,0 og 20,0 − 21,6 = −1,6 → −1,5
+    assert sorted(by_room) == ["High +-1.0", "HighMid +-1.5"]
+    # virkningen: samme navne (her uden rum med model – så ingen målinger, men trinene findes)
+    with patch.object(co.history, "get_significant_states", return_value={"climate.ll": clim, "sensor.rum_3": room}), \
+            patch.object(co, "statistics_during_period", return_value=stats):
+        eff, stat = c._air_eff_backfill_sync("climate.ll", "sensor.ll_w", [], "sensor.rum_3", 0.5, "sensor.ude", None, None, None,  # noqa: SLF001
+                                             t0, t0 + 14400, [], None, ["Mid", "HighMid", "High"])
+    assert eff == {} and stat["kvarterer"] > 0 and stat["for_kort"] > 0
+
+
+async def test_calibration_after_an_update_survives_a_reload(ha: HomeAssistant) -> None:
+    """Efter en opdatering kalibreres der ved opstart. Genindlæses indgangen, før det er sket (fx en ændret indstilling),
+    skal kalibreringen stadig køre: den gemte udgave er den, tallene sidst blev regnet med – ikke den, der sidst startede."""
+    c, _s = await _lv_entry(ha)
+    assert c._sw_cal == c._sw  # noqa: SLF001 – ny installation: intet at indhente
+    c._sw_cal = "0.0.1"  # noqa: SLF001 – tallene er regnet med en ældre udgave
+    assert c._data()["sw"] == "0.0.1"  # noqa: SLF001 – og det bliver stående, selv om der gemmes inden kalibreringen
+    await c.async_calibrate()
+    assert c._sw_cal == c._sw and c._data()["sw"] == c._sw  # noqa: SLF001
+
+
+async def test_air_setpoint_is_at_least_the_rooms_floor_while_a_room_is_cold(ha: HomeAssistant) -> None:
+    """Er et rum under sit gulv, og er der koldere ved enheden end rummenes gulv (fx efter en lang blokering), sættes
+    setpunktet mindst på gulvet – rummene kan ikke blive varmere end luften, de får varmen fra. Trinnet er det samme, og
+    når føleren er nået op, tager trinnets eget setpunkt over. Økonomi lader trinnet råde."""
+    from types import SimpleNamespace
+
+    from custom_components.varmemodel.planner import PlanRoom
+
+    c, s, air = await _air_ref_entry(ha)
+    p = SimpleNamespace(hours=[{"blocked": False, "t_out": 2.0, "el_kw": None} for _ in range(6)], rooms={"Loft": [18.0] * 6})
+    cold = [PlanRoom("Loft", 18.0, 19.5, 0.7, 0.0, 0.02, margin=0.3, t_max=22.5)]
+    ok = [PlanRoom("Loft", 19.6, 19.5, 0.7, 0.0, 0.02, margin=0.3, t_max=22.5)]
+    ha.states.async_set("climate.ll", "off", {**LL_ATTRS, "current_temperature": 18.0, "temperature": 20, "fan_mode": "Mid"})
+    t = time.time()
+    d = c._air_step(s, "climate.ll", p, cold, True, False, t)  # noqa: SLF001
+    v = c.air[air]["view"]
+    # føleren 18,0 °C → laveste trin 16,5 °C; men rummet skal op på 19,5 °C: setpunktet løftes dertil
+    assert v["trin_liste"][0]["setpunkt"] == 16.5 and c.air[air]["rung"] == "High +-1.5"
+    assert d["setpoint"] == 19.5 and v["mindst_gulvet"] == 19.5 and "mindst på rummenes gulv (19,5 °C)" in v["grund"]
+    assert c.air[air]["cmd"] == ["High", 19.5, "High +1.5"]  # det, der faktisk køres, hedder efter sit eget niveau
+    # varmepumpen står sådan nu: forbruget læres på det niveau, der køres – ikke på trinnets
+    ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 18.0, "temperature": 19.5, "fan_mode": "High"})
+    c._air_step(s, "climate.ll", p, cold, True, False, t + 60)  # noqa: SLF001
+    assert c.air[air]["view"]["kører_nu"] == "High +1.5"
+    # rummet er over gulvet: trinnets eget setpunkt
+    d = c._air_step(s, "climate.ll", p, ok, True, False, t + 120)  # noqa: SLF001
+    assert d["setpoint"] == 16.5 and c.air[air]["view"]["mindst_gulvet"] is None
+    # føleren er nået op over gulvet + 1,5 °C: intet løft, selv om rummet stadig er koldt
+    ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 21.6, "temperature": 19.5, "fan_mode": "High"})
+    d = c._air_step(s, "climate.ll", p, cold, True, False, t + 180)  # noqa: SLF001
+    assert d["setpoint"] == 20.0 and c.air[air]["view"]["mindst_gulvet"] is None
+    # økonomi: trinnet råder (roligere, senere fremme)
+    c.settings[f"{air}.air_priority"] = "economy"
+    ha.states.async_set("climate.ll", "off", {**LL_ATTRS, "current_temperature": 18.0, "temperature": 20, "fan_mode": "Mid"})
+    c.air[air].update(on=False, rung=None)
+    d = c._air_step(s, "climate.ll", p, cold, True, False, t + 240)  # noqa: SLF001
+    assert d["setpoint"] < 19.5 and c.air[air]["view"]["mindst_gulvet"] is None

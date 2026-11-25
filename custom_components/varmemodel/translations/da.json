@@ -258,6 +258,12 @@
       "air_swing_h": {
         "name": "Lameller side"
       },
+      "air_ref": {
+        "name": "Føler ved enheden"
+      },
+      "air_sp_top": {
+        "name": "Højeste setpunkt"
+      },
       "soft_start": {
         "name": "Fremløb efter start",
         "state": {

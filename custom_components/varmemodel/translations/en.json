@@ -258,6 +258,12 @@
       "air_swing_h": {
         "name": "Louvres sideways"
       },
+      "air_ref": {
+        "name": "Sensor at the unit"
+      },
+      "air_sp_top": {
+        "name": "Highest setpoint"
+      },
       "soft_start": {
         "name": "Soft start",
         "state": {
