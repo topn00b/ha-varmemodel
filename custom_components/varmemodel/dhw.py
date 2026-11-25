@@ -195,7 +195,7 @@ def plan_dhw(hours: list[DhwHour], tank: float, m: TankModel, t_min: float, t_no
     ``frac0``: den del af den første time, der er tilbage.
     Uden for brugstiden varmes der ikke, undtagen i timen lige før brugstiden begynder (og med ``boost``).
     ``running``: målet for en opvarmning, der er i gang lige nu – den regnes færdig i den første time (medmindre timen er
-    blokeret eller uden for brugstiden), i stedet for at planen tror, at varmepumpen ikke ville gå i gang så tæt på målet.
+    blokeret), i stedet for at planen tror, at varmepumpen ikke ville gå i gang så tæt på målet.
 
     Resultat: ``state`` (fra/normalt/højt nu), ``hours`` (pr. time: mål, om der varmes, minutter, kWh el, kr, tanken ved
     timens start – efter en eventuel opvarmning – og ved timens slut), næste opvarmning, tankens laveste punkt ved en
@@ -227,7 +227,9 @@ def plan_dhw(hours: list[DhwHour], tank: float, m: TankModel, t_min: float, t_no
         f = frac0 if i == 0 else 1.0
         return t - f * (m.loss * max(0.0, t - m.amb) + m.draw[hours[i].hour]), mins, kwh, t
 
-    going = running is not None and bool(hours) and not hours[0].blocked and may[0] and not boost  # en opvarmning i gang regnes færdig
+    # en opvarmning i gang regnes færdig – også uden for brugstiden: stoppes den midt i, bliver varmen siddende i
+    # varmepumpen, og cirkulationen kommer ikke op på rumvarmens flow. Kun nye opvarmninger holdes ude af brugstiden
+    going = running is not None and bool(hours) and not hours[0].blocked and not boost
 
     def acts(i: int) -> list[float | None]:
         if i == 0 and boost:
