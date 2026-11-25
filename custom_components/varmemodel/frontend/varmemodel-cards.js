@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.31.2';
+  const VERSION = '0.31.3';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -663,14 +663,8 @@
       o += row('El i går', `${V(h, y, 1, 'kWh')} <span class="mut sm">ude ${fmt(at(h, y).ude_snit)} °C</span>`);
       o += row('El pr. døgn, 7 døgn', V(h, s.e('el_week'), 1, 'kWh'));
       if (f.unit_temp) o += row('Temperatur ved indedelen', M(h, f.unit_temp, 1, '°C'));
-      o += '</div><div class="h2">Rum den varmer</div><div class="wrap"><table><tr><th>Rum</th><th class="n">Nu</th><th class="n">°C pr. kWh el</th><th class="n">Afkøling °C/t ved 20 K</th><th class="n">Præcision 6 t</th></tr>';
-      for (const r of s.rooms) {
-        const d = room(h, vm, r); const a = d.a;
-        o += `<tr><td><span class="v" data-e="${esc(r.model)}">${esc(r.name)}</span></td><td class="n">${M(h, d.tE, 1, '°C', d.cls)}</td>`
-          + `<td class="n">${A(h, r.model, (a.varmekilder_grader_pr_kwh || {})[s.name], 3)}</td><td class="n">${V(h, r.model, 3)}</td>`
-          + `<td class="n">${P6(a) != null ? '±' + A(h, r.model, P6(a), 2, '°C') : '–'}</td></tr>`;
-      }
-      return o + '</table></div>';
+      // rummene står i rum-kortet (samme tal) – ikke gentaget her
+      return o + '</div>';
     }
   }
 
