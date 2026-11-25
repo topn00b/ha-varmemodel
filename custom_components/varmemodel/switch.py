@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import VarmemodelConfigEntry
 import time as _time
 
-from .const import AIR_BOOST, AIR_SWITCH, CONF_FLOW_TARGET, CONF_ONOFF_TARGET, FLOW_SWITCH, HYDRO_SWITCH
+from .const import AIR_BOOST, AIR_SWITCH, CONF_DHW_SWITCH, CONF_DHW_TEMP, CONF_FLOW_TARGET, CONF_ONOFF_TARGET, DHW_CONTROL, FLOW_SWITCH, HYDRO_SWITCH
 from .sensor import SourceEntity
 
 
@@ -26,6 +26,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
                 async_add_entities([FlowControlSwitch(c, s)], config_subentry_id=sid)
             if s.conf.get(CONF_ONOFF_TARGET):
                 async_add_entities([HydroControlSwitch(c, s)], config_subentry_id=sid)
+            if s.eid(CONF_DHW_TEMP) and s.eid(CONF_DHW_SWITCH):
+                async_add_entities([DhwControlSwitch(c, s)], config_subentry_id=sid)
 
 
 class AirControlSwitch(SourceEntity, SwitchEntity):
@@ -113,3 +115,24 @@ class HydroControlSwitch(SourceEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.coordinator.async_set_hydro_control(self.src, False)
+
+
+class DhwControlSwitch(SourceEntity, SwitchEntity):
+    """Vandbåren: Varmemodel styrer varmt vand – skriver planens fra / normalt / højt til varmepumpen (mål først, så til),
+    aldrig til i en blokering (undtagen »bad nu«). Fra: planen er kun en anbefaling."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:water-boiler-auto"
+
+    def __init__(self, coordinator: Any, s: Any) -> None:
+        super().__init__(coordinator, s, DHW_CONTROL)
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.dhw_control(self.src)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self.coordinator.async_set_dhw_control(self.src, True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self.coordinator.async_set_dhw_control(self.src, False)

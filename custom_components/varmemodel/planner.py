@@ -63,6 +63,9 @@ class SourceModel:
     emission_kw_k: float = 0.25  # gulvets afgivelse
     flow_c0: float = 34.0  # lært fremløb ved 0 °C ude (ren rumvarme)
     flow_slope: float = -0.6  # lært fremløb: ændring pr. °C ude
+    # Rimens pris: (ude, faktor) – så meget af den målte varme huset reelt får ved den udetemperatur i forhold til
+    # gennemsnittet (afrimningerne tager varme fra gulvvandet, som varmemåleren ikke trækker fra). Tom = 1 overalt.
+    frost: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass
@@ -179,6 +182,19 @@ def flow_boost_step(prev: dict[str, Any] | None, now: float, rooms_low: list[str
     return {"k": k, "t": t, "rooms": sorted(rooms_low)}
 
 
+def frost_factor(m: SourceModel, t_out: float) -> float:
+    """Rimens faktor ved udetemperaturen: lineært mellem de lærte bånd, fladt uden for dem; 1 uden lærte tal."""
+    pts = m.frost
+    if not pts:
+        return 1.0
+    if t_out <= pts[0][0]:
+        return pts[0][1]
+    for (a, x), (b, y) in zip(pts, pts[1:]):
+        if t_out <= b:
+            return x + (y - x) * (t_out - a) / (b - a) if b > a else y
+    return pts[-1][1]
+
+
 def _cop(m: SourceModel, t_out: float, p: float, target: float) -> float:
     a, b, c, d = m.cop
     return max(1.2, a + b * t_out + c * flow_for(m, p, target) + d * p)
@@ -247,7 +263,7 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
               red_allowance: float = 0.0, preload: float = 0.0, flow_margin: float | None = None, comfort: float = 0.0,
               economy: float = 0.0, flow_raise_max: int = FLOW_BOOST_MAX,
               red_spans: list[tuple[int, int]] | None = None, running: bool | None = None,
-              priority: str = "economy", flow_raise_free: int = 0) -> Plan:
+              priority: str = "economy", flow_raise_free: int = 0, busy: list[float] | None = None) -> Plan:
     """Planen. Forudsiger modellen, at et rum kommer under planens grænse, fordi fremløbsgrænsen holder varmen nede,
     regnes planen igennem med grænsen hævet 1 °C ad gangen (højst ``flow_raise_max``, som kalderen sætter efter det,
     varmepumpen kan yde) – i god tid, da gulvet er langsomt. ``priority`` (økonomi – balance – komfort) afgør, hvilken
@@ -256,14 +272,20 @@ def make_plan(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], 
     ``flow_raise_free``: så mange af graderne hører til almindelig drift (op til fremløbsloftet, når planen regner med et
     lavere mål fra en søgning efter laveste fremløb): dem bruger alle trin, når de hjælper.
     ``running``: varmekilden kører lige nu (afgør, om en delvist fri første time kan fortsætte kørslen); None = ukendt, så
-    bruges den målte varme i timen før."""
+    bruges den målte varme i timen før.
+    ``busy``: den del af hver time (0–1), varmekilden bruger på andet end rumvarme – varmt vand. Timen rummer så tilsvarende
+    mindre rumvarme (ved samme effekt), men er ellers en almindelig time."""
     args = (hours, model, rooms, target, max_pause, past_q, label, boost, boost_hours, red_allowance, preload, comfort, economy)
-    base = _plan_once(*args, flow_margin, red_spans=red_spans, running=running)
+    _once = _plan_once
+    if busy and any(busy):
+        def _once(*a: Any, **k: Any) -> Plan:  # noqa: ANN401
+            return _plan_once(*a, busy=busy, **k)
+    base = _once(*args, flow_margin, red_spans=red_spans, running=running)
     if flow_margin is None or base.deficit <= 0.05 or flow_raise_max <= 0:
         return base
     plans = [base]
     for k in range(1, flow_raise_max + 1):
-        p = _plan_once(*args, flow_margin + k, red_spans=red_spans, running=running)
+        p = _once(*args, flow_margin + k, red_spans=red_spans, running=running)
         plans.append(p)
         if p.deficit <= 0.05:
             break  # alle rum holder: flere grader giver intet
@@ -371,7 +393,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,
               red_allowance: float = 0.0, preload: float = 0.0, comfort: float = 0.0, economy: float = 0.0,
               flow_margin: float | None = None, red_spans: list[tuple[int, int]] | None = None,
-              running: bool | None = None) -> Plan:
+              running: bool | None = None, busy: list[float] | None = None) -> Plan:
     """Planen for de givne timer. ``target`` er den indetemperatur behovet regnes ud fra.
 
     ``boost`` (»jeg fryser«) hæver målet og rummenes min. i de første ``boost_hours`` timer.
@@ -403,6 +425,12 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
     # Timens frie del (0 = blokeret, 1 = hel time). En delvist fri time rummer kun den del af effekten og kan kun bruges
     # som fortsættelse af nabotimen på den frie side (se ``usable``).
     fr = [0.0 if h.blocked else min(1.0, max(0.0, h.free)) for h in hours]
+    # Varmt vand tager en del af timen (``busy``): den del af den frie tid, der er tilbage til rumvarme, bærer energien –
+    # samme effekt i kortere tid. Timen er stadig en almindelig time (ingen krav om nabotime som for delvist frie timer).
+    av = [fr[i] * (1.0 - min(0.9, max(0.0, busy[i]))) if busy and i < len(busy) else fr[i] for i in range(n)]
+    # Rimens pris: i rimvejr får huset mindre af den målte varme (afrimningerne tager varme fra gulvvandet) – timen
+    # rummer tilsvarende mindre og koster mere pr. kWh, huset får. Planens varme (``q``) er den, huset får.
+    fg = [frost_factor(model, h.t_out) for h in hours]
     free = [i for i in range(n) if fr[i] > 0]
     # Kører varmen lige nu? Det afgør, om en delvist fri første time er en fortsættelse (ukendt: målt varme i timen før)
     ran_before = running if running is not None else (bool(past_q) and past_q[-1] > 1e-9)
@@ -420,7 +448,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
 
     def el(i: int, e: float) -> float:
         """El (kWh) for ``e`` kWh varme i time i. I en delvist fri time leveres varmen på den frie del – ved højere effekt."""
-        return fr[i] * _el(model, hours[i].t_out, e / fr[i], target) if e > 0 else 0.0
+        return av[i] * _el(model, hours[i].t_out, e / (av[i] * fg[i]), target) if e > 0 else 0.0
 
     # Lavt og jævnt: fremløbet må højst ligge ``flow_margin`` °C over det lærte fremløb ved timens
     # udetemperatur. Det begrænser effekten pr. time, så varmen spredes over flere timer (højere COP, færre afrimninger).
@@ -433,7 +461,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
     def add_cost(i: int, amount: float) -> float:
         """Ekstra el-pris (kr) for at lægge ``amount`` kWh mere i time i."""
         p0, p1 = q[i], q[i] + amount
-        if p1 > pcap[i] * fr[i] + 1e-9:
+        if p1 > pcap[i] * av[i] * fg[i] + 1e-9:
             return float("inf")
         return hours[i].price * (el(i, p1) - el(i, p0))
 
@@ -443,7 +471,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
         for i in cands:
             if not usable(i):
                 continue
-            a = max(STEP, model.p_min * fr[i]) if q[i] == 0 else STEP
+            a = max(STEP, model.p_min * av[i] * fg[i]) if q[i] == 0 else STEP
             c = add_cost(i, a) / a
             if c < best_c:
                 best, best_c, best_a = i, c, a
@@ -506,7 +534,7 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
             cut = False
             for i in cands:
                 old = q[i]
-                q[i] = old - STEP if old - STEP >= model.p_min * fr[i] - 1e-9 else 0.0
+                q[i] = old - STEP if old - STEP >= model.p_min * av[i] * fg[i] - 1e-9 else 0.0
                 # Falder nabotimen væk, falder den delvist frie time med (den kan ikke stå alene)
                 gone = {j: q[j] for j in orphans()}
                 for j in gone:
@@ -560,14 +588,18 @@ def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom],
     pq, plan.preload, pre_txt = _preload_window(hours, q, lab, red_spans)
     for i, h in enumerate(hours):
         p = round(q[i], 2)  # kWh varme i timen (= kW i en hel time)
-        pw = p / fr[i] if p > 0 else 0.0  # effekten, mens der varmes (højere i en delvist fri time)
+        # effekten, mens der varmes (højere i en delvist fri time, en time med varmt vand og i rimvejr)
+        pw = p / (av[i] * fg[i]) if p > 0 else 0.0
         flow = flow_for(model, pw, target) if p > 0 else None
-        cop = _cop(model, h.t_out, pw, target) if p > 0 else None
+        # COP for den varme, huset får: i rimvejr skal varmepumpen lave mere, end huset får (faktoren)
+        cop = _cop(model, h.t_out, pw, target) * fg[i] if p > 0 else None
         e_el = p / cop if cop else 0.0
         plan.hours.append({"ts": h.ts, "heat_kw": p, "flow": flow,
                            "price": round(h.price, 3), "t_out": round(h.t_out, 1), "blocked": h.blocked,
                            "cop": round(cop, 2) if cop else None, "cost": round(e_el * h.price, 2),
-                           "preload": round(pq[i], 2), **({"free": round(fr[i], 2)} if 0 < fr[i] < 1 else {})})
+                           "preload": round(pq[i], 2), **({"free": round(fr[i], 2)} if 0 < fr[i] < 1 else {}),
+                           **({"dhw": round(1 - av[i] / fr[i], 2)} if fr[i] > 0 and av[i] < fr[i] - 1e-9 else {}),
+                           **({"frost": round(fg[i], 3)} if abs(fg[i] - 1) >= 0.005 else {})})
         plan.heat_kwh += p
         plan.el_kwh += e_el
         plan.cost_kr += e_el * h.price

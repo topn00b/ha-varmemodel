@@ -99,3 +99,54 @@ def test_dhw_plan_before_a_long_block_and_priority() -> None:
     boost = plan_dhw(hrs(4, blocked=lambda i: True), 35.0, M, 40.0, 45.0, 50.0, "economy", boost=True)
     assert boost["state"] == "high" and boost["target"] == 50.0 and boost["hours"][0]["run"] and boost["hours"][0]["tank"] > 45
     assert plan_dhw([], 40.0, M, 40.0, 45.0, 50.0)["state"] == "off"
+
+
+def test_tank_may_be_cold_outside_the_hours_of_use() -> None:
+    """Brugstiden: grænsen »mindst« gælder kun, når vandet bruges. Om aftenen kl. 21 med en lunken tank varmes der ikke
+    til natten – opvarmningen lægges tæt på morgenen, så varmen ikke står og taber sig natten over. Komfort holder
+    tanken over »mindst« hele døgnet."""
+    use = [6 <= h < 21 for h in range(24)]
+    h = hrs(12, start_hour=21)  # kl. 21 → kl. 9
+    eco = plan_dhw(h, 39.5, M, 40.0, 45.0, 50.0, "economy", use=use)
+    runs = [x for x in eco["hours"] if x["run"]]
+    # kl. 5: sidste time før brugstiden (lige priser: mindst tab) – tanken er klar kl. 6, ikke først efter en opvarmning
+    # i selve timen; kl. 8 varmes der igen efter morgenbadet
+    assert eco["state"] == "off" and [x["ts"] for x in runs] == [8 * 3600, 11 * 3600]
+    assert eco["hours"][9]["start"] >= 44.0 and not eco["hours"][9]["run"]
+    assert eco["under_hours"] == 0 and eco["use"] == list(range(6, 21))
+    assert eco["hours"][0]["use"] is False and eco["hours"][9]["use"] is True
+    # tankens laveste punkt tælles i brugstiden – ikke natten, hvor den gerne må være kold
+    assert eco["lowest"]["ts"] >= 9 * 3600 and min(x["start"] for x in eco["hours"][:8]) < 40.0
+    # uden brugstid (hele døgnet): der varmes med det samme
+    allday = plan_dhw(h, 39.5, M, 40.0, 45.0, 50.0, "economy", use=[True] * 24)
+    assert allday["state"] == "normal" and allday["hours"][0]["run"]
+    # komfort: aldrig under »mindst«, heller ikke om natten
+    com = plan_dhw(h, 39.5, M, 40.0, 45.0, 50.0, "comfort", use=use)
+    assert com["state"] != "off" and all(x["start"] >= 40.0 for x in com["hours"])
+    # den lærte brugstid: timerne med målbart forbrug; før noget er lært: hele døgnet
+    m = TankModel(draw=[0.0] * 7 + [4.0] + [0.05] * 11 + [3.0] + [0.0] * 4, hours=200)
+    assert [i for i, u in enumerate(m.use()) if u] == [7, 19] and all(TankModel().use())
+    lrn = plan_dhw(hrs(12, start_hour=21), 39.5, m, 40.0, 45.0, 50.0, "economy")
+    assert lrn["use"] == [7, 19] and lrn["state"] == "off"
+
+
+def test_a_run_in_progress_is_counted_to_its_end() -> None:
+    """En opvarmning, der er i gang, regnes færdig i den første time – ellers ville planen tro, at varmepumpen ikke går i
+    gang så tæt på målet, og melde »fra« midt i den. I en blokeret time gælder det ikke."""
+    off = plan_dhw(hrs(6), 43.5, M, 40.0, 45.0, 50.0, "economy")
+    assert off["state"] == "off" and not off["hours"][0]["run"]
+    on = plan_dhw(hrs(6), 43.5, M, 40.0, 45.0, 50.0, "economy", running=45.0)
+    assert on["state"] == "normal" and on["target"] == 45.0 and on["hours"][0]["run"] and on["hours"][0]["min"] == 5
+    blk = plan_dhw(hrs(6, blocked=lambda i: i == 0), 43.5, M, 40.0, 45.0, 50.0, "economy", running=45.0)
+    assert blk["state"] == "off" and not blk["hours"][0]["run"]
+
+
+def test_pause_after_a_run_is_learned_from_the_compressor() -> None:
+    from custom_components.varmemodel.dhw import run_pause
+
+    runs = [(0.0, 1800.0), (90000.0, 91800.0)]
+    # kompressoren stopper ved skiftet tilbage og starter igen 6 og 4 minutter efter
+    assert run_pause(runs, [(-600.0, 1805.0), (2160.0, 5000.0), (89000.0, 91800.0), (92040.0, 95000.0)]) == 5.0
+    assert run_pause(runs[:1], [(-600.0, 5000.0)]) == 0.0  # kørte videre hen over skiftet
+    assert run_pause(runs[:1], [(-600.0, 1800.0)]) is None  # ingen rumvarme bagefter: intet at lære
+    assert run_pause([(0.0, 120.0)], [(-600.0, 5000.0)]) is None  # for kort til at være en opvarmning

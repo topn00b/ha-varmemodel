@@ -177,3 +177,57 @@ def test_defrosts_are_read_from_the_power_curve() -> None:
     assert power_defrosts(two, 150.0, 5.0) == [] and len(power_defrosts(two, 150.0)) == 1
     # et enkelt udfald på 10 sekunder er ikke et dyk (der regnes på minutgennemsnit) – heller ikke uden kendt slukket-effekt
     assert power_defrosts(run([(30, 700.0)])[:100] + [(1000.0, 0.0)] + run([(30, 700.0)])[101:], 150.0) == []
+
+
+def test_min_fan_shapes_the_ladder() -> None:
+    """Min. blæser: trinene under den – og »quiet« – udgår (et fjernt rum får ikke del i varmen ved lav blæser). Ligger
+    den over maks. blæser (fx om natten), vinder maks.: stigen er så kun setpunkter."""
+    fans = ["Low", "LowMid", "Mid", "HighMid", "High"]
+    full = build_ladder(fans, "High", 19.5, 22.5, 0.5, quiet=True)
+    assert [(x.preset or x.fan) for x in full[:6]] == ["quiet", "Low", "LowMid", "Mid", "HighMid", "High"] and len(full) == 12
+    mid = build_ladder(fans, "High", 19.5, 22.5, 0.5, quiet=True, floor="Mid")
+    assert [(x.preset or x.fan, x.setpoint) for x in mid[:4]] == [("Mid", 19.5), ("HighMid", 19.5), ("High", 19.5), ("High", 20.0)] and len(mid) == 9
+    assert all(x.fan in ("Mid", "HighMid", "High") and x.preset is None for x in mid)
+    # min. = maks.: kun setpunkter
+    top = build_ladder(fans, "High", 19.5, 22.5, 0.5, quiet=True, floor="High")
+    assert {x.fan for x in top} == {"High"} and [x.setpoint for x in top] == [19.5, 20.0, 20.5, 21.0, 21.5, 22.0, 22.5]
+    # natten har lavere maks. end min.: støjgrænsen vinder
+    night = build_ladder(fans, "LowMid", 19.5, 22.5, 0.5, quiet=True, floor="High")
+    assert {x.fan for x in night} == {"LowMid"} and len(night) == 7
+    # »quiet« som min. (eller ingen): som før
+    assert build_ladder(fans, "High", 19.5, 22.5, 0.5, quiet=True, floor="quiet") == full
+    assert build_ladder(fans, "High", 19.5, 22.5, 0.5, quiet=True, floor=None) == full
+
+
+def test_what_one_step_learns_is_shared_with_the_others() -> None:
+    """Nat og dag har hver sin maks. blæser og dermed hver sine trin, men samme setpunkt over gulvet: et trin uden egne
+    målinger bruger de andre blæseres tal for samme setpunkt (»delt«) og ellers et skøn mellem de nærmeste lærte
+    setpunkter (»skøn«). Egne målinger går altid forud; blæsere uden for stigen (»Auto«) deles ikke."""
+    from custom_components.varmemodel.air_control import eff_lookup, split_label, w_lookup
+
+    assert split_label("HighMid +0.5|vent til@0") == ("HighMid", 0.5, "|vent til", "0")
+    assert split_label("quiet +0.0") == ("quiet", 0.0, "", None) and split_label("High +3.0@-5") == ("High", 3.0, "", "-5")
+    assert split_label("noget andet") is None
+    fans = {"quiet", "Low", "Mid", "HighMid", "High"}
+    w = {"HighMid +0.5": 312, "HighMid +0.5@0": 313, "HighMid +3.0": 625, "HighMid +3.0@0": 611, "Auto +2.0": 9999, "High +3.0": 438}
+    assert w_lookup(w, "HighMid", 0.5, "0", fans) == (313, "trin")  # egne målinger i udebåndet
+    assert w_lookup(w, "HighMid", 0.5, "-10", fans) == (312, "trin")  # egne målinger uden for båndet
+    assert w_lookup(w, "High", 0.5, "0", fans) == (313, "delt")  # dagens trin låner nattens tal (udebåndet først)
+    assert w_lookup(w, "High", 0.5, "-10", fans) == (312, "delt")
+    assert w_lookup(w, "Mid", 3.0, None, fans) == (round((625 + 438) / 2), "delt")
+    est, src = w_lookup(w, "High", 1.5, "0", fans)  # mellem +0,5 (312) og +3,0 (snit 531,5)
+    assert src == "skøn" and abs(est - (312 + (531.5 - 312) * 1.0 / 2.5)) <= 1
+    assert w_lookup(w, "High", 0.0, None, fans) == (312, "skøn")  # under det laveste lærte: det nærmeste
+    assert w_lookup({}, "High", 0.5) == (None, None) and w_lookup({"Auto +2.0": 400}, "High", 2.0, None, fans) == (None, None)
+
+    eff = {"HighMid +0.5|vent til": [0.254, 0.52, 7], "High +0.5|vent til": [0.197, 0.24, 3],
+           "HighMid +3.0|vent fra": [0.414, 0.74, 5], "HighMid +3.0|vent til": [0.580, 0.87, 6], "HighMid +2.0|vent til": [0.9, 1.0, 9]}
+    assert eff_lookup(eff, "HighMid", 2.0, "|vent til", None, fans)[:2] == (0.9, "trin")
+    v, src, n = eff_lookup(eff, "High", 0.5, "|vent til", "0", fans)  # hverken nat eller dag har nok alene – sammen har de
+    assert src == "delt" and n == 10 and abs(v - (0.254 + 0.197) / (0.52 + 0.24)) < 1e-9
+    v, src, n = eff_lookup(eff, "High", 3.0, "|vent til", None, fans)  # samme ventilation har ikke nok: uanset ventilation
+    assert src == "delt" and n == 11 and abs(v - (0.414 + 0.580) / (0.74 + 0.87)) < 1e-9
+    v, src, n = eff_lookup(eff, "High", 1.0, "|vent fra", None, fans)  # intet på +1,0: mellem +0,5 og +2,0
+    lo, hi = (0.254 + 0.197) / 0.76, 0.9
+    assert src == "skøn" and n == 0 and abs(v - (lo + (hi - lo) * 0.5 / 1.5)) < 1e-9
+    assert eff_lookup({"HighMid +0.5": [0.2, 0.5, 3]}, "High", 0.5) == (None, None, 0)  # for få kvarterer: ikke lært

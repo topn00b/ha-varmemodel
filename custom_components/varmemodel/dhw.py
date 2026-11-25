@@ -17,6 +17,8 @@ from typing import Any
 
 DHW_STATES = ("off", "normal", "high")
 GRID = 0.1  # °C: planens opløsning for tanktemperaturen (følerens)
+USE_MIN = 0.1  # °C: en time på døgnet, hvor forbruget i gennemsnit tager mindst så meget (følerens opløsning), er brugstid
+LOSS_WIN, LOSS_MIN = 6, 4  # timer: vinduet, tabet i ro måles over, og det korteste rolige stræk, der tæller
 T_LO, T_HI = 5.0, 70.0  # planens temperaturområde
 
 
@@ -30,8 +32,13 @@ class TankModel:
     heat: float = 0.3  # °C pr. minut under en opvarmning
     el: float = 0.12  # kWh el pr. °C
     gap: float = 5.0  # varmepumpen starter en opvarmning, når tanken ligger mindst så meget under målet (°C)
+    pause: float = 10.0  # minutter uden rumvarme omkring en opvarmning (kompressoren står ved skiftet til og fra varmt vand)
     hours: int = 0  # timer i ro, tab og forbrug er lært af
     runs: int = 0  # opvarmninger, opvarmning, el og startgrænse er lært af
+
+    def use(self) -> list[bool]:
+        """Brugstiden: de timer på døgnet, hvor der bruges varmt vand (lært af tankens fald). Før noget er lært: alle."""
+        return [d >= USE_MIN for d in self.draw] if self.hours else [True] * 24
 
     def as_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -41,7 +48,7 @@ class TankModel:
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> TankModel:
         d = d or {}
-        m = cls(**{k: d[k] for k in ("loss", "amb", "heat", "el", "gap", "hours", "runs") if d.get(k) is not None})
+        m = cls(**{k: d[k] for k in ("loss", "amb", "heat", "el", "gap", "pause", "hours", "runs") if d.get(k) is not None})
         if isinstance(d.get("draw"), list) and len(d["draw"]) == 24:
             m.draw = [float(x) for x in d["draw"]]
         return m
@@ -66,34 +73,49 @@ def learn_tank(temps: list[tuple[float, float]], runs: list[tuple[float, float]]
     ``hour_of``: funktion fra tidspunkt til lokal time på døgnet (0–23). ``targets``: (tidspunkt, mål) når målet ændres.
     ``el``: (tidspunkt, kWh) fra en elmåler, der tæller op. ``prev``: den forrige model – det, der ikke kan læres nu, beholdes.
 
-    - Tab og forbrug: for hver hel time uden opvarmning ses på faldet, og faldene samles pr. time på døgnet (følere måler
-      ofte i halve grader, så en enkelt time siger intet – gennemsnittet over dagene gør). Den fjerdedel af døgnets timer,
-      hvor tanken falder mindst, er timerne uden forbrug: deres fald er tabet i ro (som andel af tankens overtemperatur).
-      Det, en time på døgnet i gennemsnit falder mere end det, er forbruget i den time.
+    - Tab og forbrug: for hver hel time uden opvarmning (og uden for timen efter en – føleren er forsinket) ses på
+      faldet. Tabet i ro læres af vinduer på seks sammenhængende rolige timer (glidende, en time ad gangen; et kortere
+      stræk på mindst fire timer tæller som ét vindue) – over så lang tid udlignes det, at en føler står stille i timevis
+      og så falder et hak: faldet over vinduet som andel af tankens overtemperatur. Vinduer uden forbrug falder mindst, så
+      tabet er den fjerdedel af vinduerne, der falder mindst. Det, en time på døgnet i gennemsnit falder mere end tabet, er
+      forbruget i den time – og timer med målbart forbrug er brugstiden (``TankModel.use``).
     - Opvarmning: stigningen fra start til det højeste inden for ti minutter efter slut (føleren er forsinket), pr. minut
       og pr. kWh el. Startgrænsen er det mindste, tanken har ligget under målet, da en opvarmning gik i gang."""
     m = TankModel(**{**asdict(prev), "amb": amb}) if prev else TankModel(amb=amb)
     if len(temps) < 2:
         return m
-    busy = [(a - 300, b + 900) for a, b in runs]  # opvarmningen og tiden lige omkring den
+    busy = [(a - 300, b + 3600) for a, b in runs]  # opvarmningen og timen efter (føleren er forsinket, tanken blander sig)
     t0 = int(temps[0][0] // 3600 + 1) * 3600
-    rows: list[tuple[int, float, float]] = []  # (lokal time, fald, overtemperatur)
+    rows: list[tuple[int, int, float, float]] = []  # (timens start, lokal time, fald, overtemperatur)
     h = t0
     while h + 3600 <= temps[-1][0]:
         if not any(a < h + 3600 and b > h for a, b in busy):
             x, y = _at(temps, h), _at(temps, h + 3600)
             if x is not None and y is not None and x - amb > 2:
-                rows.append((int(hour_of(h)), x - y, (x + y) / 2 - amb))
+                rows.append((h, int(hour_of(h)), x - y, (x + y) / 2 - amb))
         h += 3600
-    by: dict[int, list[tuple[float, float]]] = {}
-    for hr, d, over in rows:
-        by.setdefault(hr, []).append((d, over))
-    if len(rows) >= 12 and len(by) >= 4:
-        mean = {hr: (sum(d for d, _o in v) / len(v), sum(o for _d, o in v) / len(v)) for hr, v in by.items()}
-        rel = sorted(d / o for d, o in mean.values() if o > 0)
-        calm = rel[: max(1, len(rel) // 4)]
-        m.loss = round(max(0.0, sum(calm) / len(calm)), 4)
-        m.draw = [round(max(0.0, mean[k][0] - m.loss * mean[k][1]), 2) if k in mean else 0.0 for k in range(24)]
+    # Vinduer på LOSS_WIN sammenhængende rolige timer (glidende; et kortere stræk på mindst LOSS_MIN timer er ét vindue):
+    # fald pr. overtemperatur over vinduet
+    wins: list[float] = []
+    cur: list[tuple[int, int, float, float]] = []
+    for r in [*rows, None]:
+        if r is not None and (not cur or r[0] - cur[-1][0] == 3600):
+            cur.append(r)
+            continue
+        if len(cur) >= LOSS_MIN:
+            n_ = min(LOSS_WIN, len(cur))
+            for j in range(len(cur) - n_ + 1):
+                w_ = cur[j:j + n_]
+                if (o_ := sum(x[3] for x in w_)) > 0:
+                    wins.append(sum(x[2] for x in w_) / o_)
+        cur = [r] if r is not None else []
+    if len(rows) >= 12 and wins:
+        wins.sort()
+        m.loss = round(max(0.0, wins[(len(wins) - 1) // 4]), 4)  # den fjerdedel af vinduerne, der falder mindst
+        by: dict[int, list[float]] = {}
+        for _ts, hr, d, over in rows:
+            by.setdefault(hr, []).append(d - m.loss * over)
+        m.draw = [round(max(0.0, sum(by[k]) / len(by[k])), 2) if by.get(k) else 0.0 for k in range(24)]
         m.hours = len(rows)
     rates, els, gaps = [], [], []
     for a, b in runs:
@@ -124,6 +146,23 @@ def learn_tank(temps: list[tuple[float, float]], runs: list[tuple[float, float]]
     return m
 
 
+def run_pause(runs: list[tuple[float, float]], comp_on: list[tuple[float, float]]) -> float | None:
+    """Minutter, kompressoren står, når en opvarmning af varmt vand slutter, og rumvarmen skal i gang igen – medianen over
+    opvarmningerne (kun dem, hvor kompressoren kom i gang igen inden for et kvarter; ellers var der ingen rumvarme at
+    vende tilbage til). ``comp_on``: (start, slut) for kompressorens driftsperioder. None = intet at lære af."""
+    out: list[float] = []
+    for a, b in runs:
+        if b - a < 300:
+            continue
+        if any(x < b - 30 and y > b + 30 for x, y in comp_on):
+            out.append(0.0)  # kompressoren kørte videre hen over skiftet
+            continue
+        nxt = min((x for x, _y in comp_on if b - 30 <= x <= b + 900), default=None)
+        if nxt is not None:
+            out.append(max(0.0, nxt - b) / 60)
+    return round(median(out), 1) if out else None
+
+
 @dataclass
 class DhwHour:
     ts: int  # timens start, unix-sekunder
@@ -133,7 +172,8 @@ class DhwHour:
 
 
 def plan_dhw(hours: list[DhwHour], tank: float, m: TankModel, t_min: float, t_normal: float, t_high: float,
-             priority: str = "balance", boost: bool = False, frac0: float = 1.0) -> dict[str, Any]:
+             priority: str = "balance", boost: bool = False, frac0: float = 1.0, use: list[bool] | None = None,
+             running: float | None = None) -> dict[str, Any]:
     """Planen for varmt vand: hvilke timer der varmes og til hvilket mål, så tanken holder ``t_min`` billigst muligt.
 
     Varmepumpen varmer selv tanken, når varmt vand er slået til, og tanken ligger mindst ``m.gap`` under målet – planen
@@ -143,16 +183,32 @@ def plan_dhw(hours: list[DhwHour], tank: float, m: TankModel, t_min: float, t_no
     er i tanken, når timen begynder (efter en eventuel opvarmning): et bad må gerne tage tanken under grænsen – så varmes
     den i næste frie time – men den skal ikke stå kold, når nogen vil i bad.
 
+    Grænsen gælder kun i brugstiden – ``use`` (24 timer på døgnet, fra brugerens indstilling), ellers den lærte
+    (``m.use()``): om natten, hvor ingen bruger vand, må tanken gerne være kold – så varmes den tæt på morgenen i stedet
+    for om aftenen. Når brugstiden begynder (en time i brugstiden efter en uden for), skal tanken være klar, før timen
+    begynder – en opvarmning i selve timen kommer for sent til den, der står først op.
+
     ``priority``: økonomi varmer kun til »normalt«; balance må også bruge »højt« (fx lige før en blokering, tanken ellers
-    ikke kan holde igennem); komfort holder desuden tanken tæt på »normalt« i alle frie timer (grænsen er »normalt« minus
-    varmepumpens startgrænse i stedet for ``t_min``). ``boost``: »højt« nu, også i en blokeret time.
+    ikke kan holde igennem); komfort holder desuden tanken tæt på »normalt« i brugstiden (grænsen er »normalt« minus
+    varmepumpens startgrænse) og på ``t_min`` resten af døgnet, så der altid er varmt vand.
+    ``boost``: »højt« nu, også i en blokeret time.
     ``frac0``: den del af den første time, der er tilbage.
+    ``running``: målet for en opvarmning, der er i gang lige nu – den regnes færdig i den første time (medmindre timen er
+    blokeret), i stedet for at planen tror, at varmepumpen ikke ville gå i gang så tæt på målet.
 
     Resultat: ``state`` (fra/normalt/højt nu), ``hours`` (pr. time: mål, om der varmes, minutter, kWh el, kr, tanken ved
     timens start – efter en eventuel opvarmning – og ved timens slut), næste opvarmning, tankens laveste punkt ved en
     times start og hvor mange timer den begynder under ``t_min``."""
     n = len(hours)
-    bar = t_normal - m.gap if priority == "comfort" else t_min
+    learned_use = use is None
+    use = m.use() if use is None else use
+    # Grænsen time for time: i brugstiden »mindst« (komfort: tæt på »normalt«); uden for brugstiden ingen (komfort: »mindst«)
+    bars = [(max(t_min, t_normal - m.gap) if priority == "comfort" else t_min) if use[h.hour] else (t_min if priority == "comfort" else T_LO)
+            for h in hours]
+    # Brugstiden begynder: tanken skal være klar ved timens start (før en opvarmning i timen) – ikke for den første time,
+    # den er allerede i gang
+    ready = [i > 0 and use[h.hour] and not use[(h.hour - 1) % 24] for i, h in enumerate(hours)]
+    bar = t_min  # det, der står i tanken over »mindst« ved periodens slutning, har værdi
     allowed = [t_normal] if priority == "economy" else [t_normal, t_high]
     k = lambda t: int(round((min(max(t, T_LO), T_HI) - T_LO) / GRID))  # noqa: E731
     val = lambda i: T_LO + i * GRID  # noqa: E731
@@ -162,22 +218,32 @@ def plan_dhw(hours: list[DhwHour], tank: float, m: TankModel, t_min: float, t_no
         """Tanken gennem time ``i`` med målet ``g``: (temperatur ved timens slut, minutter opvarmning, kWh el, temperaturen
         til rådighed i timen – efter en eventuel opvarmning, før tab og forbrug)."""
         mins = kwh = 0.0
-        if g is not None and t <= g - m.gap + 1e-9:
+        if g is not None and t < g and (t <= g - m.gap + 1e-9 or (i == 0 and going)):
             mins, kwh, t = (g - t) / m.heat if m.heat > 0 else 0.0, (g - t) * m.el, g
         f = frac0 if i == 0 else 1.0
         return t - f * (m.loss * max(0.0, t - m.amb) + m.draw[hours[i].hour]), mins, kwh, t
 
+    going = running is not None and bool(hours) and not hours[0].blocked and not boost  # en opvarmning i gang regnes færdig
+
     def acts(i: int) -> list[float | None]:
         if i == 0 and boost:
             return [t_high]
+        if i == 0 and going:
+            return [running]
         return [None] if hours[i].blocked else [None, *allowed]
 
     # Baglæns: for hver time og tanktemperatur den bedste fortsættelse – først færrest gradtimer under grænsen, så billigst
     INF = (float("inf"), float("inf"))
-    # Det, der står i tanken over grænsen, når perioden slutter, er ikke spildt: det regnes til periodens billigste pris –
-    # ellers ville planen varme så tidligt som muligt (mindst løft nu) i stedet for så sent som muligt (mindst tab)
+    # Det, der står i tanken, når perioden slutter, er ikke spildt – og det, der mangler, skal varmes bagefter: begge dele
+    # regnes til periodens billigste pris. Ellers ville planen varme så tidligt som muligt (mindst løft nu) i stedet for
+    # så sent som muligt (mindst tab), og skubbe regningen ud over periodens kant
     cheap = min((h.price for h in hours if not h.blocked), default=0.0)
-    nxt: list[tuple[float, float]] = [(0.0, round(-max(0.0, val(s) - bar) * m.el * cheap, 3)) for s in range(size)]
+    # Det, der står over grænsen, er kun det værd, der er tilbage af det, når vandet næste gang bruges (tabet i ro i timerne
+    # frem til næste brugstime efter perioden) – ellers stod en opvarmning i periodens sidste billige time lige med ingen
+    end_h = (hours[-1].hour + 1) % 24 if hours else 0
+    wait = next((j for j in range(24) if use[(end_h + j) % 24]), 0)
+    keep = (1 - min(max(m.loss, 0.0), 0.5)) ** wait
+    nxt: list[tuple[float, float]] = [(0.0, round(-(val(s) - bar) * m.el * cheap * (keep if val(s) > bar else 1.0), 3)) for s in range(size)]
     choice: list[list[float | None]] = []
     for i in range(n - 1, -1, -1):
         cur: list[tuple[float, float]] = [INF] * size
@@ -185,12 +251,12 @@ def plan_dhw(hours: list[DhwHour], tank: float, m: TankModel, t_min: float, t_no
         for s in range(size):
             t = val(s)
             for g in acts(i):
-                if g is not None and t > g - m.gap + 1e-9 and not (i == 0 and boost):
+                if g is not None and t > g - m.gap + 1e-9 and not (i == 0 and (boost or going)):
                     continue  # varmepumpen ville ikke gå i gang
                 t1, _mins, kwh, avail = step(i, t, g)
                 tail = nxt[k(t1)]
                 # manko i tiendedele grader (følerens opløsning): en tank, der mangler mindre end det, mangler intet
-                c = (round(round(max(0.0, bar - avail), 1) + tail[0], 3), round(kwh * hours[i].price + tail[1], 3))
+                c = (round(round(max(0.0, bars[i] - (t if ready[i] else avail)), 1) + tail[0], 3), round(kwh * hours[i].price + tail[1], 3))
                 if c < cur[s]:
                     cur[s], pick[s] = c, g
         nxt = cur
@@ -202,13 +268,16 @@ def plan_dhw(hours: list[DhwHour], tank: float, m: TankModel, t_min: float, t_no
     for i in range(n):
         t = val(k(t))
         g = choice[i][k(t)]
+        before = t
         t, mins, kwh, avail = step(i, t, g)
         rows.append({"ts": hours[i].ts, "target": g, "run": kwh > 0, "min": round(mins), "el": round(kwh, 2),
-                     "kr": round(kwh * hours[i].price, 2), "start": round(avail, 1), "tank": round(t, 1), "blocked": hours[i].blocked})
+                     "kr": round(kwh * hours[i].price, 2), "start": round(before if ready[i] else avail, 1), "tank": round(t, 1),
+                     "blocked": hours[i].blocked, "use": use[hours[i].hour]})
     first = rows[0] if rows else None
     state = "off" if not first or first["target"] is None else ("high" if first["target"] >= t_high - 1e-9 and t_high > t_normal else "normal")
-    low = min(rows, key=lambda x: x["start"]) if rows else None
-    under = [x for x in rows if x["start"] < t_min - 1e-9]
+    used = [x for x in rows if x["use"]]
+    low = min(used or rows, key=lambda x: x["start"]) if rows else None  # det laveste, tanken er, når vandet bruges
+    under = [x for x in used if x["start"] < t_min - 1e-9]
     nxt_run = next((x for x in rows if x["run"]), None)
     return {
         "state": state, "target": first["target"] if first else None, "hours": rows,
@@ -216,4 +285,5 @@ def plan_dhw(hours: list[DhwHour], tank: float, m: TankModel, t_min: float, t_no
         "lowest": {"ts": low["ts"], "tank": low["start"]} if low else None,
         "under_hours": len(under), "under_from": under[0]["ts"] if under else None,
         "el": round(sum(x["el"] for x in rows), 2), "kr": round(sum(x["kr"] for x in rows), 2), "runs": sum(1 for x in rows if x["run"]),
+        "use": [h for h in range(24) if use[h]] if (m.hours or not learned_use) else None,
     }

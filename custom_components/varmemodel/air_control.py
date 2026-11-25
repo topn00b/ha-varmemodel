@@ -9,8 +9,13 @@ højst til den valgte maks. (dag eller nat). Planen siger, om der skal varmes; s
 - uden nok lærte trin: ned ét trin, når alle rum har været over gulv + deres usikkerhed i 30 min.
 - start på det trin, der sidst holdt rummene ved samme udetemperatur (lært pr. 5 °C)
 
-Setpunkterne flyder: de regnes fra rummenes gulv og klimaentitetens grænser. Brugeren vælger kun,
-hvor meget blæseren må larme (maks. blæser dag og nat). Intet forskydes kunstigt.
+Setpunkterne flyder: de regnes fra rummenes gulv og klimaentitetens grænser. Brugeren vælger, hvor meget
+blæseren må larme (maks. blæser dag og nat) og hvor lavt den må gå (min. blæser – fx når et fjernt rum ikke får del i
+varmen ved lav blæser). Intet forskydes kunstigt.
+
+Det, der er lært på ét trin, deles med de andre (``w_lookup``/``eff_lookup``): nat og dag har hver sin maks. blæser og
+dermed hver sine trin, men samme setpunkt over gulvet. Et trin uden egne målinger bruger de andre blæseres tal for samme
+setpunkt (»delt«), og mangler også de, et skøn mellem de nærmeste lærte setpunkter (»skøn«).
 """
 
 from __future__ import annotations
@@ -39,10 +44,17 @@ def fan_options(fan_modes: list[str] | None) -> list[str]:
 
 
 def build_ladder(fans: list[str], cap: str | None, sp_min: float, sp_max: float, sp_step: float,
-                 quiet: bool = False) -> list[Step]:
-    """Trinene: (quiet) → blæser op til ``cap`` ved ``sp_min`` → setpunktet op til ``sp_max`` ved ``cap``."""
+                 quiet: bool = False, floor: str | None = None) -> list[Step]:
+    """Trinene: (quiet) → blæser op til ``cap`` ved ``sp_min`` → setpunktet op til ``sp_max`` ved ``cap``.
+
+    ``floor``: den laveste blæser, stigen må bruge (min. blæser). Trinene under den – og »quiet« – udgår. Ligger den over
+    ``cap`` (fx om natten), vinder ``cap``: støjgrænsen er brugerens udtrykkelige valg, og stigen er så kun setpunkter."""
     if cap in fans:
         fans = fans[: fans.index(cap) + 1]
+    if floor in fans:
+        fans, quiet = fans[fans.index(floor):], False
+    elif floor is not None and floor != "quiet" and fans:
+        fans, quiet = fans[-1:], False  # min. blæser ligger over maks.: kun maks.
     steps: list[Step] = []
     if quiet:
         steps.append(Step(None, sp_min, "quiet"))
@@ -101,7 +113,7 @@ def target_step(ladder_w: list[float | None], target_w: float | None) -> int | N
 def choose_step(cur: int | None, n: int, margins: dict[str, float], down_ok: bool, now: float,
                 changed: float, down_since: float | None, start: int | None = None,
                 target: int | None = None, up_every: int = UP_EVERY, rising: dict[str, float] | None = None,
-                min_rise: float = 0.2) -> tuple[int, float, float | None, str]:
+                min_rise: float = 0.2, rise_txt: str = "") -> tuple[int, float, float | None, str]:
     """Næste trin. ``margins``: rum → målt − (gulv + forvarmning). ``down_ok``: alle rum over gulv + usikkerhed.
     ``target``: trinnet der dækker planens el-mål (None = ukendt). Giver (trin, ændret, ned-siden, grund)."""
     top = max(0, n - 1)
@@ -118,7 +130,7 @@ def choose_step(cur: int | None, n: int, margins: dict[str, float], down_ok: boo
         r = (rising or {}).get(low) if rising is not None else None
         if r is not None and r >= min_rise:
             # Rolig: trinnet virker – rummet stiger nok, så det får lov at holde
-            return cur, changed, None, f"{low} er {abs(margins[low]):.1f} °C under gulvet, men stiger {r:.2f} °C/t på trin {cur} – holder"
+            return cur, changed, None, f"{low} er {abs(margins[low]):.1f} °C under gulvet, men stiger {r:.2f} °C/t på trin {cur}{rise_txt} – holder"
         if now - changed >= up_every:
             if r is not None:
                 return cur + 1, now, None, f"{low} er {abs(margins[low]):.1f} °C under gulvet og stiger kun {r:+.2f} °C/t – et trin op"
@@ -232,3 +244,86 @@ def power_defrosts(points: list[tuple[float, float]], run_w: float, off_w: float
         i = max(j, i + 1)
     stop = None if off_w is None else off_w + 15.0  # så tæt på slukket-effekten er varmepumpen slukket, ikke i afrimning
     return [(a * 60.0, (b + 1) * 60.0, lo) for a, b, lo in dips if stop is None or lo > stop]
+
+
+def split_label(label: str) -> tuple[str, float, str, str | None] | None:
+    """Et trins navn delt op: »HighMid +0.5|vent til@0« → (blæser, setpunkt over gulvet, ventilation, ude-bånd)."""
+    core, _, band = label.partition("@")
+    core, _, vent = core.partition("|")
+    fan, sep, off = core.rpartition(" +")
+    try:
+        return (fan, float(off), f"|{vent}" if vent else "", band or None) if sep else None
+    except ValueError:
+        return None
+
+
+def _between(pts: dict[float, float], x: float) -> float | None:
+    """Værdien ved ``x`` mellem de nærmeste kendte punkter (lineært; uden for området den nærmeste)."""
+    if not pts:
+        return None
+    ks = sorted(pts)
+    if x <= ks[0]:
+        return pts[ks[0]]
+    for a, b in zip(ks, ks[1:]):
+        if x <= b:
+            return pts[a] + (pts[b] - pts[a]) * (x - a) / (b - a) if b > a else pts[b]
+    return pts[ks[-1]]
+
+
+def w_lookup(w: dict[str, float], fan: str, off: float, band: str | None = None,
+             fans: set[str] | None = None) -> tuple[float | None, str | None]:
+    """Et trins forbrug (W) og hvor tallet kommer fra: »trin« (egne målinger – i udebåndet, ellers alle), »delt« (samme
+    setpunkt over gulvet med andre blæsere – nat og dag deler viden) eller »skøn« (mellem de nærmeste lærte setpunkter).
+    ``fans``: stigens blæsere (inkl. »quiet«) – andre, fx »Auto« fra en anden styring, deles ikke."""
+    own = f"{fan} +{off:.1f}"
+    for k in ([f"{own}@{band}"] if band is not None else []) + [own]:
+        if w.get(k) is not None:
+            return w[k], "trin"
+    per: dict[tuple[float, bool], list[float]] = {}
+    for k, v in w.items():
+        s = split_label(k)
+        if s is None or v is None or (fans is not None and s[0] not in fans):
+            continue
+        if s[3] is None or s[3] == band:
+            per.setdefault((s[1], s[3] is not None), []).append(float(v))
+    for in_band in (True, False):
+        if (v := per.get((round(off, 1), in_band))):
+            return round(sum(v) / len(v)), "delt"
+    est = _between({o: sum(v) / len(v) for (o, b), v in per.items() if not b}, round(off, 1))
+    return (round(est), "skøn") if est is not None else (None, None)
+
+
+def eff_lookup(eff: dict[str, list[float]], fan: str, off: float, vkey: str = "", band: str | None = None,
+               fans: set[str] | None = None) -> tuple[float | None, str | None, int]:
+    """Et trins virkning (°C pr. kWh el), hvor tallet kommer fra, og hvor mange kvarterer det bygger på.
+
+    Rækkefølge: trinnets egne målinger (med ventilationens tilstand; i udebåndet, ellers alle) → »delt«: samme setpunkt
+    over gulvet med andre blæsere (samme ventilation; i udebåndet, ellers alle; til sidst uanset ventilation) → »skøn«
+    mellem de nærmeste lærte setpunkter. Hvert led kræver EFF_MIN_N kvarterer."""
+    own = f"{fan} +{off:.1f}{vkey}"
+    for k in ([f"{own}@{band}"] if band is not None else []) + [own]:
+        if (v := eff_per_kwh(eff, k)) is not None:
+            return v, "trin", int(eff[k][2])
+    # summer pr. (setpunkt, ventilation, i udebåndet?) over blæserne
+    per: dict[tuple[float, str, bool], list[float]] = {}
+    for k, v in eff.items():
+        s = split_label(k)
+        if s is None or (fans is not None and s[0] not in fans) or not (s[3] is None or s[3] == band):
+            continue
+        acc = per.setdefault((s[1], s[2], s[3] is not None), [0.0, 0.0, 0.0])
+        acc[0], acc[1], acc[2] = acc[0] + v[0], acc[1] + v[1], acc[2] + v[2]
+
+    def val(keys: list[tuple[float, str, bool]]) -> tuple[float, int] | None:
+        g = sum(per[k][0] for k in keys if k in per)
+        e = sum(per[k][1] for k in keys if k in per)
+        n = sum(per[k][2] for k in keys if k in per)
+        return (g / e, int(n)) if n >= EFF_MIN_N and e > 0 else None
+
+    o = round(off, 1)
+    vents = sorted({k[1] for k in per})
+    for keys in ([(o, vkey, True)], [(o, vkey, False)], [(o, v, False) for v in vents]):
+        if (r := val(keys)) is not None:
+            return r[0], "delt", r[1]
+    pts = {x: r[0] for x in sorted({k[0] for k in per}) if (r := val([(x, v, False) for v in vents])) is not None}
+    est = _between(pts, o)
+    return (est, "skøn", 0) if est is not None else (None, None, 0)

@@ -474,3 +474,53 @@ def test_ice_watch_holds_its_bounds_through_a_long_episode() -> None:
     held = ice_watch(long_, later, start["bounds"])
     assert held["status"] == "ice" and held["low_run"] == 58 and held["bounds"] == start["bounds"]
     assert free["bounds"]["ren_low"] < start["bounds"]["ren_low"]  # grænsen ville være gledet ned
+
+
+def test_what_a_defrost_takes_from_the_floor_water() -> None:
+    """Under en afrimning er fremløbet koldere end returen: varmen til at smelte rimen tages fra gulvvandet, og
+    varmemåleren tæller ikke baglæns. Den regnes af vandets flow × (frem − retur) – flowet skønnet af varmeeffekten ÷
+    (frem − retur) lige før afrimningen. 15 l/min og 5 K = 5,23 kW før; under afrimningen −8 K i 3 min. = −0,42 kWh."""
+    from custom_components.varmemodel.calibration import defrost_cost
+
+    t0 = 1_000_000 * 300  # en afrimning på en 5-min.-grænse
+    flow = [(t0 - 3600.0, 35.0), (t0 + 0.0, 22.0), (t0 + 180.0, 31.0), (t0 + 240.0, 35.0)]
+    ret = [(t0 - 3600.0, 30.0), (t0 + 200.0, 30.0), (t0 + 400.0, 30.0)]
+    lpm, c = 15.0, 4.186 / 60
+    five = {t0 - 300: {"q": lpm * c * 5.0 / 12}, t0 - 600: {"q": lpm * c * 5.0 / 12}}
+    res = defrost_cost([(t0, t0 + 180.0)], flow, ret, five)
+    assert len(res) == 1 and res[0]["min"] == 3.0 and abs(res[0]["flow"] - 15.0) < 0.1
+    assert abs(res[0]["q"] - lpm * c * 8.0 * 180 / 3600) < 0.01 and res[0]["til"] == t0 + 180  # fremløbet er varmest igen ved afrimningens slut
+    # fremløbet er stadig koldere end returen et minut efter: halen tælles med, til det vender
+    slow = [(t0 - 3600.0, 35.0), (t0 + 0.0, 22.0), (t0 + 180.0, 28.0), (t0 + 240.0, 35.0)]
+    r2 = defrost_cost([(t0, t0 + 180.0)], slow, ret, five)
+    assert abs(r2[0]["q"] - lpm * c * (8.0 * 180 + 2.0 * 60) / 3600) < 0.01 and r2[0]["til"] == t0 + 240
+    # uden drift lige før (fx efter varmt vand) kan flowet ikke skønnes: afrimningen springes over
+    assert defrost_cost([(t0, t0 + 180.0)], flow, ret, {}) == []
+    assert defrost_cost([(t0, t0 + 180.0)], flow, ret, {t0 - 300: {"q": 0.01}}) == []
+    # for få målinger under afrimningen: springes over
+    assert defrost_cost([(t0, t0 + 180.0)], [(t0 - 3600.0, 35.0)], [(t0 - 3600.0, 30.0)], five) == []
+
+
+def test_frost_price_per_outdoor_band() -> None:
+    """Rimens pris til planen: afrimninger pr. kWh varme for hvert udebånd × det, en afrimning tager fra vandet – som
+    forskel til gennemsnittet, husets modeller allerede har i sig. Under 1 i rimvejr, over 1 i mildt vejr."""
+    from custom_components.varmemodel.calibration import fit_defrost, frost_points
+
+    hours = []
+    for i in range(60):  # 20 timer ved −1 °C (hver time en afrimning), 20 ved 1,5 °C (hver anden), 20 ved 8 °C (ingen)
+        t_out, df = ((-1.0, 1), (1.5, i % 2), (8.0, 0))[i // 20]
+        hours.append(Hour(ts=i * 3600, q=4.0, e=1.5, t_out=t_out, t_in=21.0, t_flow=34.0, comp=60, dhw=0, defrost=df))
+    f = fit_defrost(hours)
+    pk = f.extra["per_kwh"]
+    assert [(b["t_out"], b["per_kwh"], b["kwh"]) for b in pk] == [(-1.0, 0.25, 80.0), (1.5, 0.125, 80.0), (8.0, 0.0, 80.0)]
+    assert f.extra["per_kwh_all"] == 0.125
+    pts = frost_points(pk, f.extra["per_kwh_all"], 0.3)
+    base = 1 - 0.125 * 0.3
+    assert [a for a, _ in pts] == [-1.0, 1.5, 8.0]
+    assert abs(pts[0][1] - (1 - 0.25 * 0.3) / base) < 1e-3 and abs(pts[1][1] - 1.0) < 1e-3 and abs(pts[2][1] - 1 / base) < 1e-3
+    assert pts[0][1] < 1 < pts[2][1]
+    # før tallene er lært: ingen faktor
+    assert frost_points(None, 0.1, 0.3) == [] and frost_points(pk, f.extra["per_kwh_all"], None) == [] and frost_points(pk, None, 0.3) == []
+    # et bånd med for lidt varme tæller ikke med
+    few = fit_defrost(hours + [Hour(ts=99 * 3600, q=4.0, e=1.5, t_out=4.0, t_in=21.0, t_flow=34.0, comp=60, dhw=0, defrost=1)])
+    assert [b["t_out"] for b in few.extra["per_kwh"]] == [-1.0, 1.5, 8.0]

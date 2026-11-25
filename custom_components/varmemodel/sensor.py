@@ -206,6 +206,12 @@ class IceWatchSensor(SourceEntity, SensorEntity):
                            "slut_pct": pct(c["slut"]), "snit_pct": pct(c["snit"]), "lav": low(c)} for c in w.get("cycles") or []],
             "afrimninger_24t": df.get("n"), "afrimning_hver_min": df.get("gap_min"), "afrimning_varer_min": df.get("dur_min"),
             "seneste_afrimning": _ts_local(df.get("last")),
+            # Rimens pris: hvad en afrimning tager fra gulvvandet (varmemåleren tæller ikke baglæns), det seneste døgn i alt,
+            # og hvor meget af den målte varme huset får ved hver udetemperatur i forhold til gennemsnittet (planens faktor)
+            "afrimning_tager_kwh_varme": df.get("q"), "afrimning_tager_lært_af": df.get("q_n"),
+            "rim_24t_kwh_varme": df.get("q_day"), "rim_24t_afrimninger_målt": df.get("q_day_n"),
+            "rim_faktor": [{"ude": a, "pct": round(g * 100, 1)} for a, g in self.coordinator._frost_points(self.src)] or None,  # noqa: SLF001
+            "fremløb_holdes": bool((self.coordinator.air.get(f"hydro:{self.src.sid}") or {}).get("ice_hold")),
             "metode": "ydelse i stabil drift (5-minutters portioner) i procent af husets egen COP-model; ren = de første 15 min. "
                       "efter en afrimning eller start, slut = de sidste 10 min., snit = hele cyklussen; lav = ringere end ni ud af ti "
                       "tidligere cyklusser",
@@ -214,9 +220,9 @@ class IceWatchSensor(SourceEntity, SensorEntity):
 
 
 class HotWaterSensor(SourceEntity, SensorEntity):
-    """Varmt vand: Varmemodels anbefaling nu – fra, normalt eller højt – ud fra tankens lærte model, priserne og
-    blokeringerne. Kun anbefaling: Varmemodel styrer ikke varmt vand. Attributterne har planen time for time, tankens
-    forudsigelse, den lærte model og hvad varmepumpen faktisk står på."""
+    """Varmt vand: planen nu – fra, normalt eller højt – ud fra tankens lærte model, brugstiden, priserne og
+    blokeringerne. Med »Varmemodel styrer varmt vand« slået til skrives den til varmepumpen; ellers er den en anbefaling.
+    Attributterne har planen time for time, tankens forudsigelse, den lærte model og hvad varmepumpen faktisk står på."""
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["off", "normal", "high"]
@@ -246,14 +252,20 @@ class HotWaterSensor(SourceEntity, SensorEntity):
             "timer_under_mindst": p.get("under_hours"), "under_fra": _ts_local(p.get("under_from")),
             "opvarmninger": p.get("runs"), "kwh_el": p.get("el"), "kr": p.get("kr"),
             "plan": [{"t": _ts_local(x["ts"]), "mål": x["target"], "varmer": x["run"], "min": x["min"], "kwh_el": x["el"], "kr": x["kr"],
-                      "start": x["start"], "slut": x["tank"], "blokeret": x["blocked"]} for x in p.get("hours") or []],
+                      "start": x["start"], "slut": x["tank"], "blokeret": x["blocked"], "brugstid": x.get("use")} for x in p.get("hours") or []],
+            "brugstid": d.get("use"), "brugstid_sat": d.get("use_set"), "opvarmning_i_gang": d.get("running"),
             "mindst": lim.get("min"), "normalt": lim.get("normal"), "højt": lim.get("high"),
             "prioritet": d.get("priority"), "bad_nu": d.get("boost"),
             "varmepumpen_nu": act.get("state"), "varmepumpens_mål": act.get("target"), "enig": d.get("agree"),
             "tank_model": ({"tab_pct_pr_time": round(100 * float(m.get("loss") or 0), 2), "omgivelser": m.get("amb"), "forbrug_pr_time": m.get("draw"),
                             "opvarmning_grader_pr_min": m.get("heat"), "kwh_el_pr_grad": m.get("el"), "startgrænse": m.get("gap"),
+                            "pause_min": m.get("pause"),
                             "lært_af_timer": m.get("hours"), "lært_af_opvarmninger": m.get("runs"), "lært": _ts_local(m.get("t"))} if m else None),
-            "styring": "kun anbefaling – Varmemodel styrer ikke varmt vand",
+            "styring": "Varmemodel styrer varmt vand" if d.get("control") else "kun anbefaling – Varmemodel styrer ikke varmt vand",
+            "styrer": bool(d.get("control")), "skrivninger_i_dag": d.get("writes"),
+            "seneste_skrivning": ({"kl": _ts_local(last["t"]), "tilstand": last.get("state"), "mål": last.get("target"), "skrev": last.get("wrote"),
+                                   "via": last.get("via")} if (last := d.get("last")) else None),
+            "reserve_brugt": _ts_local((d.get("fallback") or {}).get("t")),
             "opdateret": _ts_local(d.get("updated")),
         }
 

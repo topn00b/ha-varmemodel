@@ -9,7 +9,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import VarmemodelConfigEntry
 from homeassistant.const import EntityCategory
 
-from .const import AIR_SELECTS, CONF_ONOFF_TARGET, MODE_CALIBRATED, MODE_FROZEN, PRIORITY, SOFT_OPTIONS, SOFT_START
+from .const import AIR_SELECTS, CONF_DHW_TEMP, CONF_ONOFF_TARGET, DHW_PRIORITY, MODE_CALIBRATED, MODE_FROZEN, PRIORITY, SOFT_OPTIONS, SOFT_START
 from .entity import VarmemodelEntity
 from .planner import PRIORITIES
 
@@ -17,6 +17,8 @@ from .planner import PRIORITIES
 async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> None:
     c = entry.runtime_data
     async_add_entities([ModeSelect(c, "mode"), PrioritySelect(c, PRIORITY)])
+    if any(s.eid(CONF_DHW_TEMP) for s in c.sources.values() if not c.air_climate(s)):
+        async_add_entities([DhwPrioritySelect(c, DHW_PRIORITY)])
     from .sensor import SourceEntity  # noqa: PLC0415 – undgår cirkulær import
 
     class AirSelect(SourceEntity, SelectEntity):
@@ -90,3 +92,17 @@ class PrioritySelect(VarmemodelEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         await self.coordinator.async_set_priority(option)
+
+
+class DhwPrioritySelect(VarmemodelEntity, SelectEntity):
+    """Varmt vands egen prioritet: økonomi (kun »normalt«) – balance (også »højt« før en lang blokering) – komfort
+    (tanken holdes tæt på »normalt« i brugstiden og aldrig under »mindst«)."""
+
+    _attr_options = list(PRIORITIES)
+
+    @property
+    def current_option(self) -> str:
+        return self.coordinator.dhw_priority()
+
+    async def async_select_option(self, option: str) -> None:
+        await self.coordinator.async_set_dhw_priority(option)

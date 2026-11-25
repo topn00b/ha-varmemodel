@@ -826,7 +826,7 @@ async def test_soft_start_writes_low_flow_before_switching_on(ha: HomeAssistant)
     assert c.air[f"hydro:{s.sid}"]["soft_now"] == 24.0
 
 
-async def _lv_entry(ha: HomeAssistant, extra_house: dict | None = None):
+async def _lv_entry(ha: HomeAssistant, extra_house: dict | None = None, extra_source: dict | None = None):
     now = time.time()
     h0 = int(now // 3600 * 3600)
     loc = dt_util.get_default_time_zone()
@@ -838,7 +838,7 @@ async def _lv_entry(ha: HomeAssistant, extra_house: dict | None = None):
     ha.states.async_set("sensor.retur", "21.5", {"state_class": "measurement"})
     ha.states.async_set("climate.vp_flow", "heat", {"temperature": 33, "min_temp": 20, "max_temp": 45})
     e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris", **(extra_house or {})},
-                        subentries_data=[_sub({**HYD, "flow_target": "climate.vp_flow", "return_temp": "sensor.retur"}, "source")])
+                        subentries_data=[_sub({**HYD, "flow_target": "climate.vp_flow", "return_temp": "sensor.retur", **(extra_source or {})}, "source")])
     e.add_to_hass(ha)
     assert await ha.config_entries.async_setup(e.entry_id)
     await ha.async_block_till_done()
@@ -2057,3 +2057,263 @@ async def test_hot_water_plan_is_a_recommendation(ha: HomeAssistant) -> None:
     await ha.async_block_till_done()
     assert get().state == "high" and get().attributes["mål"] == 50.0 and get().attributes["bad_nu"] is True
     assert not calls and c.dhw[s.sid]["plan"]["state"] == "high"  # kun anbefaling: intet er skrevet til varmepumpen
+
+
+async def test_hot_water_control_writes_the_plan(ha: HomeAssistant) -> None:
+    """»Varmemodel styrer varmt vand«: planens fra / normalt / højt skrives til varmepumpen – målet først, så til; kun ved
+    en forskel. En opvarmning i gang kører færdig; i en blokering er det fra (undtagen »bad nu«); målet holdes inden for
+    det, entiteten tager imod; og følger varmepumpen ikke med, skrives der til reserven. Varmeplanen får at vide, hvor
+    meget af timen varmt vand tager."""
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0 + 0.1 * (k % 5)} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.tank", "36.0", {"state_class": "measurement", "unit_of_measurement": "°C"})
+    ha.states.async_set("switch.vv", "off", {})
+    ha.states.async_set("binary_sensor.vv", "off", {})
+    ha.states.async_set("sensor.prisstatus", "grøn")
+    ha.states.async_set("climate.vv", "auto", {"temperature": 40.0, "min_temp": 40, "max_temp": 55})
+    ha.states.async_set("water_heater.sky", "off", {"temperature": 40.0, "min_temp": 40, "max_temp": 54, "operation_list": ["off", "heat_pump"]})
+    ha.states.async_set("input_boolean.bad", "off", {})
+    hyd = {**HYD, "dhw_temp": "sensor.tank", "dhw": "binary_sensor.vv", "dhw_switch": "switch.vv", "dhw_target": "climate.vv",
+           "dhw_boost": "input_boolean.bad", "dhw_fallback": "water_heater.sky"}
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2,
+                        data={**HOUSE, "price_entity": "sensor.pris", "block_now_entity": "sensor.prisstatus", "block_now_states": "rød"},
+                        subentries_data=[_sub(hyd, "source")])
+    e.add_to_hass(ha)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    s = next(iter(c.sources.values()))
+    calls: list = []
+    for dom, srv in (("switch", "turn_on"), ("switch", "turn_off"), ("climate", "set_temperature"), ("water_heater", "set_temperature"),
+                     ("water_heater", "set_operation_mode")):
+        ha.services.async_register(dom, srv, lambda call: calls.append((call.domain, call.service, dict(call.data))))
+    # hele døgnet er brugstid (fra = til og intet lært): kold tank → varm nu. Styringen er fra: intet skrives
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert c.dhw[s.sid]["plan"]["state"] == "normal" and not calls and not c.dhw[s.sid]["busy"]
+    names = {x.entity_id for x in ha.states.async_all("switch")} | {x.entity_id for x in ha.states.async_all("select")} | {x.entity_id for x in ha.states.async_all("time")}
+    assert any(x.endswith("controls_hot_water") for x in names) and any(x.endswith("hot_water_priority") for x in names)
+    assert sum(1 for x in names if "hot_water_is_used" in x) == 2
+    # styringen til: først målet, så til
+    await c.async_set_dhw_control(s, True)
+    await ha.async_block_till_done()
+    assert calls == [("climate", "set_temperature", {"entity_id": "climate.vv", "temperature": 45.0}), ("switch", "turn_on", {"entity_id": "switch.vv"})]
+    d = c.dhw[s.sid]
+    assert d["control"] and d["writes"] == 2 and d["last"]["wrote"] == ["mål 45 °C", "til"] and d["last"]["via"] == "primary"
+    # varmeplanen får timens andel: opvarmningens minutter plus pausen omkring den
+    assert d["busy"] and abs(d["busy"][d["plan"]["hours"][0]["ts"]] - min(0.9, (d["plan"]["hours"][0]["min"] + 10.0) / 60)) < 0.02
+    # varmepumpen følger med: intet nyt at skrive
+    calls.clear()
+    ha.states.async_set("switch.vv", "on", {})
+    ha.states.async_set("climate.vv", "auto", {"temperature": 45.0, "min_temp": 40, "max_temp": 55})
+    ha.states.async_set("binary_sensor.vv", "on", {})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert not calls
+    # midt i opvarmningen (tanken tættere på målet end startgrænsen): planen regner den færdig – der slukkes ikke
+    ha.states.async_set("sensor.tank", "43.0", {"state_class": "measurement", "unit_of_measurement": "°C"})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert not calls and c.dhw[s.sid]["plan"]["state"] == "normal" and c.dhw[s.sid]["running"] and c.dhw[s.sid]["agree"]
+    # opvarmningen er færdig: fra
+    ha.states.async_set("binary_sensor.vv", "off", {})
+    ha.states.async_set("sensor.tank", "45.5", {"state_class": "measurement", "unit_of_measurement": "°C"})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert calls == [("switch", "turn_off", {"entity_id": "switch.vv"})] and c.dhw[s.sid]["plan"]["state"] == "off"
+    calls.clear()
+    ha.states.async_set("switch.vv", "off", {})
+    # blokeret lige nu og kold tank: der tændes ikke
+    ha.states.async_set("sensor.prisstatus", "rød")
+    ha.states.async_set("sensor.tank", "35.0", {"state_class": "measurement", "unit_of_measurement": "°C"})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert not calls
+    # »bad nu« gælder også i en blokering: højt – men kun så højt, som varmepumpen tager imod (55), og kun én gang
+    c.settings["dhw_high"] = 60.0
+    ha.states.async_set("input_boolean.bad", "on", {})
+    await ha.async_block_till_done()
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert ("climate", "set_temperature", {"entity_id": "climate.vv", "temperature": 55.0}) in calls and calls[-1] == ("switch", "turn_on", {"entity_id": "switch.vv"})
+    n = len(calls)
+    ha.states.async_set("switch.vv", "on", {})
+    ha.states.async_set("climate.vv", "auto", {"temperature": 55.0, "min_temp": 40, "max_temp": 55})
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert len(calls) == n
+    # »bad nu« fra, stadig blokeret: fra med det samme – også midt i en opvarmning
+    ha.states.async_set("binary_sensor.vv", "on", {})
+    ha.states.async_set("input_boolean.bad", "off", {})
+    await ha.async_block_till_done()
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert calls[-1] == ("switch", "turn_off", {"entity_id": "switch.vv"})
+    # varmepumpen følger ikke med (kontakten står stadig på til ved tjekket): reserven får besked – og kun, hvis den
+    # heller ikke viser det ønskede
+    calls.clear()
+    await c._dhw_apply(s, time.time(), recheck=True)
+    assert calls == []  # reserven står allerede på fra
+    ha.states.async_set("water_heater.sky", "heat_pump", {"temperature": 45.0, "min_temp": 40, "max_temp": 54, "operation_list": ["off", "heat_pump"]})
+    await c._dhw_apply(s, time.time(), recheck=True)
+    assert calls == [("water_heater", "set_operation_mode", {"entity_id": "water_heater.sky", "operation_mode": "off"})]
+    assert c.dhw[s.sid]["last"]["via"] == "fallback" and c.dhw[s.sid]["fallback"]
+    st = next(x for x in ha.states.async_all("sensor") if x.entity_id.endswith("hot_water"))
+    assert st.attributes["styrer"] is True and st.attributes["seneste_skrivning"]["via"] == "fallback" and st.attributes["reserve_brugt"]
+    # styringen fra igen: intet skrives, uanset planen
+    calls.clear()
+    await c.async_set_dhw_control(s, False)
+    ha.states.async_set("sensor.prisstatus", "grøn")
+    await c.async_replan()
+    await ha.async_block_till_done()
+    assert not calls and c.dhw[s.sid]["plan"]["state"] == "normal" and not c.dhw[s.sid]["busy"]
+
+
+async def test_air_priority_min_fan_and_shared_steps(ha: HomeAssistant) -> None:
+    """Luft-luft: kilden har sin egen prioritet (økonomi – balance – komfort; den gamle »Opstart« oversættes og dens
+    entitet fjernes), en min. blæser, der former stigen, og trin uden egne målinger låner de andre blæseres tal –
+    også starttrinnet lært med en anden maks. blæser."""
+    from homeassistant.helpers import entity_registry as er
+
+    now = time.time()
+    h0 = int(now // 3600 * 3600)
+    loc = dt_util.get_default_time_zone()
+    from datetime import datetime as _dt
+
+    items = [{"t": _dt.fromtimestamp(h0 + k * 3600, loc).strftime("%Y-%m-%dT%H"), "el": 1.0} for k in range(24)]
+    ha.states.async_set("sensor.pris", "1.0", {"timer": items})
+    ha.states.async_set("sensor.ude", "2.0", {"state_class": "measurement"})
+    ha.states.async_set("sensor.rum_2", "19.0", {"state_class": "measurement"})
+    ha.states.async_set("climate.ll", "off", {"fan_modes": ["Auto", "Low", "Mid", "High"], "preset_modes": ["none", "quiet"],
+                                               "swing_modes": ["Auto", "Up"], "temperature": 20, "fan_mode": "Low"})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub(HYD, "source"), _sub({**AIR, "climate": "climate.ll"}, "source")])
+    e.add_to_hass(ha)
+    air = next(sid for sid, x in e.subentries.items() if x.data.get("source_type") == "air_air")
+    from homeassistant.config_entries import ConfigSubentry
+    ha.config_entries.async_add_subentry(e, ConfigSubentry(data={"name": "Loft", "temperature": "sensor.rum_2", "heat_source": air,
+                                                                 "minimum": 19.5, "maximum": 22.5}, subentry_type="room", title="Loft", unique_id=None))
+    # den gamle »Opstart«-entitet fra før 0.29 ligger i registret
+    old = er.async_get(ha).async_get_or_create("select", DOMAIN, f"{e.entry_id}_{air}_air_start", config_entry=e, suggested_object_id="ll_start_up")
+    # … og tallet »Maks. fremløb over det lærte«, som også er fjernet i 0.29 (planen hæver selv efter prioriteten)
+    old_fm = er.async_get(ha).async_get_or_create("number", DOMAIN, f"{e.entry_id}_flow_margin", config_entry=e, suggested_object_id="hus_flow_margin")
+    for svc in ("set_hvac_mode", "set_fan_mode", "set_temperature", "set_preset_mode"):
+        ha.services.async_register("climate", svc, lambda call: None)
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    assert er.async_get(ha).async_get(old.entity_id) is None and er.async_get(ha).async_get(old_fm.entity_id) is None
+    assert not any("flow_margin" in x.unique_id or "above_the_learned" in x.entity_id for x in er.async_entries_for_config_entry(er.async_get(ha), e.entry_id))
+    c = e.runtime_data
+    s = c.sources[air]
+    c.rooms["sensor.rum_2"] = {"value": 0.4, "r2": 0.6, "extra": {"sources": {"Luft-luft": {"now": 0.7, "delayed": 0.0}}, "accuracy_6h_k": 0.3}}
+    c._recent_sync = lambda s, a, b: ({}, {})
+    c.settings[f"{air}.air_fan_day"] = c.settings[f"{air}.air_fan_night"] = "High"
+    sel = lambda end: next(x for x in ha.states.async_all("select") if x.entity_id.endswith(end) and "luft_luft" in x.entity_id)  # noqa: E731
+    pr = sel("priority")
+    assert pr.state == "balance" and pr.attributes["options"] == ["economy", "balance", "comfort"]
+    # den gamle »Opstart« oversættes: hurtig = komfort, rolig = balance – til brugeren vælger selv
+    c.settings[f"{air}.air_start"] = "hurtig"
+    assert c.air_setting(s, "air_priority") == "comfort"
+    c.settings[f"{air}.air_start"] = "rolig"
+    assert c.air_setting(s, "air_priority") == "balance"
+    await ha.services.async_call("select", "select_option", {"entity_id": pr.entity_id, "option": "economy"}, blocking=True)
+    await ha.async_block_till_done()
+    assert c.air_setting(s, "air_priority") == "economy" and sel("priority").state == "economy"
+    step = lambda: next(x for x in ha.states.async_all("sensor") if x.entity_id.endswith("ladder_step") or x.entity_id.endswith("air_step"))  # noqa: E731
+    assert step().attributes["prioritet"] == "economy" and step().attributes["min_blæser"] is None
+    assert len(step().attributes["trin_liste"]) == 1 + 3 + 6  # quiet, 3 blæsere, 6 setpunkter
+    # min. blæser: »quiet« og de lave blæsere udgår
+    mf = sel("min_fan")
+    assert mf.state == "quiet" and mf.attributes["options"] == ["quiet", "Low", "Mid", "High"]
+    await ha.services.async_call("select", "select_option", {"entity_id": mf.entity_id, "option": "Mid"}, blocking=True)
+    await ha.async_block_till_done()
+    lst = step().attributes["trin_liste"]
+    assert [x["blæser"] for x in lst[:3]] == ["Mid", "High", "High"] and len(lst) == 2 + 6 and step().attributes["min_blæser"] == "Mid"
+    # det, der er lært med en anden blæser, deles: forbrug og virkning på samme setpunkt over gulvet – og starttrinnet
+    c.air[air]["w"] = {"Mid +0.5": 300, "Mid +2.0": 600}
+    c.air[air]["eff"] = {"Mid +0.5": [5.0, 10.0, 12], "Mid +2.0": [3.0, 10.0, 12]}
+    c.air[air]["start"] = {"0": "Mid +1.0"}
+    c.air[air]["on"], c.air[air]["step"] = False, None
+    c.settings[f"{air}.air_priority"] = "comfort"
+    await c.async_replan()
+    await ha.async_block_till_done()
+    a = step().attributes
+    by = {(x["blæser"], x["setpunkt"]): x for x in a["trin_liste"]}
+    assert (by[("High", 20.0)]["w"], by[("High", 20.0)]["w_kilde"]) == (300, "delt") and by[("High", 20.0)]["virkning_kilde"] == "delt"
+    assert by[("High", 20.0)]["grader_pr_kwh_el"] == 0.5 and by[("High", 20.0)]["målinger"] == 12
+    assert (by[("High", 20.5)]["w"], by[("High", 20.5)]["w_kilde"]) == (400, "skøn") and by[("High", 20.5)]["virkning_kilde"] == "skøn"
+    assert a["starttrin"] == {"0": "Mid +1.0"}
+    if c.commands[air].get("on"):  # planen varmer (rummet er under gulvet): starter på samme setpunkt over gulvet med dagens blæser
+        assert a["trin"] == next(k for k, x in enumerate(a["trin_liste"]) if (x["blæser"], x["setpunkt"]) == ("High", 20.5))
+
+
+@pytest.mark.parametrize("expected_lingering_timers", [True])
+async def test_frost_price_and_ice_watch_reach_the_plan(ha: HomeAssistant) -> None:
+    """Rimens pris: isvagten lærer, hvad en afrimning tager fra gulvvandet; sammen med afrimninger pr. kWh varme for hvert
+    udebånd (kalibreringen) bliver det planens faktor – i rimvejr får huset mindre af den målte varme. Og bliver
+    lamelfladen ikke ren (isvagten »følg« eller »is«), hæver planen ikke fremløbet over loftet, uanset prioriteten."""
+    import math
+    from unittest.mock import patch
+
+    from custom_components.varmemodel import coordinator as cm
+
+    ha.states.async_set("binary_sensor.afrimning", "off", {})
+    c, s = await _lv_entry(ha, extra_source={"defrost": "binary_sensor.afrimning", "flow_temp": "sensor.frem"})
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    now = int(time.time())
+    w = {"status": "ok", "ref_n": 60, "low_run": 0, "low_hours": 0.0, "since": None, "bounds": None, "ren": 1.0, "snit": 1.0, "slut": 0.9,
+         "latest": now - 600, "cycles": [], "defrost": {"n": 4, "gap_min": 50, "dur_min": 3.5, "last": now - 600}, "updated": now,
+         "defrost_new": [{"t": now - 3000, "min": 3.5, "q": 0.31, "flow": 15.0}, {"t": now - 6000, "min": 3.4, "q": 0.29, "flow": 15.0},
+                         {"t": now - 2 * 86400, "min": 3.6, "q": 0.30, "flow": 15.0}, {"t": now - 400, "q": None}]}
+    c.air.setdefault(f"ice:{s.sid}", {})["defq"] = {str(now - 40 * 86400): [0.9, 3.0]}  # ældre end 30 døgn: glemmes
+    c._ice_sync = lambda _s: ({}, {**w, "defrost": dict(w["defrost"]), "defrost_new": list(w["defrost_new"])})  # noqa: SLF001
+    for f in ("_cop_today_sync", "_health_sync"):
+        if hasattr(c, f):
+            setattr(c, f, lambda _s: None)
+    await c._on_today(None)  # noqa: SLF001
+    await ha.async_block_till_done()
+    dq = c.air[f"ice:{s.sid}"]["defq"]
+    assert len(dq) == 4 and dq[str(now - 400)] == [None, None] and str(now - 40 * 86400) not in dq
+    assert s.ice["defrost"]["q"] == 0.30 and s.ice["defrost"]["q_n"] == 3 and s.ice["defrost"]["q_day"] == 0.6 and s.ice["defrost"]["q_day_n"] == 2
+    assert c._frost_points(s) == []  # noqa: SLF001 – afrimninger pr. kWh varme er ikke lært endnu
+    s.accepted["defrost"] = {"value": 0.5, "extra": {"per_kwh": [{"t_out": -1.0, "per_kwh": 0.25, "kwh": 80.0}, {"t_out": 8.0, "per_kwh": 0.0, "kwh": 80.0}],
+                                                     "per_kwh_all": 0.125}}
+    pts = c._frost_points(s)  # noqa: SLF001
+    assert [a for a, _ in pts] == [-1.0, 8.0] and abs(pts[0][1] - (1 - 0.075) / (1 - 0.0375)) < 1e-3 and pts[1][1] > 1.03
+    st = next(x for x in ha.states.async_all("sensor") if x.entity_id.endswith("ice_watch"))
+    await c.async_replan()
+    await ha.async_block_till_done()
+    a = ha.states.get(st.entity_id).attributes
+    assert a["afrimning_tager_kwh_varme"] == 0.30 and a["afrimning_tager_lært_af"] == 3 and a["rim_24t_kwh_varme"] == 0.6
+    assert [x["ude"] for x in a["rim_faktor"]] == [-1.0, 8.0] and a["rim_faktor"][0]["pct"] < 100 < a["rim_faktor"][1]["pct"] and a["fremløb_holdes"] is False
+    # planen: ude er −2 °C i testen – varmetimerne har rimens faktor, og begrundelsen siger det
+    hrs = [x for x in c.plans[s.sid]["hours"] if x["heat_kw"]]
+    assert hrs and all(x["frost"] == round(pts[0][1], 3) for x in hrs) and c.plan_inputs[s.sid][1].frost == tuple(pts)
+    assert "rim: i de koldeste varmetimer får huset 4 % mindre" in c.plans[s.sid]["reason"]
+    # isvagten melder »følg«: planen må ikke hæve fremløbet over loftet (kun op til det)
+    calls: list = []
+    real = cm.make_plan
+
+    def rec(*a_, **k):
+        calls.append(k)
+        return real(*a_, **k)
+
+    with patch.object(cm, "make_plan", rec):
+        await c.async_replan()
+        free = calls[-1]["flow_raise_free"]
+        assert calls[-1]["flow_raise_max"] > free and not c.air[f"hydro:{s.sid}"].get("ice_hold")
+        s.ice = {**s.ice, "status": "watch"}
+        await c.async_replan()
+        hs = c.air[f"hydro:{s.sid}"]
+        assert calls[-1]["flow_raise_max"] == calls[-1]["flow_raise_free"] == free and hs["ice_hold"] and hs["low_top"] == hs["low_loft"]
+        assert "isvagt: lamelfladen bliver ikke ren" in c.plans[s.sid]["reason"]
+        assert ha.states.get(st.entity_id).attributes["fremløb_holdes"] is True
+        s.ice = {**s.ice, "status": "ok"}
+        await c.async_replan()
+        assert calls[-1]["flow_raise_max"] > free and "ice_hold" not in c.air[f"hydro:{s.sid}"] and math.isclose(c.air[f"hydro:{s.sid}"]["low_top"], 44.5)

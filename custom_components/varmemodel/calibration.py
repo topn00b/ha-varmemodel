@@ -391,8 +391,14 @@ def fit_flow(hours: list[Hour], min_n: int = 24, min_spread: float = 3.0,
 
 
 # ---------------------------------------------------------------- afrimning
+DEFROST_BANDS = (0.0, 3.0, 6.0)  # udetemperaturens bånd til afrimningsstatistikken (°C)
+FROST_MIN_KWH = 20.0  # så meget varme skal et bånd have, før dets afrimninger pr. kWh bruges
+
+
 def fit_defrost(hours: list[Hour], min_comp_hours: float = 10.0) -> Fit:
-    """Afrimninger pr. kompressortime, i alt og fordelt på ude og effekt (kun rapport)."""
+    """Afrimninger pr. kompressortime, i alt og fordelt på ude og effekt – og pr. kWh varme for hvert udebånd
+    (``per_kwh``: båndets middel-ude, afrimninger pr. kWh varme og varmen, det bygger på), som planen bruger til rimens
+    pris (``frost_points``)."""
     s = [h for h in hours if h.comp is not None and h.comp > 0 and h.defrost is not None and h.t_out is not None]
     comp_h = sum(h.comp for h in s) / 60
     lo, hi = _range([h.t_out for h in s])
@@ -405,12 +411,101 @@ def fit_defrost(hours: list[Hour], min_comp_hours: float = 10.0) -> Fit:
         b = bins.setdefault(f"{tb} °C, {pb} effekt", [0.0, 0.0])
         b[0] += h.comp / 60
         b[1] += h.defrost
+    # Pr. kWh varme: rimen følger varmen, der hentes ud af luften – ikke klokken. Kun timer med målt varme.
+    kb: dict[int, list[float]] = {}
+    for h in s:
+        if h.q is None or h.q <= 0:
+            continue
+        b = kb.setdefault(sum(1 for x in DEFROST_BANDS if h.t_out >= x), [0.0, 0.0, 0.0])
+        b[0] += h.q
+        b[1] += h.defrost
+        b[2] += h.t_out * h.q
+    per_kwh = [{"t_out": round(v[2] / v[0], 1), "per_kwh": round(v[1] / v[0], 3), "kwh": round(v[0], 1)}
+               for _k, v in sorted(kb.items()) if v[0] >= FROST_MIN_KWH]
+    q_all = sum(v[0] for v in kb.values())
     return Fit(
         round(sum(h.defrost for h in s) / comp_h, 3), len(s), None, None, lo, hi, "fit",
         {"comp_hours": round(comp_h, 1),
          "per_bin": {k: {"comp_hours": round(v[0], 1), "per_hour": round(v[1] / v[0], 2) if v[0] else None} for k, v in sorted(bins.items())},
+         "per_kwh": per_kwh, "per_kwh_all": round(sum(v[1] for v in kb.values()) / q_all, 3) if q_all > 0 else None,
          "value_is": "afrimninger pr. kompressortime"},
     )
+
+
+def _mean_between(series: list[tuple[float, float]], a: float, b: float) -> float | None:
+    """Tidsvægtet middel af en trappeserie (tidspunkt, værdi) i [a, b). None uden en værdi ved a."""
+    cur: float | None = None
+    t, tot = a, 0.0
+    for ts, v in series:
+        if ts <= a:
+            cur = v
+            continue
+        if ts >= b:
+            break
+        if cur is None:
+            return None
+        tot += cur * (ts - t)
+        t, cur = ts, v
+    if cur is None:
+        return None
+    return (tot + cur * (b - t)) / (b - a)
+
+
+def defrost_cost(defrosts: list[tuple[float, float]], flow: list[tuple[float, float]], ret: list[tuple[float, float]],
+                 five: dict[int, dict[str, float | None]], tail: int = 300) -> list[dict[str, float]]:
+    """Hvad hver afrimning tager fra gulvvandet (kWh varme) – uden flowmåler.
+
+    Under en afrimning vender varmepumpen kredsen: fremløbet er koldere end returen, og varmen til at smelte rimen tages
+    fra vandet. Varmemåleren tæller ikke baglæns, så den varme ses ikke i nogen COP. Den regnes her af vandets flow ×
+    (frem − retur): flowet skønnes af varmeeffekten ÷ (frem − retur) i de to 5-min.-portioner lige før afrimningen
+    (``five``: portionens start → {"q": kWh varme}), og (frem − retur) lægges sammen fra afrimningens start, til fremløbet
+    igen er varmere end returen (højst ``tail`` sekunder efter). ``flow``/``ret``: (tidspunkt, °C) som de er målt.
+    Afrimninger uden brugbar drift lige før (fx efter varmt vand) eller med for få målinger springes over.
+    Giver pr. afrimning: ``t`` (start), ``min`` (varighed), ``q`` (kWh varme taget fra vandet) og ``flow`` (l/min, skønnet)."""
+    out: list[dict[str, float]] = []
+    c = 4.186 / 60  # kW pr. (l/min · K)
+    for t0, t1 in defrosts:
+        p0 = int(t0 // 300) * 300
+        est = []
+        for a in (p0 - 300, p0 - 600):
+            q = (five.get(a) or {}).get("q")
+            f, r = _mean_between(flow, a, a + 300), _mean_between(ret, a, a + 300)
+            if q is not None and f is not None and r is not None and f - r > 1.0 and q * 12 > 0.5:
+                est.append(q * 12 / ((f - r) * c))
+        if not est:
+            continue
+        lpm = median(est)
+        # (frem − retur) fra afrimningens start, til fremløbet igen er varmest
+        pts = sorted({t0, *(ts for ts, _ in flow if t0 < ts < t1 + tail), *(ts for ts, _ in ret if t0 < ts < t1 + tail)})
+        if len(pts) < 4:
+            continue
+        integ, end = 0.0, t1 + tail
+        for a, b in zip(pts, [*pts[1:], t1 + tail]):
+            f, r = _mean_between(flow, a, b), _mean_between(ret, a, b)
+            if f is None or r is None:
+                continue
+            if a >= t1 and f - r > 0:
+                end = a
+                break
+            integ += (f - r) * (b - a)
+        q_def = -lpm * c * integ / 3600
+        if 0 < q_def < 3:
+            out.append({"t": round(t0), "min": round((t1 - t0) / 60, 1), "q": round(q_def, 3), "flow": round(lpm, 1), "til": round(end)})
+    return out
+
+
+def frost_points(per_kwh: list[dict[str, float]] | None, per_kwh_all: float | None, def_q: float | None) -> list[tuple[float, float]]:
+    """Rimens pris til planen: for hvert udebånd, hvor meget af den målte varme huset reelt får i forhold til gennemsnittet
+    – (ude, faktor), sorteret efter ude.
+
+    Hver afrimning tager ``def_q`` kWh varme fra gulvvandet, som varmemåleren ikke trækker fra. Husets og rummenes
+    modeller er lært af den målte varme og har derfor gennemsnittets rim med i sig; faktoren er forskellen til det:
+    (1 − afrimninger pr. kWh i båndet × def_q) ÷ (1 − afrimninger pr. kWh i alt × def_q). Under 1 i rimvejr (timen giver
+    mindre end målt og koster mere pr. kWh, huset får), over 1 i mildt vejr. Tom liste, før tallene er lært."""
+    if not per_kwh or per_kwh_all is None or not def_q or def_q <= 0:
+        return []
+    base = 1 - min(0.5, per_kwh_all * def_q)
+    return sorted((float(b["t_out"]), round((1 - min(0.5, float(b["per_kwh"]) * def_q)) / base, 4)) for b in per_kwh)
 
 
 # ---------------------------------------------------------------- afkøling

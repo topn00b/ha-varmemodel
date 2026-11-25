@@ -659,3 +659,45 @@ def test_priority_in_the_plan() -> None:
     assert make_plan(hs, m, [room], 20.5, **kw).flow_raise == 0
     warm = PlanRoom(name="Rum A", t_now=21.5, t_min=19.0, heat_now=0.04, heat_delayed=0.04, cool_per_hk=0.0067, margin=0.2)
     assert make_plan(hs, m, [warm], 20.5, priority="comfort", **kw).choices == []
+
+
+def test_hot_water_takes_its_share_of_the_hour() -> None:
+    """Varmt vand i en time (``busy``): timen rummer tilsvarende mindre rumvarme – ved samme effekt, i kortere tid – og
+    varmen, der mangler, lægges i andre timer. Uden ``busy`` er planen uændret."""
+    hs = hours(n=12, price=lambda i: 1.0 if i == 2 else 3.0, t_out=lambda i: -6.0, blocked=lambda i: i >= 6)
+    base = make_plan(hs, M, [], 20.5)
+    assert base.hours[2]["heat_kw"] > 0.7 * M.p_max  # den billige time bruges fuldt
+    half = make_plan(hs, M, [], 20.5, busy=[0.5 if i == 2 else 0.0 for i in range(12)])
+    h2 = half.hours[2]
+    assert h2["heat_kw"] <= 0.5 * M.p_max + 1e-6 and h2["dhw"] == 0.5
+    # effekten, mens der varmes, er den samme som før – det er tiden, der er kortere
+    assert h2["heat_kw"] > 0 and abs(half.heat_kwh - base.heat_kwh) < 1.0
+    assert sum(x["heat_kw"] for i, x in enumerate(half.hours) if i != 2) > sum(x["heat_kw"] for i, x in enumerate(base.hours) if i != 2)
+    assert "dhw" not in base.hours[2] and all("dhw" not in x for i, x in enumerate(half.hours) if i != 2)
+    same = make_plan(hs, M, [], 20.5, busy=[0.0] * 12)
+    assert [x["heat_kw"] for x in same.hours] == [x["heat_kw"] for x in base.hours]
+
+
+def test_frost_price_makes_cold_hours_hold_less_and_cost_more() -> None:
+    """Rimens pris: i rimvejr får huset mindre af den målte varme (afrimningerne tager varme fra gulvvandet). Timen rummer
+    tilsvarende mindre og koster mere pr. kWh, huset får; i mildt vejr omvendt. Uden lærte tal er planen uændret."""
+    from dataclasses import replace
+
+    from custom_components.varmemodel.planner import frost_factor
+
+    m = replace(M, frost=((-1.0, 0.94), (1.5, 1.0), (8.0, 1.04)))
+    assert frost_factor(M, -5.0) == 1.0 and frost_factor(m, -5.0) == 0.94 and frost_factor(m, 20.0) == 1.04
+    assert abs(frost_factor(m, 0.25) - 0.97) < 1e-9 and frost_factor(m, 1.5) == 1.0
+    hs = hours(n=12, t_out=lambda i: -1.0, blocked=lambda i: i >= 4)  # få frie timer i frost: der køres fuldt
+    base, frost = make_plan(hs, M, [], 20.5), make_plan(hs, m, [], 20.5)
+    full = [i for i, x in enumerate(base.hours) if x["heat_kw"] >= M.p_max - 1e-6]
+    assert full and all(abs(frost.hours[i]["heat_kw"] - M.p_max * 0.94) < 0.06 for i in full)  # timen rummer 6 % mindre
+    assert all(x["frost"] == 0.94 for x in frost.hours if x["heat_kw"]) and all("frost" not in x for x in base.hours)
+    # samme varme til huset koster mere el
+    i = full[0]
+    assert frost.hours[i]["cop"] < base.hours[i]["cop"] * 0.95 and frost.hours[i]["cost"] / frost.hours[i]["heat_kw"] > base.hours[i]["cost"] / base.hours[i]["heat_kw"] * 1.05
+    # mildt vejr: timen giver mere end gennemsnittet
+    mild = make_plan(hours(n=12, t_out=lambda i: 8.0), m, [], 20.5)
+    ref = make_plan(hours(n=12, t_out=lambda i: 8.0), M, [], 20.5)
+    on = next(i for i, x in enumerate(ref.hours) if x["heat_kw"])
+    assert mild.hours[on]["cop"] > ref.hours[on]["cop"] * 1.03 and mild.el_kwh <= ref.el_kwh and mild.hours[on]["frost"] == 1.04

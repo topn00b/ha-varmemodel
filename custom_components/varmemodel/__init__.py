@@ -119,12 +119,15 @@ def _remove_retired(hass: HomeAssistant, entry: VarmemodelConfigEntry) -> None:
 
     0.7.0: timemodellen for COP. 0.8.0: LG's varmekurve, planens kurve-forskydning og »fremløb over kurven«.
     0.9.1: luft-luft-setpunkter og -margener (de flyder nu). 0.10.0: forvarmning (rummodellerne forudser faldet selv).
+    0.29.0: luft-luft »Opstart« (afløst af kildens prioritet) og »Maks. fremløb over det lærte« (planen hæver selv efter
+    prioriteten).
     """
     reg = er.async_get(hass)
     for e in er.async_entries_for_config_entry(reg, entry.entry_id):
         if (e.domain == "sensor" and e.unique_id.endswith(("_cop", "_curve", "_plan_shift"))) or (
                 e.domain == "number" and e.unique_id.endswith(("_flow_over_curve", "_preload", "_air_sp_min", "_air_sp_max", "_air_sp_step",
-                                                                "_air_down_margin", "_air_preload_max"))):
+                                                                "_air_down_margin", "_air_preload_max", "_flow_margin"))) or (
+                e.domain == "select" and e.unique_id.endswith("_air_start")):
             reg.async_remove(e.entity_id)
 
 

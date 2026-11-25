@@ -231,6 +231,17 @@
           "comfort": "comfort"
         }
       },
+      "air_priority": {
+        "name": "Priority",
+        "state": {
+          "economy": "economy",
+          "balance": "balance",
+          "comfort": "comfort"
+        }
+      },
+      "air_fan_min": {
+        "name": "Min. fan"
+      },
       "air_fan_day": {
         "name": "Max fan, day"
       },
@@ -252,11 +263,12 @@
           "lavest": "seek lowest flow"
         }
       },
-      "air_start": {
-        "name": "Start-up",
+      "dhw_priority": {
+        "name": "Hot water priority",
         "state": {
-          "rolig": "calm (30–60 min longer)",
-          "hurtig": "fast"
+          "economy": "economy",
+          "balance": "balance",
+          "comfort": "comfort"
         }
       }
     },
@@ -278,9 +290,6 @@
       },
       "cold_caution": {
         "name": "Caution when colder than calibrated"
-      },
-      "flow_margin": {
-        "name": "Max flow above the learned flow"
       },
       "economy": {
         "name": "Economy: rooms may drop below the floor by"
@@ -312,6 +321,9 @@
       },
       "hydro_control": {
         "name": "Varmemodel controls heat pump"
+      },
+      "dhw_control": {
+        "name": "Varmemodel controls hot water"
       }
     },
     "time": {
@@ -320,6 +332,12 @@
       },
       "air_night_end": {
         "name": "Night ends"
+      },
+      "dhw_use_start": {
+        "name": "Hot water is used from"
+      },
+      "dhw_use_end": {
+        "name": "Hot water is used until"
       }
     }
   },
@@ -352,6 +370,7 @@
             "dhw_switch": "Hot water on/off on the heat pump",
             "dhw_target": "Hot water target temperature on the heat pump",
             "dhw_boost": "Bath now (hot water at once)",
+            "dhw_fallback": "Hot water reserve (on/off and target)",
             "electricity_backup": "Additional electricity meter (e.g. cloud)",
             "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)",
             "onoff_target": "On/off target (climate Varmemodel switches to heat / off)",
@@ -361,10 +380,11 @@
             "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
             "compressor": "Used for full running hours, starts and splitting heat between rooms.",
             "dhw": "Hours with hot water are excluded from space heating.",
-            "dhw_temp": "With it Varmemodel learns the tank (loss, use, heating) and plans hot water – as a recommendation only at first.",
-            "dhw_switch": "Used to show what the heat pump is set to next to the plan.",
-            "dhw_target": "A sensor or entity with the target set in the heat pump. Also used to learn how far below the target the tank must be before the heat pump heats.",
-            "dhw_boost": "While on, the recommendation is “high” – also in a blocked hour.",
+            "dhw_temp": "With it Varmemodel learns the tank (loss, use, heating) and plans hot water – a recommendation until “Varmemodel controls hot water” is switched on.",
+            "dhw_switch": "Shows what the heat pump is set to – and is what Varmemodel switches when it controls hot water.",
+            "dhw_target": "The target set in the heat pump. Choose an entity that can be set (climate, water heater, number) if Varmemodel is to control hot water; a sensor only shows it. Also used to learn how far below the target the tank must be before the heat pump heats.",
+            "dhw_boost": "While on, hot water is “high” – also in a blocked hour.",
+            "dhw_fallback": "Used when the heat pump does not follow within three minutes, or the first entity does not answer – for example the manufacturer's cloud when the first one is local.",
             "electricity_backup": "Used for hours where the main meter has no data, e.g. before it was installed. Scaled automatically to the main meter using the hours where both have data.",
             "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)",
             "onoff_target": "On/off target (climate Varmemodel switches to heat / off)",

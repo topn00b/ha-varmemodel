@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.28.0';
+  const VERSION = '0.29.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -283,20 +283,20 @@
 
   // Indstillinger for en Varmemodel-enhed som rigtige kontroller (dropdown, tal, tid, kontakt), grupperet
   const SET_GROUPS = [
-    ['Styring', ['air_control', 'air_boost', 'air_start', 'hydro_control', 'flow_control']],
+    ['Styring', ['air_control', 'air_boost', 'air_priority', 'hydro_control', 'flow_control']],
     ['Fremløb', ['soft_start']],
-    ['Støj: maks. blæser', ['air_fan_day', 'air_fan_night', 'air_night_start', 'air_night_end']],
+    ['Blæser: laveste og højeste (støj)', ['air_fan_min', 'air_fan_day', 'air_fan_night', 'air_night_start', 'air_night_end']],
     ['Lameller', ['air_swing_v', 'air_swing_h']],
   ];
   // Kortets egne navne (uafhængigt af HA's systemsprog)
   const SET_NAMES = {
     air_control: 'Varmemodel styrer', air_boost: 'Jeg fryser', flow_control: 'Varmemodel styrer fremløb', hydro_control: 'Varmemodel styrer varmepumpen', air_fan_day: 'Maks. blæser dag', air_fan_night: 'Maks. blæser nat',
     air_night_start: 'Nat begynder', air_night_end: 'Nat slutter', air_swing_v: 'Lameller op/ned', air_swing_h: 'Lameller side',
-    air_start: 'Opstart', soft_start: 'Fremløb efter start',
+    air_priority: 'Prioritet', air_fan_min: 'Min. blæser', soft_start: 'Fremløb efter start',
   };
   // Valgenes navne på kortet (værdien, der gemmes, er uændret)
   const OPT_NAMES = { fra: 'fra (planens fremløb)', til: 'blød start', test: 'test: hver anden blød', lavest: 'søg laveste fremløb',
-    rolig: 'rolig (30–60 min. længere)', hurtig: 'hurtig', economy: 'økonomi', balance: 'balance', comfort: 'komfort' };
+    economy: 'økonomi', balance: 'balance', comfort: 'komfort' };
   // Prioritet (husets valg): dropdown + hvad hvert trin ville vælge lige nu – planen regner selv pris og virkning ud for
   // hver hævning af fremløbet (ingen faste prisgrænser), så man kan se, hvad et trin koster, før man vælger det
   function priorityBox(h, vm, src) {
@@ -334,11 +334,20 @@
     else line = 'Ingen måling endnu.';
     const df = a.afrimninger_24t ? `Afrimninger det seneste døgn: ${a.afrimninger_24t}${a.afrimning_hver_min ? `, ca. hver ${a.afrimning_hver_min}. min.` : ''}${a.afrimning_varer_min ? `, ${fmt(a.afrimning_varer_min, 1)} min. ad gangen` : ''}.` : 'Ingen afrimninger det seneste døgn.';
     const ref = a.ren_normal_pct != null ? ` Normalt ${p(a.ren_normal_pct)} lige efter en afrimning; lavt er under ${p(a.ren_lav_pct)} (ringere end ni ud af ti af husets egne tidligere cyklusser).` : '';
+    // Rimens pris: hvad afrimningerne tager fra gulvvandet (varmemåleren tæller ikke baglæns) – og planens faktor pr. ude
+    let rim = '';
+    if (a.afrimning_tager_kwh_varme != null) {
+      const rf = (a.rim_faktor || []).map((x) => `${fmt(x.ude, 0)} °C: ${sgn(x.pct - 100, 0)} %`).join(' · ');
+      rim = `<div class="sm" style="margin-top:4px"><b>Rimens pris:</b> hver afrimning tager ca. ${fmt(a.afrimning_tager_kwh_varme, 2)} kWh varme fra gulvvandet`
+        + `${a.rim_24t_kwh_varme != null ? ` – det seneste døgn ${fmt(a.rim_24t_kwh_varme, 1)} kWh varme (${a['rim_24t_afrimninger_målt']} afrimninger)` : ''}. `
+        + `<span class="mut">Varmemåleren tæller ikke baglæns, så det ses ikke i COP.${rf ? ` Planen regner med det: varmen, huset får, i forhold til gennemsnittet – ${esc(rf)}.` : ' Planen regner med det, når afrimninger pr. kWh varme er lært for udetemperaturen.'}</span>`
+        + `${a['fremløb_holdes'] ? ` <span class="amber">Fremløbet hæves ikke over loftet, før fladen bliver ren igen.</span>` : ''}</div>`;
+    }
     const tr = (a.cyklusser || []).slice(-6).reverse().map((c) => `<tr><td>${esc(when(c.start).replace('kl. ', ''))}</td><td class="n">${c.min} min.</td><td class="n">${fmt(c.ude, 1)} °C</td><td class="n">${fmt(c.kw, 1)} kW</td>`
       + `<td class="n">${c.lav ? `<b style="color:${RE}">${p(c.ren_pct)}</b>` : p(c.ren_pct)}</td><td class="n">${p(c.slut_pct)}</td></tr>`).join('');
     const tbl = tr ? `<details id="iceCy"${open ? ' open' : ''}><summary class="sm">Seneste cyklusser</summary><div class="wrap"><table><tr><th>start</th><th class="n">længde</th><th class="n">ude</th><th class="n">varme</th><th class="n">ren flade</th><th class="n">sidst</th></tr>${tr}</table></div>`
       + '<div class="sm mut" style="margin-top:4px">En cyklus går fra en afrimning eller start til den næste. »Ren flade« er ydelsen de første 15 minutter i procent af husets egen COP-model, »sidst« de sidste 10 minutter, når rimen har sat sig. Tre lave i træk vises som »følg«; bliver det ved i seks timer, kommer der én besked.</div></details>' : '';
-    return `<div class="b"><div class="pvh">Isvagt ${chip}</div><div style="margin:4px 0 6px;font-size:14px">${esc(line)}</div><div class="sm mut">${esc(df + ref)}</div>${tbl}</div>`;
+    return `<div class="b"><div class="pvh">Isvagt ${chip}</div><div style="margin:4px 0 6px;font-size:14px">${esc(line)}</div><div class="sm mut">${esc(df + ref)}</div>${rim}${tbl}</div>`;
   }
   // Varmt vand: Varmemodels anbefaling ud fra tankens lærte model, priserne og blokeringerne – ved siden af det,
   // varmepumpen faktisk står på. Kun anbefaling (Varmemodel styrer ikke varmt vand); de tre temperaturer er brugerens.
@@ -354,10 +363,19 @@
       line += nr ? `Næste opvarmning ${when(nr.kl)} til ${fmt(nr['mål'], 0)} °C (ca. ${nr.min} min., ${fmt(nr.kwh_el, 1)} kWh el, ${fmt(nr.kr, 1)} kr).` : 'Ingen opvarmning i planen.';
       if (a.bad_nu) line += ' »Bad nu« er slået til.';
     }
-    const under = a.timer_under_mindst ? `<span class="amber">Under »mindst« (${fmt(a.mindst, 0)} °C) fra ${when(a.under_fra)} i ${a.timer_under_mindst} t – der kan ikke varmes i blokerede timer.</span> ` : '';
-    const lo = low ? `Laveste i planen: ${fmt(low.tank, 1)} °C ${when(low.kl)}. ` : '';
+    const under = a.timer_under_mindst ? `<span class="amber">Under »mindst« (${fmt(a.mindst, 0)} °C) fra ${when(a.under_fra)} i ${a.timer_under_mindst} t af brugstiden – der kan ikke varmes i blokerede timer.</span> ` : '';
+    const lo = low ? `Laveste i brugstiden: ${fmt(low.tank, 1)} °C ${when(low.kl)}. ` : '';
     const AN = { off: 'fra', normal: 'til', high: 'til (højt)' };
-    const act = a.varmepumpen_nu ? `Varmepumpen står nu på ${AN[a.varmepumpen_nu] || a.varmepumpen_nu}${a.varmepumpens_mål != null && a.varmepumpen_nu !== 'off' ? ` (mål ${fmt(a.varmepumpens_mål, 0)} °C)` : ''} – ${a.enig ? 'som anbefalingen' : 'anbefalingen er en anden'}. ` : '';
+    const act = a.varmepumpen_nu ? `Varmepumpen står nu på ${AN[a.varmepumpen_nu] || a.varmepumpen_nu}${a.varmepumpens_mål != null && a.varmepumpen_nu !== 'off' ? ` (mål ${fmt(a.varmepumpens_mål, 0)} °C)` : ''} – ${a.enig ? 'som planen' : (a.opvarmning_i_gang ? 'en opvarmning kører færdig' : 'planen er en anden')}. ` : '';
+    // Brugstiden: sat af brugeren (fra–til) eller lært af tankens fald; uden for den må tanken gerne være kold
+    const spans = (hrs) => { const o = []; for (const x of hrs) { const l = o[o.length - 1]; if (l && l[1] === x) l[1] = x + 1; else o.push([x, x + 1]); } if (o.length > 1 && o[0][0] === 0 && o[o.length - 1][1] === 24) { o[0][0] = o.pop()[0]; } return o.map(([x, y]) => `${hh(x)}–${hh(y % 24)}`).join(', '); };
+    const useTxt = Array.isArray(a.brugstid) ? (a.brugstid.length === 24 ? 'Varmt vand bruges hele døgnet' : a.brugstid.length ? `Varmt vand bruges kl. ${spans(a.brugstid)} (${a.brugstid_sat ? 'sat' : 'lært af tankens fald'})` : 'Intet forbrug lært') : 'Brugstiden er ikke lært endnu – planen regner med hele døgnet';
+    const pe = vm && vm.e('dhw_priority'); const ps = st(h, pe);
+    const sel = ps ? `<select data-svc="select.select_option" data-eid="${esc(pe)}">${((ps.attributes || {}).options || []).map((x) => `<option value="${esc(x)}"${x === ps.state ? ' selected' : ''}>${esc(OPT_NAMES[x] || x)}</option>`).join('')}</select>` : '';
+    const ce = src.e('dhw_control'); const cs = st(h, ce);
+    const tog = cs ? `<button class="tg2${cs.state === 'on' ? ' on' : ''}" data-act="${esc(ce)}">${cs.state === 'on' ? 'Varmemodel styrer' : 'kun anbefaling'}</button>` : '';
+    const lw = a.seneste_skrivning;
+    const wr = a.styrer ? (lw ? `Senest skrevet ${whenM(lw.kl)}: ${(lw.skrev || []).join(', ')}${lw.via === 'fallback' ? ' (via reserven)' : ''}. ` : 'Intet skrevet endnu. ') : '';
     const runs = (a.plan || []).filter((x) => x.varmer).slice(0, 8).map((x) => `<tr><td>${esc(when(x.t).replace('kl. ', ''))}</td><td class="n">${fmt(x['mål'], 0)} °C</td><td class="n">${x.min} min.</td><td class="n">${fmt(x.kwh_el, 1)} kWh el</td><td class="n">${fmt(x.kr, 1)} kr</td><td class="n">${fmt(x.slut, 1)} °C</td></tr>`).join('');
     const m = a.tank_model || {};
     const top = (m.forbrug_pr_time || []).map((v, i) => [i, v]).filter((x) => x[1] >= 0.3).sort((x, y) => y[1] - x[1]).slice(0, 4).map(([i, v]) => `kl. ${hh(i)} (${fmt(v, 1)} °C)`).join(', ');
@@ -368,13 +386,16 @@
       const e = vm && vm.e(k); const x = st(h, e); if (!x) return '';
       const xa = x.attributes || {};
       return `<div class="sr"><span>${['Mindst', 'Normalt', 'Højt (bad nu, før lange blokeringer)'][i]}</span><span><input type="number" data-svc="number.set_value" data-eid="${esc(e)}" value="${esc(x.state)}" min="${xa.min}" max="${xa.max}" step="${xa.step}"><span class="mut sm"> °C</span></span></div>`;
+    }).join('') + ['dhw_use_start', 'dhw_use_end'].map((k, i) => {
+      const e = vm && vm.e(k); const x = st(h, e); if (!x) return '';
+      return `<div class="sr"><span>${['Varmt vand bruges fra', 'Varmt vand bruges til'][i]}${i ? ' <span class="mut sm">(ens = lær det selv)</span>' : ''}</span><span><input type="time" data-svc="time.set_value" data-eid="${esc(e)}" value="${esc(String(x.state).slice(0, 5))}"></span></div>`;
     }).join('');
     const det = `<details id="vvPlan"${open ? ' open' : ''}><summary class="sm">Plan, tank og indstillinger</summary>`
       + (runs ? `<div class="wrap"><table><tr><th>opvarmning</th><th class="n">mål</th><th class="n">varer</th><th class="n">el</th><th class="n">pris</th><th class="n">tank efter timen</th></tr>${runs}</table></div>` : '')
       + `<div class="sm mut" style="margin:4px 0">${esc(learned)}</div>${ctl ? `<div class="sg">${ctl}</div>` : ''}`
-      + '<div class="sm mut" style="margin-top:4px">Planen lægger opvarmningerne i de billigste frie timer, så tanken er mindst »mindst«, når en time begynder – og fylder op tæt på en lang blokering. Økonomi varmer kun til »normalt«; balance må også bruge »højt«; komfort holder desuden tanken tæt på »normalt«. Prioritet vælges i boksen ovenfor.</div></details>';
-    return `<div class="b"><div class="pvh">Varmt vand ${chip}<span class="mut sm"> · anbefaling</span></div><div style="margin:4px 0 6px;font-size:14px">${esc(line)}</div>`
-      + `<div class="sm">${under}<span class="mut">${esc(lo + act)}Varmemodel styrer ikke varmt vand endnu.</span></div>${det}</div>`;
+      + '<div class="sm mut" style="margin-top:4px">Planen lægger opvarmningerne i de billigste frie timer, så tanken er mindst »mindst«, når en time i brugstiden begynder – og fylder op tæt på en lang blokering. Uden for brugstiden må tanken gerne være kold, så der varmes tæt på morgenen i stedet for om aftenen. Økonomi varmer kun til »normalt«; balance må også bruge »højt«; komfort holder desuden tanken tæt på »normalt« i brugstiden og aldrig under »mindst«. Varmeplanen regner med opvarmningerne: i de timer rummer den mindre rumvarme.</div></details>';
+    return `<div class="b"><div class="pvh">Varmt vand ${chip} ${sel} ${tog}</div><div style="margin:4px 0 6px;font-size:14px">${esc(line)}</div>`
+      + `<div class="sm">${under}<span class="mut">${esc(`${useTxt}. ${lo}${act}${wr}`)}${a.styrer ? '' : 'Varmemodel skriver ikke til varmepumpen, før styringen slås til.'}</span></div>${det}</div>`;
   }
   function settingsPanel(h, src, title = 'Indstillinger') {
     let o = '';
@@ -690,7 +711,7 @@
       o += '<div class="h2">Planens indstillinger</div><div class="grid">';
       const pe = vm.e('priority'); if (st(h, pe)) o += row('Prioritet', `<span class="v" data-e="${esc(pe)}">${esc(OPT_NAMES[st(h, pe).state] || st(h, pe).state)}</span>`);
       for (const [k, n, u] of [['max_pause', 'Maks. pause uden gulvvarme', 't'], ['comfort_offset', 'Rum må svinge over gulvet med', '°C'], ['boost_delta', 'Jeg fryser hæver med', '°C'],
-        ['boost_hours', 'Jeg fryser gælder højst', 't'], ['red_allowance', 'Må gå under gulvet i røde timer med', '°C'], ['economy', 'Økonomi: må gå under gulvet med', '°C'], ['cold_caution', 'Forsigtighed ved kulde', '%'], ['flow_margin', 'Maks. fremløb over det lærte', '°C']]) {
+        ['boost_hours', 'Jeg fryser gælder højst', 't'], ['red_allowance', 'Må gå under gulvet i røde timer med', '°C'], ['economy', 'Økonomi: må gå under gulvet med', '°C'], ['cold_caution', 'Forsigtighed ved kulde', '%']]) {
         const e = vm.e(k); o += row(n, e ? `<span class="v" data-e="${esc(e)}">${fmt(sv(h, e))} ${u}</span>` : '–');
       }
       return o + '</div>';
@@ -1349,11 +1370,22 @@
         let tr = '';
         for (const x of [...L2].reverse()) {
           const w = num(x.w);
+          // kilde: egne målinger på trinnet, delt (samme setpunkt med en anden blæser – nat og dag deler viden) eller skøn
+          const KS = { delt: ['delt', 'samme setpunkt over gulvet, målt med en anden blæser'], 'skøn': ['skøn', 'skønnet mellem de nærmeste lærte setpunkter'] };
+          const mk = (k) => (KS[k] ? ` <span class="mut" title="${KS[k][1]}">(${KS[k][0]})</span>` : '');
           tr += `<div class="tr${x.trin === cur ? ' on' : ''}${x.trin === asa.mål_trin ? ' mt' : ''}"><span class="tn">${x.trin}</span><span class="tl2">${esc(x.blæser || '')} · ${fmt(x.setpunkt, 1)} °C</span>`
-            + `<span class="tbar"><i style="width:${w !== null ? Math.round((100 * w) / wmx) : 0}%"></i></span><span class="tw">${w !== null ? `${fmt(w, 0)} W · ${fmt(w / 1000, 2)} kWh el/t` : '<span class="mut">ikke lært</span>'}${num(x.grader_pr_kwh_el) !== null && eb > 0 ? ` · <b title="rummenes varme pr. kWh el i forhold til det bedste trin">${fmt((100 * x.grader_pr_kwh_el) / eb, 0)} %</b>` : ''}</span></div>`;
+            + `<span class="tbar"><i style="width:${w !== null ? Math.round((100 * w) / wmx) : 0}%${x.w_kilde && x.w_kilde !== 'trin' ? ';opacity:.45' : ''}"></i></span><span class="tw">${w !== null ? `${fmt(w, 0)} W${mk(x.w_kilde)} · ${fmt(w / 1000, 2)} kWh el/t` : '<span class="mut">ikke lært</span>'}${num(x.grader_pr_kwh_el) !== null && eb > 0 ? ` · <b title="rummenes varme pr. kWh el i forhold til det bedste trin">${fmt((100 * x.grader_pr_kwh_el) / eb, 0)} %</b>${mk(x.virkning_kilde)}` : ''}</span></div>`;
         }
-        S += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, maks. blæser ${esc(asa.maks_blæser || '–')} · nu trin ${cur ?? '–'}${asa.el_mål_w ? ` · planens el-mål ${fmt(asa.el_mål_w, 0)} W${asa.mål_trin != null ? ` (trin ${asa.mål_trin})` : ' (lærer stadig trinene)'}` : ''}${asa.kører_nu ? ` · kører ${esc(asa.kører_nu)}` : ''}${asa.afrimninger_24t != null ? ` · afrimninger det seneste døgn: ${asa.afrimninger_24t}${asa.seneste_afrimning ? ` (seneste ${when(asa.seneste_afrimning)})` : ''}` : ''}</span></div>`
-          + `<div class="sm" style="margin-bottom:4px">${asa.ventilation ? `Ventilation ${esc(asa.ventilation)}${asa.ventilation_virkning_pct != null ? ` · med ventilation ${asa.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(asa.ventilation_virkning_pct, 0)} % varme pr. kWh el` : ' · effekten læres'} · ` : ''}${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div><div class="sm mut" style="margin-top:4px"><b style="color:var(--info-color,#3b82c4)">Fyldt blå</b> = trinnet nu · <b>stiplet ramme</b> = planens mål-trin · <span style="color:#f2711c">orange bjælke</span> = lært forbrug (W). % = varme i rummene pr. kWh el i forhold til det bedste trin (lært af rumfølerne, efter afkøling og opdrift fra stueplanen). Stigen vælger det trin, der dækker planens varme for mindst el; med rolig opstart prøves et trin i 30 min., og der skrues kun op, når det kolde rum ikke stiger 0,2 °C/t.</div></div>`;
+        // Rummenes varme pr. kWh el for hver blæser: viser, om et fjernt rum får del i varmen ved lav blæser
+        const rf = asa.rum_pr_blæser; let rft = '';
+        if (rf) {
+          const fansL = Object.keys(rf); const roomsL = [...new Set(fansL.flatMap((f) => Object.keys(rf[f])))];
+          rft = `<details id="rumBlaeser-${esc(s.id)}"${this._open.has(`rumBlaeser-${s.id}`) ? ' open' : ''}><summary class="sm">Rummenes varme pr. kWh el for hver blæser</summary><div class="wrap"><table><tr><th>rum</th>${fansL.map((f) => `<th class="n">${esc(f)}</th>`).join('')}</tr>`
+            + roomsL.map((r) => `<tr><td>${esc(r)}</td>${fansL.map((f) => { const v = rf[f][r]; return `<td class="n">${v ? `${fmt(v.grader_pr_kwh_el, 2)} <span class="mut">(${v['målinger']})</span>` : '–'}</td>`; }).join('')}</tr>`).join('')
+            + '</table></div><div class="sm mut">°C pr. kWh el (antal kvarterer). Får et rum tydeligt mindre ved en lav blæser, så sæt »Min. blæser« derefter – tallene samles fra i dag og bruges ikke til styring endnu.</div></details>';
+        }
+        S += `<div class="b"><div class="pvh">Stigen<span class="mut sm"> · ${asa.nat ? 'nat' : 'dag'}, ${asa.min_blæser ? `blæser ${esc(asa.min_blæser)}–${esc(asa.maks_blæser || '–')}` : `maks. blæser ${esc(asa.maks_blæser || '–')}`}${asa.prioritet ? ` · ${esc(OPT_NAMES[asa.prioritet] || asa.prioritet)}` : ''} · nu trin ${cur ?? '–'}${asa.el_mål_w ? ` · planens el-mål ${fmt(asa.el_mål_w, 0)} W${asa.mål_trin != null ? ` (trin ${asa.mål_trin})` : ' (lærer stadig trinene)'}` : ''}${asa.kører_nu ? ` · kører ${esc(asa.kører_nu)}` : ''}${asa.afrimninger_24t != null ? ` · afrimninger det seneste døgn: ${asa.afrimninger_24t}${asa.seneste_afrimning ? ` (seneste ${when(asa.seneste_afrimning)})` : ''}` : ''}</span></div>`
+          + `<div class="sm" style="margin-bottom:4px">${asa.ventilation ? `Ventilation ${esc(asa.ventilation)}${asa.ventilation_virkning_pct != null ? ` · med ventilation ${asa.ventilation_virkning_pct >= 0 ? '+' : ''}${fmt(asa.ventilation_virkning_pct, 0)} % varme pr. kWh el` : ' · effekten læres'} · ` : ''}${esc(asa.grund || '')}${asa.styrer ? '' : ' <span class="mut">(anbefaling – Varmemodel styrer ikke)</span>'}</div><div class="trs" data-e="${esc(ase)}">${tr}</div><div class="sm mut" style="margin-top:4px"><b style="color:var(--info-color,#3b82c4)">Fyldt blå</b> = trinnet nu · <b>stiplet ramme</b> = planens mål-trin · <span style="color:#f2711c">orange bjælke</span> = lært forbrug (W). % = varme i rummene pr. kWh el i forhold til det bedste trin (lært af rumfølerne, efter afkøling og opdrift fra stueplanen). <b>(delt)</b> = målt på samme setpunkt med en anden blæser – nat og dag deler det, de lærer; <b>(skøn)</b> = mellem de nærmeste lærte setpunkter. Stigen vælger det trin, der dækker planens varme for mindst el. Prioritet: <b>økonomi</b> – et trin prøves i 30 min., og der skrues kun op, når det kolde rum stiger langsommere, end planen regner med; <b>balance</b> – der skrues op, når det stiger under 0,2 °C/t; <b>komfort</b> – et trin op hvert kvarter, til rummet er over gulvet.</div>${rft}</div>`;
       }
       L += settingsPanel(h, s);
       const R = `<div class="sm" style="margin-bottom:6px">${(c.hours || [0, 3, 6, 12]).map((x) => `<span class="pill${x === k ? ' on' : ''}" data-k="${x}">${x === 0 ? 'nu' : `om ${x} t`}</span>`).join(' ')}</div>`
@@ -1452,7 +1484,7 @@
         + `• +1 °C pr. time, når et rum er på vej under gulvet inden for 3 timer (målt tendens over 2 timer)<br>• +2 °C pr. halve time, når et rum er under gulvet og ikke på vej op<br>`
         + `• +1 °C, når kompressoren alligevel stopper efter længere drift (målet er under varmepumpens laveste ydelse)<br>• −1 °C hver anden time, når alle rum er mindst 0,5 °C over gulvet og stabile<br>`
         + `• forvarmning: kan flere timer ved søgningens mål ikke holde rummene gennem en blokering, hæver planen fremløbet – vist som »forvarmer«. Op til loftet på alle trin; derover afgør »Prioritet«, hvor meget af det opnåelige der købes (højst det fremløb, varmepumpens største effekt giver)<br>`
-        + `• søgningen går aldrig over loftet: det fremløb, huset selv brugte ved udetemperaturen, + »Maks. fremløb over det lærte«. Timer, hvor Varmemodel selv satte fremløbet, tæller ikke med i det lærte – ellers ville loftet lære af sig selv og falde. Beder et rum om mere, mens målet står ved loftet, vises »ved loftet«<br>`
+        + `• søgningen går aldrig over loftet: det fremløb, huset selv brugte ved udetemperaturen. Planen hæver selv over det efter »Prioritet«, når det hjælper rummene. Timer, hvor Varmemodel selv satte fremløbet, tæller ikke med i det lærte – ellers ville loftet lære af sig selv og falde. Beder et rum om mere, mens målet står ved loftet, vises »ved loftet«<br>`
         + `• rummet, der bestemmer, er markeret med ◆ i rumlisten; pilen viser rummets tendens.</div></details></div>`;
       return `<div class="pv2">${box}${set}</div>`;
     }

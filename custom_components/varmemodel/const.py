@@ -19,6 +19,11 @@ CONF_DHW_TEMP = "dhw_temp"  # varmtvandstankens temperatur (°C) – med den læ
 CONF_DHW_SWITCH = "dhw_switch"  # varmt vand til/fra på varmepumpen (til sammenligning med planen)
 CONF_DHW_TARGET = "dhw_target"  # varmt vands måltemperatur på varmepumpen (til sammenligning og til varmepumpens startgrænse)
 CONF_DHW_BOOST = "dhw_boost"  # »bad nu«: varmt vand til »højt« med det samme, også i en blokeret time
+CONF_DHW_FALLBACK = "dhw_fallback"  # reserve for varmt vand til/fra og mål (fx producentens sky, når den primære er lokal)
+DHW_CONTROL = "dhw_control"  # kontakt: Varmemodel styrer varmt vand (fra = kun anbefaling)
+DHW_PRIORITY = "dhw_priority"  # varmt vands egen prioritet: økonomi – balance – komfort
+DHW_TIMES = (("dhw_use_start", "00:00"), ("dhw_use_end", "00:00"))  # brugstiden: fra–til (ens = hele døgnet / det lærte)
+DHW_MAX_WRITES = 48  # sikring mod en løbsk løkke: højst så mange skrivninger til varmt vand pr. døgn
 CONF_WINDOW_DAYS = "window_days"
 CONF_WEATHER = "weather"
 
@@ -142,7 +147,6 @@ CONF_RED_ALLOWANCE = "red_allowance"
 CONF_ECONOMY = "economy"
 CONF_COLD_CAUTION = "cold_caution"
 CONF_PRELOAD = "preload"
-CONF_FLOW_MARGIN = "flow_margin"
 PRIORITY = "priority"  # husets prioritet: økonomi – balance – komfort (valg-entitet; trinnene står i planner.PRIORITIES)
 PRIORITY_DEFAULT = "balance"
 CONF_MEASURES_CALENDAR = "measures_calendar"
@@ -163,7 +167,6 @@ SETTINGS = (
     # Koldere end varmetabet er målt ved: + så mange % varmetab (og +0,2 °C margen i rummene); 0 = slået fra
     ("cold_caution", 0, 30, 1, "%", 10),
     # Lavt og jævnt: højst så mange °C over det fremløb, modellen har lært huset bruger ved timens udetemperatur
-    ("flow_margin", -5, 5, 0.5, "°C", 0.0),
 )
 
 # Varmt vand (tal-entiteter, kun når en vandbåren kilde har en tankføler): brugerens tre temperaturer – alt andet om tanken
@@ -179,11 +182,12 @@ CONF_CLIMATE = "climate"
 CONF_EL_POWER = "el_power"  # luft-luft: eleffekt (W) – til forbrug pr. trin (energimålere er for grove pr. kvarter)
 CONF_ASSIST = "assist_fan"  # luft-luft: ventilation der fordeler varmen (til/fra-tilstand)
 CONF_ASSIST_SPEED = "assist_fan_speed"  # valgfri: dens hastighed (0 = står)
-AIR_SELECTS = ("air_fan_day", "air_fan_night", "air_swing_v", "air_swing_h", "air_start")
-AIR_START_OPTIONS = ("rolig", "hurtig")  # rolig: ét trin pr. halve time og loft ved det effektive trin (30–60 min. længere opvarmning)
-AIR_SOFT_UP_EVERY = 1800  # rolig opstart: højst ét trin op pr. halve time
-AIR_SOFT_SHARE = 0.5  # rolig opstart: start højst midt på stigen (fx trin 6 af 0–11)
-AIR_SOFT_MIN_RISE = 0.2  # rolig opstart: et rum under gulvet, der stiger mindst så meget (°C/t) på trinnet, får ikke et trin mere
+AIR_SELECTS = ("air_priority", "air_fan_min", "air_fan_day", "air_fan_night", "air_swing_v", "air_swing_h")
+AIR_PRIORITY = "air_priority"  # luft-luft-kildens prioritet: økonomi – balance – komfort (afløser »Opstart« rolig/hurtig)
+AIR_START_MAP = {"rolig": "balance", "hurtig": "comfort"}  # den gamle »Opstart« (til 0.28) oversat til prioritet
+AIR_SOFT_UP_EVERY = 1800  # økonomi og balance: højst ét trin op pr. halve time
+AIR_SOFT_SHARE = 0.5  # økonomi og balance: start højst midt på stigen (fx trin 6 af 0–11), til virkningen pr. trin er lært
+AIR_SOFT_MIN_RISE = 0.2  # balance: et rum under gulvet, der stiger mindst så meget (°C/t) på trinnet, får ikke et trin mere (økonomi: planens egen stigning, højst dette)
 AIR_TIMES = (("air_night_start", "22:00"), ("air_night_end", "07:00"))
 AIR_SWITCH = "air_control"
 AIR_BOOST = "air_boost"

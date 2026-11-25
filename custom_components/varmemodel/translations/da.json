@@ -231,6 +231,17 @@
           "comfort": "komfort"
         }
       },
+      "air_priority": {
+        "name": "Prioritet",
+        "state": {
+          "economy": "økonomi",
+          "balance": "balance",
+          "comfort": "komfort"
+        }
+      },
+      "air_fan_min": {
+        "name": "Min. blæser"
+      },
       "air_fan_day": {
         "name": "Maks. blæser dag"
       },
@@ -252,11 +263,12 @@
           "lavest": "søg laveste fremløb"
         }
       },
-      "air_start": {
-        "name": "Opstart",
+      "dhw_priority": {
+        "name": "Varmt vand prioritet",
         "state": {
-          "rolig": "rolig (30–60 min. længere)",
-          "hurtig": "hurtig"
+          "economy": "økonomi",
+          "balance": "balance",
+          "comfort": "komfort"
         }
       }
     },
@@ -278,9 +290,6 @@
       },
       "cold_caution": {
         "name": "Forsigtighed ved kulde"
-      },
-      "flow_margin": {
-        "name": "Maks. fremløb over det lærte"
       },
       "economy": {
         "name": "Økonomi: må gå under gulvet med"
@@ -312,6 +321,9 @@
       },
       "hydro_control": {
         "name": "Varmemodel styrer varmepumpen"
+      },
+      "dhw_control": {
+        "name": "Varmemodel styrer varmt vand"
       }
     },
     "time": {
@@ -320,6 +332,12 @@
       },
       "air_night_end": {
         "name": "Nat slutter"
+      },
+      "dhw_use_start": {
+        "name": "Varmt vand bruges fra"
+      },
+      "dhw_use_end": {
+        "name": "Varmt vand bruges til"
       }
     }
   },
@@ -352,6 +370,7 @@
             "dhw_switch": "Varmt vand til/fra på varmepumpen",
             "dhw_target": "Varmt vands måltemperatur på varmepumpen",
             "dhw_boost": "Bad nu (varmt vand med det samme)",
+            "dhw_fallback": "Reserve for varmt vand (til/fra og mål)",
             "electricity_backup": "Supplerende elmåler (fx skyen)",
             "flow_target": "Fremløbsmål (entiteten Varmemodel skriver fremløbsmålet til, fx varmepumpens climate i varme-tilstand)",
             "onoff_target": "Tænd/sluk (climate-entiteten Varmemodel sætter til varme eller slukket)",
@@ -361,10 +380,11 @@
             "heat_energy": "Uden den kan COP, varmetab og gulvets afgivelse ikke regnes ud.",
             "compressor": "Bruges til fulde driftstimer, starter og fordeling af varmen på rummene.",
             "dhw": "Timer med varmt vand holdes ude af rumopvarmningen.",
-            "dhw_temp": "Med den lærer Varmemodel tanken (tab, forbrug, opvarmning) og lægger en plan for varmt vand – først kun som anbefaling.",
-            "dhw_switch": "Bruges til at vise, hvad varmepumpen står på, ved siden af planen.",
-            "dhw_target": "En føler eller entitet med det mål, der står i varmepumpen. Bruges også til at lære, hvor langt under målet tanken skal være, før varmepumpen varmer.",
-            "dhw_boost": "Mens den er tændt, er anbefalingen »højt« – også i en blokeret time.",
+            "dhw_temp": "Med den lærer Varmemodel tanken (tab, forbrug, opvarmning) og lægger en plan for varmt vand – en anbefaling, indtil »Varmemodel styrer varmt vand« slås til.",
+            "dhw_switch": "Viser, hvad varmepumpen står på – og er den, Varmemodel slår til og fra, når den styrer varmt vand.",
+            "dhw_target": "Det mål, der står i varmepumpen. Vælg en entitet, der kan sættes (climate, water heater, tal), hvis Varmemodel skal styre varmt vand; en føler viser det kun. Bruges også til at lære, hvor langt under målet tanken skal være, før varmepumpen varmer.",
+            "dhw_boost": "Mens den er tændt, er varmt vand »højt« – også i en blokeret time.",
+            "dhw_fallback": "Bruges, når varmepumpen ikke følger med inden for tre minutter, eller den første entitet ikke svarer – fx producentens sky, når den første er lokal.",
             "electricity_backup": "Bruges i timer, hvor hovedmåleren ikke har data – fx før den blev sat op. Skaleres automatisk til hovedmålerens niveau ud fra de timer, hvor begge har data.",
             "flow_target": "Fremløbsmål (entiteten Varmemodel skriver fremløbsmålet til, fx varmepumpens climate i varme-tilstand)",
             "onoff_target": "Tænd/sluk (climate-entiteten Varmemodel sætter til varme eller slukket)",
