@@ -97,6 +97,11 @@ from .const import (
     AIR_PRIORITY,
     AIR_START_MAP,
     AIR_SWITCH,
+    AIR_VENT_DAY,
+    AIR_VENT_HOLD,
+    AIR_VENT_NIGHT,
+    AIR_VENT_ROOMS,
+    AIR_VENT_SWITCH,
     AIR_TIMES,
     CONF_ASSIST,
     CONF_EL_POWER,
@@ -2264,6 +2269,64 @@ class VarmemodelCoordinator:
                         return x.entity_id
         return None
 
+    def _vent_decide(self, s: SourceState, a: dict[str, Any], show: list[Any], pre: dict[str, float], blocked: bool, boost: bool,
+                     night: bool, g: float | None, now: float) -> dict[str, Any]:
+        """Skal ventilationen køre nu – og med hvilken hastighed? (se _air_step)."""
+        sel = str(self.air_setting(s, AIR_VENT_ROOMS) or "")
+        names = [x.strip() for x in sel.split("+") if x.strip()]
+        rooms = [r for r in show if r.name in names and r.t_min > -50]
+        maks = self.air_setting(s, AIR_VENT_NIGHT if night else AIR_VENT_DAY)
+        running = bool(self.air_assist(s))
+        vs = a.setdefault("vent", {})
+        res: dict[str, Any] = {"styrer": bool(self.air_setting(s, AIR_VENT_SWITCH)), "rum": names, "nat": night, "maks": maks,
+                               "maks_dag": self.air_setting(s, AIR_VENT_DAY), "maks_nat": self.air_setting(s, AIR_VENT_NIGHT), "kører": running}
+        if not rooms or g is None:
+            res.update(til=False, grund="ingen rum eller føler ved enheden")
+            return res
+        under = min(r.t_now - r.t_min - pre.get(r.name, 0.0) for r in rooms)
+        forvarm = any(pre.get(r.name, 0.0) > 0 for r in rooms)
+        coldest = min(r.t_now for r in rooms)
+        need = under < 0 or (running and under < 0.3) or (forvarm and under < 0.5)
+        warm = g >= coldest + (0.5 if running else 1.0)
+        want = need and warm and (not blocked or boost)
+        if not need:
+            why = f"rummene har varme nok (koldeste {under:+.1f} °C over gulvet{' + forvarmning' if forvarm else ''})"
+        elif not warm:
+            why = f"føleren ved enheden ({g:.1f} °C) er ikke varmere end det koldeste rum ({coldest:.1f} °C) + {0.5 if running else 1.0:.1f}"
+        elif blocked and not boost:
+            why = "blokeret – slukket"
+        else:
+            why = f"et rum skal bruge varme ({under:+.1f} °C fra gulvet{' + forvarmning' if forvarm else ''})"
+        if want != running and not (blocked and not want) and now - float(vs.get("t", 0.0)) < AIR_VENT_HOLD:
+            want, why = running, f"{why} – venter (skifter højst hvert {AIR_VENT_HOLD // 60}. minut)"
+        res.update(til=want, grund=why, under=round(under, 2))
+        return res
+
+    async def _vent_apply(self, s: SourceState, v: dict[str, Any]) -> None:
+        """Ventilationen til/fra og dens hastighed – kun det, der ikke allerede står sådan."""
+        mode_e, sp_e = s.conf.get(CONF_ASSIST), s.conf.get(CONF_ASSIST_SPEED)
+        mst = self.hass.states.get(mode_e or "")
+        if mst is None or mst.state in ("unknown", "unavailable"):
+            return
+        want = bool(v.get("til"))
+        a = self.air.setdefault(s.sid, {}).setdefault("vent", {})
+        dom = mode_e.split(".", 1)[0]
+        if want and sp_e and (maks := _num(v.get("maks"))) is not None and _num((self.hass.states.get(sp_e) or mst).state) != maks:
+            await self.hass.services.async_call(sp_e.split(".", 1)[0], "set_value", {"entity_id": sp_e, "value": maks}, blocking=True)
+        if bool(self.air_assist(s)) == want:
+            return
+        if dom in ("select", "input_select"):
+            opts = mst.attributes.get("options") or []
+            pick = next((o for o in opts if o.lower() in (("on", "til") if want else ("off", "fra"))), None)
+            if pick is None:
+                return
+            await self.hass.services.async_call(dom, "select_option", {"entity_id": mode_e, "option": pick}, blocking=True)
+        else:
+            await self.hass.services.async_call(dom if dom in ("fan", "switch", "input_boolean", "light") else "homeassistant",
+                                                "turn_on" if want else "turn_off", {"entity_id": mode_e}, blocking=True)
+        a["t"] = time.time()
+        _LOGGER.info("%s: ventilation %s (%s)", s.name, "til" if want else "fra", v.get("grund"))
+
     def air_assist(self, s: SourceState) -> bool | None:
         """Kører ventilationen, der fordeler varmen? None uden en valgt ventilation."""
         eid = s.conf.get(CONF_ASSIST)
@@ -2294,6 +2357,21 @@ class VarmemodelCoordinator:
         if key == AIR_REF:
             # føleren ved enheden: dens egen, eller føleren i et af kildens rum (det, varmepumpen hænger i)
             return [AIR_REF_UNIT, *[r["name"] or r["key"] for r in self.rooms_cfg if self.room_source(r) is s]]
+        if key == AIR_VENT_ROOMS:
+            # alle kombinationer af kildens rum (uden rummet ved enheden – det er dér, varmen hentes fra)
+            ref = self.air_setting(s, AIR_REF)
+            names = [r["name"] or r["key"] for r in self.rooms_cfg if self.room_source(r) is s and (r["name"] or r["key"]) != ref][:5]
+            out = []
+            for m in range(1, 1 << len(names)):
+                out.append(" + ".join(n for k, n in enumerate(names) if m >> k & 1))
+            return sorted(out, key=lambda x: (-x.count("+"), x)) or ["–"]
+        if key in (AIR_VENT_DAY, AIR_VENT_NIGHT):
+            sp = self.hass.states.get(s.conf.get(CONF_ASSIST_SPEED) or "")
+            if sp is None:
+                return ["til"]
+            lo, hi = _num(sp.attributes.get("min")), _num(sp.attributes.get("max"))
+            lo, hi = max(1, int(lo or 1)), int(hi or 4)
+            return [str(k) for k in range(lo, hi + 1)]
         if key in (AIR_SP_TOP, AIR_SP_LOW):
             lo, hi, stp = float(a.get("min_temp") or 16), float(a.get("max_temp") or 30), float(a.get("target_temp_step") or 0.5)
             if key == AIR_SP_LOW and (base := self._air_floor_base(s)) is not None:
@@ -2310,8 +2388,13 @@ class VarmemodelCoordinator:
             return f"{max(low):.1f}" if low else None
         if v is not None:
             return v
-        if key == AIR_SWITCH:
+        if key in (AIR_SWITCH, AIR_VENT_SWITCH):
             return False
+        if key == AIR_VENT_ROOMS:
+            return self.air_options(s, key)[0]  # alle rum
+        if key in (AIR_VENT_DAY, AIR_VENT_NIGHT):
+            o = self.air_options(s, key)
+            return o[-1] if key == AIR_VENT_DAY else o[0]
         for k, dflt in AIR_TIMES:
             if k == key:
                 return dflt
@@ -2712,6 +2795,13 @@ class VarmemodelCoordinator:
             # det, stigen har sat: sådan kendes trinnet igen på klimaentiteten ved næste kvarter (navnet er det, der
             # faktisk køres – også når setpunktet er løftet til gulvet)
             a["cmd"] = [cur.preset or cur.fan, sp_out, rel(cur.preset or cur.fan, sp_out)]
+        # Ventilationen, der fordeler varmen (fx fra gangen ind i værelserne): kører, når et af dens rum skal bruge varme –
+        # under gulvet (plus forvarmning før en blokering), stopper først 0,3 °C over (0,5 °C mens planen forvarmer) – og
+        # føleren ved enheden er varmere end det koldeste af dem (1 °C for at starte, 0,5 °C for at blive ved). Højeste
+        # hastighed efter kildens nat/dag. Blokeret: slukket, undtagen »Jeg fryser«. Skifter højst hvert AIR_VENT_HOLD sek.
+        if s.conf.get(CONF_ASSIST):
+            out["vent"] = self._vent_decide(s, a, show, pre, blocked, boost, night, ref if ref is not None else _num(attrs.get("current_temperature")), now)
+            a["view"]["ventilation_styring"] = out["vent"]
         presets = attrs.get("preset_modes") or []
         # Powerful – ikke et trin på stigen, men mere luft, når det trænger: alle rum under gulvet (plus forvarmning før
         # en blokering), eller planen skal bruge mere end midten for at nå gulvet før blokeringen. Kun på højeste blæser,
@@ -4017,6 +4107,11 @@ class VarmemodelCoordinator:
         self.commands[s.sid] = d
         if clim and self.air_setting(s, AIR_SWITCH):
             await self._air_apply(s, clim, d)
+        if d.get("vent") and self.air_setting(s, AIR_VENT_SWITCH):
+            try:
+                await self._vent_apply(s, d["vent"])
+            except Exception:  # noqa: BLE001 – ventilationen må aldrig vælte planen
+                _LOGGER.exception("%s: ventilationen kunne ikke styres", s.name)
         return {"plan": plan, "rooms": show, "rq": rq}
 
     async def async_replan(self) -> None:

@@ -184,6 +184,12 @@ CONF_EL_POWER = "el_power"  # luft-luft: eleffekt (W) – til forbrug pr. trin (
 CONF_ASSIST = "assist_fan"  # luft-luft: ventilation der fordeler varmen (til/fra-tilstand)
 CONF_ASSIST_SPEED = "assist_fan_speed"  # valgfri: dens hastighed (0 = står)
 AIR_SELECTS = ("air_priority", "air_fan_min", "air_fan_day", "air_fan_night", "air_swing_v", "air_swing_h", "air_ref", "air_sp_low", "air_sp_top")
+AIR_VENT_SWITCH = "air_vent_control"  # Varmemodel styrer ventilationen, der fordeler varmen (kræver en valgt ventilation)
+AIR_VENT_ROOMS = "air_vent_rooms"  # de rum, ventilationen henter varme til (fx to værelser)
+AIR_VENT_DAY = "air_vent_day"  # ventilationens højeste hastighed om dagen (efter kildens nat/dag)
+AIR_VENT_NIGHT = "air_vent_night"  # … og om natten
+AIR_VENT_SELECTS = (AIR_VENT_ROOMS, AIR_VENT_DAY, AIR_VENT_NIGHT)
+AIR_VENT_HOLD = 300  # sekunder: ventilationen skifter højst så tit (ellers kører den til/fra, når et rum ligger på gulvet)
 AIR_REF = "air_ref"  # føleren ved enheden, som stigens temperaturer måles fra: enhedens egen eller et af kildens rum
 AIR_REF_UNIT = "enheden"  # valget »enhedens egen føler«
 AIR_SP_TOP = "air_sp_top"  # stigens højeste setpunkt (°C) – standard: rummenes højeste gulv + AIR_SPAN

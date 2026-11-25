@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import VarmemodelConfigEntry
 import time as _time
 
-from .const import AIR_BOOST, AIR_SWITCH, CONF_DHW_SWITCH, CONF_DHW_TEMP, CONF_FLOW_TARGET, CONF_ONOFF_TARGET, DHW_CONTROL, FLOW_SWITCH, HYDRO_SWITCH
+from .const import AIR_BOOST, AIR_SWITCH, AIR_VENT_SWITCH, CONF_ASSIST, CONF_DHW_SWITCH, CONF_DHW_TEMP, CONF_FLOW_TARGET, CONF_ONOFF_TARGET, DHW_CONTROL, FLOW_SWITCH, HYDRO_SWITCH
 from .sensor import SourceEntity
 
 
@@ -21,6 +21,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
     for sid, s in c.sources.items():
         if c.air_climate(s):
             async_add_entities([AirControlSwitch(c, s), AirBoostSwitch(c, s)], config_subentry_id=sid)
+            if s.conf.get(CONF_ASSIST):
+                async_add_entities([AirVentSwitch(c, s)], config_subentry_id=sid)
         else:
             if s.conf.get(CONF_FLOW_TARGET):
                 async_add_entities([FlowControlSwitch(c, s)], config_subentry_id=sid)
@@ -47,6 +49,24 @@ class AirControlSwitch(SourceEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.coordinator.async_set_air(self.src, AIR_SWITCH, False)
+
+
+class AirVentSwitch(AirControlSwitch):
+    """Til: Varmemodel tænder og slukker ventilationen, der fordeler varmen, og sætter dens hastighed (højst »Ventilation
+    maks.« dag/nat). Fra: ventilationen styres andetsteds – Varmemodel viser kun, hvad den ville gøre."""
+
+    def __init__(self, coordinator: Any, s: Any) -> None:
+        SourceEntity.__init__(self, coordinator, s, AIR_VENT_SWITCH)
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self.coordinator.air_setting(self.src, AIR_VENT_SWITCH))
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self.coordinator.async_set_air(self.src, AIR_VENT_SWITCH, True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self.coordinator.async_set_air(self.src, AIR_VENT_SWITCH, False)
 
 
 class AirBoostSwitch(SourceEntity, SwitchEntity):

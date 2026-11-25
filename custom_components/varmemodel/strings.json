@@ -283,6 +283,15 @@
           "balance": "balance",
           "comfort": "comfort"
         }
+      },
+      "air_vent_rooms": {
+        "name": "Ventilation rooms"
+      },
+      "air_vent_day": {
+        "name": "Ventilation max day"
+      },
+      "air_vent_night": {
+        "name": "Ventilation max night"
       }
     },
     "number": {
@@ -337,6 +346,9 @@
       },
       "dhw_control": {
         "name": "Varmemodel controls hot water"
+      },
+      "air_vent_control": {
+        "name": "Varmemodel controls ventilation"
       }
     },
     "time": {

@@ -283,6 +283,15 @@
           "balance": "balance",
           "comfort": "komfort"
         }
+      },
+      "air_vent_rooms": {
+        "name": "Ventilation til rum"
+      },
+      "air_vent_day": {
+        "name": "Ventilation maks. dag"
+      },
+      "air_vent_night": {
+        "name": "Ventilation maks. nat"
       }
     },
     "number": {
@@ -337,6 +346,9 @@
       },
       "dhw_control": {
         "name": "Varmemodel styrer varmt vand"
+      },
+      "air_vent_control": {
+        "name": "Varmemodel styrer ventilationen"
       }
     },
     "time": {

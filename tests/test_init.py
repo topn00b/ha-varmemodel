@@ -2735,3 +2735,46 @@ async def test_air_ladder_has_a_lowest_setpoint(ha: HomeAssistant) -> None:
     c.air[air].update(on=False, rung=None)
     d = c._air_step(s, "climate.ll", p, cold, True, False, t + 360)  # noqa: SLF001
     assert d["setpoint"] == 19.5 and c.air[air]["view"]["trin_liste"][0]["setpunkt"] == 19.5
+
+
+async def test_ventilation_follows_night_and_day_and_room_need(ha: HomeAssistant) -> None:
+    """Ventilationen, der fordeler varmen: kører, når et af dens rum er under gulvet og føleren ved enheden er varmere end
+    det koldeste rum (1 °C for at starte); højeste hastighed efter kildens nat/dag (»Ventilation maks. dag/nat«);
+    slukket i blokerede timer; skifter højst hvert 5. minut. Varmemodel skriver kun, når kontakten er slået til."""
+    from types import SimpleNamespace
+
+    c, s, air = await _air_ref_entry(ha)
+    ha.states.async_set("select.vent_mode", "Off", {"options": ["Auto", "Off", "On"]})
+    ha.states.async_set("number.vent_speed", "1", {"min": 0, "max": 10})
+    s.conf["assist_fan"], s.conf["assist_fan_speed"] = "select.vent_mode", "number.vent_speed"
+    calls: list = []
+    ha.services.async_register("select", "select_option", lambda call: calls.append(("mode", call.data["option"])))
+    ha.services.async_register("number", "set_value", lambda call: calls.append(("speed", call.data["value"])))
+    assert c.air_options(s, "air_vent_rooms") == ["Loft + Reposen", "Loft", "Reposen"]
+    assert c.air_options(s, "air_vent_day") == [str(k) for k in range(1, 11)]
+    assert c.air_setting(s, "air_vent_day") == "10" and c.air_setting(s, "air_vent_night") == "1"
+    c.settings[f"{air}.air_vent_rooms"], c.settings[f"{air}.air_vent_day"] = "Loft", "4"
+    room = lambda t: [SimpleNamespace(name="Loft", t_now=t, t_min=19.5)]  # noqa: E731
+    a: dict = {}
+    now = time.time()
+    # under gulvet, gangen 1,5 °C varmere: til – dagens maks.
+    v = c._vent_decide(s, a, room(19.0), {}, False, False, False, 20.5, now)  # noqa: SLF001
+    assert v["til"] and v["maks"] == "4" and not v["styrer"]
+    # nat: nattens maks.
+    assert c._vent_decide(s, a, room(19.0), {}, False, False, True, 20.5, now)["maks"] == "1"  # noqa: SLF001
+    # gangen ikke varm nok, rummet over gulvet, blokeret: fra
+    assert not c._vent_decide(s, a, room(19.0), {}, False, False, False, 19.5, now)["til"]  # noqa: SLF001
+    assert not c._vent_decide(s, a, room(19.9), {}, False, False, False, 21.0, now)["til"]  # noqa: SLF001
+    assert not c._vent_decide(s, a, room(19.0), {}, True, False, False, 21.0, now)["til"]  # noqa: SLF001
+    assert c._vent_decide(s, a, room(19.0), {}, True, True, False, 21.0, now)["til"]  # noqa: SLF001 – jeg fryser
+    # forvarmning før en blokering: rummet skal også op over gulvet + forvarmningen
+    assert c._vent_decide(s, a, room(19.9), {"Loft": 0.6}, False, False, False, 21.0, now)["til"]  # noqa: SLF001
+    # skrives: til og hastighed
+    await c._vent_apply(s, {"til": True, "maks": "4"})  # noqa: SLF001
+    await ha.async_block_till_done()
+    assert ("speed", 4.0) in calls and ("mode", "On") in calls
+    # lige skiftet: et nyt skift venter
+    ha.states.async_set("select.vent_mode", "On", {"options": ["Auto", "Off", "On"]})
+    ha.states.async_set("number.vent_speed", "4", {"min": 0, "max": 10})
+    v = c._vent_decide(s, c.air[air], room(19.9), {}, False, False, False, 21.0, time.time())  # noqa: SLF001
+    assert v["til"] and "venter" in v["grund"]

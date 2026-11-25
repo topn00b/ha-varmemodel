@@ -368,8 +368,13 @@ Med `source: <varmekildens navn>` viser kortet kun den varmekilde: dens rum, pla
 | *Højeste setpunkt* (valg, 0.31.0) | stigens top. Standard: rummenes højeste gulv + 3 °C |
 | *Nat begynder / slutter* (tid) | standard 22:00–07:00 |
 | *Lameller op/ned og side* (valg) | »uændret« eller en fast stilling |
+| *Varmemodel styrer ventilationen* (kontakt, 0.33.0) | med en valgt ventilation, der fordeler varmen: Varmemodel tænder og slukker den og sætter hastigheden. Fra = kun visning |
+| *Ventilation til rum* (valg, 0.33.0) | de rum, ventilationen henter varme til (fx to værelser) |
+| *Ventilation maks. dag / nat* (valg, 0.33.0) | højeste hastighed – nat og dag følger kildens *Nat begynder/slutter* |
 
 **Forbrug pr. trin (0.12.1):** vælg luft-luft-kildens *Eleffekt* (W) i opsætningen – energimålere er for grove pr. kvarter. Trinene navngives efter blæser og niveau – setpunktets afstand til føleren ved enheden (fx »High +0,5« og »Mid +-1,0«) – så det lærte hører til trinnet, uanset hvor varmt der er. Første gang fyldes forbruget pr. trin ud fra de seneste 14 døgns historik (det, varmepumpen faktisk har kørt).
+
+**Ventilation (0.33.0):** kører, når et af dens rum er under gulvet (plus forvarmning før en blokering) og føleren ved enheden er mindst 1 °C varmere end det koldeste af dem (0,5 °C for at blive ved); stopper, når rummene er 0,3 °C over (0,5 °C mens planen forvarmer). Hastigheden er *maks. dag* eller *maks. nat* efter kildens nat. I blokerede timer slukket, undtagen *Jeg fryser*. Den skifter højst hvert 5. minut. **Powerful** (0.32.0) bruges – ikke som et trin på stigen – når alle rum er under gulvet eller ved forvarmning, og kun når højeste blæser er tilladt.
 
 **Stigen måles fra føleren ved enheden (0.31.0):** en luft-luft-varmepumpe er sin egen termostat – den arbejder efter, hvor langt setpunktet ligger fra den temperatur, den selv ser, ikke efter setpunktet i sig selv. Setpunkter langt under dens egen temperatur giver derfor alle det samme (laveste effekt – og endnu længere nede stopper og starter den selv), og setpunkter målt fra rummenes gulv betyder noget forskelligt alt efter, hvor varmt der er ved enheden. Derfor måles stigens temperaturer fra *Føler ved enheden*: laveste trin ligger 1,5 °C under føleren (varmepumpens laveste effekt uden egne stop), hvert trin en halv grad højere (op til 3 °C over laveste trin og aldrig over *Højeste setpunkt*), og setpunkterne følger føleren – stiger den en halv grad, flytter hele stigen med. Så er et trin et bestemt arbejde for varmepumpen, og forbruget pr. trin er en egenskab ved trinnet. Start og stop bestemmer planen. Uden en føler ved enheden måles trinene fra rummenes højeste gulv.
 

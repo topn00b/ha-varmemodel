@@ -9,7 +9,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import VarmemodelConfigEntry
 from homeassistant.const import EntityCategory
 
-from .const import AIR_SELECTS, CONF_DHW_TEMP, CONF_ONOFF_TARGET, DHW_PRIORITY, MODE_CALIBRATED, MODE_FROZEN, PRIORITY, SOFT_OPTIONS, SOFT_START
+from .const import AIR_SELECTS, AIR_VENT_SELECTS, CONF_ASSIST, CONF_DHW_TEMP, CONF_ONOFF_TARGET, DHW_PRIORITY, MODE_CALIBRATED, MODE_FROZEN, PRIORITY, SOFT_OPTIONS, SOFT_START
 from .entity import VarmemodelEntity
 from .planner import PRIORITIES
 
@@ -65,6 +65,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
     for sid, s in c.sources.items():
         if c.air_climate(s):
             async_add_entities([AirSelect(s, k) for k in AIR_SELECTS], config_subentry_id=sid)
+            if s.conf.get(CONF_ASSIST):
+                async_add_entities([AirSelect(s, k) for k in AIR_VENT_SELECTS], config_subentry_id=sid)
         elif s.conf.get(CONF_ONOFF_TARGET):
             async_add_entities([SoftStartSelect(s)], config_subentry_id=sid)
 
