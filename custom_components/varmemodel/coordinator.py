@@ -56,6 +56,8 @@ from .calibration import (
 from .dhw import DhwHour, TankModel, learn_tank, plan_dhw, run_pause
 from .air_control import (
     LEARN_HOLD,
+    POWERFUL,
+    down_from,
     W_SETTLE,
     band,
     build_ladder,
@@ -2344,7 +2346,8 @@ class VarmemodelCoordinator:
         st = self.hass.states.get(self.air_climate(s) or "")
         a = st.attributes if st else {}
         if key in ("air_fan_day", "air_fan_night"):
-            return fan_options(a.get("fan_modes")) or ["–"]
+            # »powerful« (varmepumpens preset) som øverste valg: så bruger stigen den på vej op – aldrig på vej ned
+            return [*fan_options(a.get("fan_modes")), *([POWERFUL] if POWERFUL in (a.get("preset_modes") or []) else [])] or ["–"]
         if key == "air_fan_min":
             # laveste trin kan være varmepumpens »quiet« – så står den først
             return [*(["quiet"] if "quiet" in (a.get("preset_modes") or []) else []), *fan_options(a.get("fan_modes"))] or ["–"]
@@ -2407,7 +2410,8 @@ class VarmemodelCoordinator:
             return AIR_REF_UNIT
         if key == AIR_SP_TOP:
             return self._air_top_default(s)
-        fans = self.air_options(s, "air_fan_day")
+        cst = self.hass.states.get(self.air_climate(s) or "")
+        fans = fan_options((cst.attributes if cst else {}).get("fan_modes")) or ["–"]
         if key == "air_fan_day":
             return fans[-1]
         if key == "air_fan_night":
@@ -2558,7 +2562,7 @@ class VarmemodelCoordinator:
         names = [label(x) for x in ladder]
         idx_of = {n_: k for k, n_ in enumerate(names)}
         rungs = [(x.preset or x.fan or "", level(x.setpoint)) for x in ladder]
-        order = ["quiet", *fans]
+        order = ["quiet", *fans, POWERFUL]
 
         def find(lab: Any) -> int | None:
             """Trinnets plads på stigen nu (stigen bygges om ved nat/dag, min. blæser og toppen): det samme trin, ellers det nærmeste."""
@@ -2675,6 +2679,7 @@ class VarmemodelCoordinator:
             i, changed, down_since, reason = choose_step(prev, n_steps, margins, down_ok,
                                                          now, float(a.get("changed", 0.0)), a.get("down_since"), start, tgt,
                                                          up_to=up_from(ladder, prev) if prev is not None else None, floor=floor_i,
+                                                         down_to=down_from(ladder, prev) if prev is not None else None,
                                                          **({"up_every": up_every, "rising": rising, "min_rise": min_rise, "rise_txt": rise_txt}
                                                             if up_every else {}))
             if not start_learned:
@@ -2706,8 +2711,9 @@ class VarmemodelCoordinator:
             starts[b] = label(ladder[min(i, len(ladder) - 1)])
         # Det trin, der faktisk kører nu (matches på blæser og setpunkt), og forbruget pr. trin ud fra elmåleren
         act = None
-        if st is not None and st.state == "heat" and attrs.get("preset_mode") != "powerful":  # powerful er ikke et trin: læres ikke
-            nm = "quiet" if (quiet and attrs.get("preset_mode") == "quiet") else attrs.get("fan_mode")
+        if st is not None and st.state == "heat":
+            nm = ("quiet" if (quiet and attrs.get("preset_mode") == "quiet")
+                  else POWERFUL if attrs.get("preset_mode") == POWERFUL else attrs.get("fan_mode"))
             sp_a, cmd = _num(attrs.get("temperature")), a.get("cmd")
             if cmd and nm == cmd[0] and sp_a is not None and abs(sp_a - float(cmd[1])) < 0.01:
                 act = cmd[2]  # det trin, stigen selv har sat – også når setpunktet siden er fulgt med føleren
@@ -2803,20 +2809,6 @@ class VarmemodelCoordinator:
             out["vent"] = self._vent_decide(s, a, show, pre, blocked, boost, night, ref if ref is not None else _num(attrs.get("current_temperature")), now)
             a["view"]["ventilation_styring"] = out["vent"]
         presets = attrs.get("preset_modes") or []
-        # Powerful – ikke et trin på stigen, men mere luft, når det trænger: alle rum under gulvet (plus forvarmning før
-        # en blokering), eller planen skal bruge mere end midten for at nå gulvet før blokeringen. Kun på højeste blæser,
-        # og kun når højeste blæser er tilladt nu (nat/dag). Panasonicen slår den selv fra efter ca. 20 min. – den sættes
-        # igen ved næste kvarter
-        pw_why = None
-        if a["on"] and cur is not None and "powerful" in presets and not boost and fans and cap == fans[-1] and cur.fan == cap:
-            if margins and all(v < 0 for v in margins.values()):
-                pw_why = "alle rum er under gulvet"
-            elif a.get("plan_uncapped"):
-                pw_why = "forvarmning – planen skal bruge mere end midten for at nå gulvet før blokeringen"
-        if pw_why:
-            out["preset"] = "powerful"
-            a["view"]["grund"] = f"{a['view']['grund']} – powerful: {pw_why}"
-        a["view"]["powerful"] = pw_why
         if boost:
             out.update(on=True, preset="powerful" if "powerful" in presets else out.get("preset"))
         a["view"]["jeg_fryser"] = boost

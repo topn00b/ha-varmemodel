@@ -41,6 +41,17 @@ class Step:
     preset: str | None = None
 
 
+POWERFUL = "powerful"  # varmepumpens preset for mere luft: øverste »blæser« på stigen, kun på vej op
+
+
+def down_from(ladder: list[Step], i: int) -> int:
+    """Trinnet ned fra ``i``: det næste lavere – men aldrig et powerful-trin (det larmer; det bruges kun på vej op)."""
+    j = i - 1
+    while j > 0 and ladder[j].preset == POWERFUL:
+        j -= 1
+    return max(0, j)
+
+
 def fan_options(fan_modes: list[str] | None) -> list[str]:
     """Blæserhastighederne fra laveste til højeste (uden »auto«)."""
     return [f for f in (fan_modes or []) if f.lower() != "auto"]
@@ -50,8 +61,12 @@ def build_ladder(fans: list[str], cap: str | None, sp_min: float, sp_max: float,
                  quiet: bool = False, floor: str | None = None) -> list[Step]:
     """Trinene: for hver temperatur fra ``sp_min`` til ``sp_max`` alle blæsere fra laveste (evt. »quiet«) til ``cap``.
 
+    ``cap`` = »powerful«: alle blæsere og øverst på hver temperatur højeste blæser med varmepumpens »powerful« – den
+    bruges kun på vej op (``choose_step`` springer den over på vej ned: den larmer).
+
     ``floor``: den laveste blæser, stigen må bruge (min. blæser). Blæserne under den – og »quiet« – udgår. Ligger den over
     ``cap`` (fx om natten), vinder ``cap``: støjgrænsen er brugerens udtrykkelige valg, og stigen er så kun temperaturer."""
+    pw = cap == POWERFUL and bool(fans)
     if cap in fans:
         fans = fans[: fans.index(cap) + 1]
     if floor in fans:
@@ -59,6 +74,8 @@ def build_ladder(fans: list[str], cap: str | None, sp_min: float, sp_max: float,
     elif floor is not None and floor != "quiet" and fans:
         fans, quiet = fans[-1:], False  # min. blæser ligger over maks.: kun maks.
     row: list[tuple[str | None, str | None]] = ([(None, "quiet")] if quiet else []) + [(f, None) for f in fans]
+    if pw:
+        row.append((fans[-1], POWERFUL))
     if not row:
         row = [(None, None)]
     sps, sp, step = [sp_min], sp_min, max(0.1, sp_step)
@@ -144,7 +161,7 @@ def choose_step(cur: int | None, n: int, margins: dict[str, float], down_ok: boo
                 changed: float, down_since: float | None, start: int | None = None,
                 target: int | None = None, up_every: int = UP_EVERY, rising: dict[str, float] | None = None,
                 min_rise: float = 0.2, rise_txt: str = "", up_to: int | None = None,
-                floor: int | None = None) -> tuple[int, float, float | None, str]:
+                floor: int | None = None, down_to: int | None = None) -> tuple[int, float, float | None, str]:
     """Næste trin. ``margins``: rum → målt − (gulv + forvarmning). ``down_ok``: alle rum over gulv + usikkerhed.
     ``target``: trinnet der dækker planens el-mål (None = ukendt). ``up_to``: trinnet op herfra, når et rum mangler varme
     (``up_from``; ellers det næste). ``floor``: det laveste trin, der ikke lige har vist sig at være for lidt – der gås
@@ -179,10 +196,11 @@ def choose_step(cur: int | None, n: int, margins: dict[str, float], down_ok: boo
         return cur, changed, None, f"mod planens el-mål (trin {target}) – venter"
     if down_ok and (target is None or target < cur):
         ds = down_since if down_since is not None else now
+        dn = down_to if down_to is not None and down_to < cur else cur - 1
         if cur > 0 and now - ds >= DOWN_HOLD and now - changed >= DOWN_GAP:
-            if floor is not None and cur - 1 < floor and now - changed < 2 * DOWN_GAP:
-                return cur, changed, ds, f"rummene har overskud, men trin {cur - 1} var ikke nok for lidt siden – venter med at prøve det igen"
-            return cur - 1, now, None, ("mod planens el-mål – et trin ned" if target is not None
+            if floor is not None and dn < floor and now - changed < 2 * DOWN_GAP:
+                return cur, changed, ds, f"rummene har overskud, men trin {dn} var ikke nok for lidt siden – venter med at prøve det igen"
+            return dn, now, None, ("mod planens el-mål – et trin ned" if target is not None
                                         else "alle rum over gulv + usikkerhed i 30 min. – et trin ned")
         return cur, changed, ds, "rummene har overskud – venter med at gå ned"
     return cur, changed, None, "rummene holder – trinnet holdes" + (f" (planens el-mål: trin {target})" if target is not None else "")

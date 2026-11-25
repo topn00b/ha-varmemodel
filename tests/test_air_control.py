@@ -286,3 +286,21 @@ def test_what_one_step_learns_is_shared_with_the_others() -> None:
     lo, hi = (0.254 + 0.197) / 0.76, 0.9
     assert src == "skøn" and n == 0 and abs(v - (lo + (hi - lo) * 0.5 / 1.5)) < 1e-9
     assert eff_lookup({"HighMid +0.5": [0.2, 0.5, 3]}, "High", 0.5) == (None, None, 0)  # for få kvarterer: ikke lært
+
+
+def test_powerful_is_the_top_fan_on_the_way_up_only() -> None:
+    """»powerful« som maks. blæser: øverst på hver temperatur; op går stigen på powerful, ned springer den over den
+    (den larmer)."""
+    from custom_components.varmemodel.air_control import POWERFUL, build_ladder, down_from, up_from
+
+    lad = build_ladder(["Low", "Mid", "High"], POWERFUL, 20.0, 21.0, 0.5, floor="Mid")
+    names = [(x.preset or x.fan, x.setpoint) for x in lad]
+    assert names == [("Mid", 20.0), ("High", 20.0), (POWERFUL, 20.0), ("Mid", 20.5), ("High", 20.5), (POWERFUL, 20.5),
+                     ("Mid", 21.0), ("High", 21.0), (POWERFUL, 21.0)]
+    assert lad[2].fan == "High"
+    # op: High 20,0 → powerful 20,0 → powerful 20,5
+    assert up_from(lad, 1) == 2 and up_from(lad, 2) == 5
+    # ned: powerful 21,0 → High 21,0 → … Mid 21,0 → High 20,5 (powerful 20,5 springes over)
+    assert down_from(lad, 8) == 7 and down_from(lad, 6) == 4 and down_from(lad, 3) == 1
+    # uden powerful som maks.: som før
+    assert all(x.preset is None for x in build_ladder(["Low", "Mid", "High"], "High", 20.0, 21.0, 0.5))
