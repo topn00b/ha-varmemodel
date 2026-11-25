@@ -212,6 +212,8 @@ class IceWatchSensor(SourceEntity, SensorEntity):
             "rim_24t_kwh_varme": df.get("q_day"), "rim_24t_afrimninger_målt": df.get("q_day_n"),
             "rim_faktor": [{"ude": a, "pct": round(g * 100, 1)} for a, g in self.coordinator._frost_points(self.src)] or None,  # noqa: SLF001
             "fremløb_holdes": bool((self.coordinator.air.get(f"hydro:{self.src.sid}") or {}).get("ice_hold")),
+            # Faldet i ydelse frem mod afrimningen (rå COP de første 15 min. → de sidste 10 min.) i husets rolige og hårde cyklusser
+            "ydelse_mod_afrimning": w.get("fade"),
             "metode": "ydelse i stabil drift (5-minutters portioner) i procent af husets egen COP-model; ren = de første 15 min. "
                       "efter en afrimning eller start, slut = de sidste 10 min., snit = hele cyklussen; lav = ringere end ni ud af ti "
                       "tidligere cyklusser",
@@ -324,7 +326,9 @@ class StatusSensor(VarmemodelEntity, SensorEntity):
             "begrænsede_tal": last.get("limited") or [],
             "opsamlet_fra": _ts_local(hrs[0]) if hrs else None,
             "opsamlede_timer": len(hrs),
-            "følere": {"ude": c.conf.get("outdoor_temp"), "vejr": c.conf.get("weather")},
+            "følere": {"ude": c.conf.get("outdoor_temp"), "vejr": c.conf.get("weather"),
+                       # prisloftet (brugerens egen tal-hjælper) og føleren med de kvarterer, der ligger over det – til fanen
+                       "prisloft": c.conf.get("price_cap_entity"), "kvarterer_over_loft": c.conf.get("block_quarters_entity")},
         }
 
 
@@ -560,7 +564,7 @@ class PlanCostSensor(SourceEntity, SensorEntity):
     def native_value(self) -> float | None:
         return (self.coordinator.plans.get(self.src.sid) or {}).get("cost_kr")
 
-    _unrecorded_attributes = frozenset({"i_går_timer"})
+    _unrecorded_attributes = frozenset({"i_går_timer", "sammenligning"})
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -568,7 +572,9 @@ class PlanCostSensor(SourceEntity, SensorEntity):
         y = dict(self.coordinator.yesterday.get(self.src.sid) or {})
         hrs = y.pop("timer", None)
         return {"heat_kwh": p.get("heat_kwh"), "el_kwh": p.get("el_kwh"), "demand_kwh": p.get("demand_kwh"),
-                "horizon_h": self.coordinator.plan_meta.get("horizon_h"), "i_går": y or None, "i_går_timer": hrs}
+                "horizon_h": self.coordinator.plan_meta.get("horizon_h"), "i_går": y or None, "i_går_timer": hrs,
+                # Varmemodel mod jævn drift og jævn drift med pause kl. 17–21: hvad samme varme havde kostet
+                "sammenligning": self.coordinator.compare_view(self.src)}
 
 
 class MeasuresSensor(VarmemodelEntity, SensorEntity):

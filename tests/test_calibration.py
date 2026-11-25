@@ -12,9 +12,14 @@ from custom_components.varmemodel.calibration import (
     fit_cooling,
     fit_flow,
     fit_heat_loss,
+    fit_lift,
     frost_cycles,
+    frost_fade,
     guard,
     ice_watch,
+    kw_at,
+    lift_for,
+    lift_levels,
     quantile,
     theil_sen,
 )
@@ -524,3 +529,81 @@ def test_frost_price_per_outdoor_band() -> None:
     # et bånd med for lidt varme tæller ikke med
     few = fit_defrost(hours + [Hour(ts=99 * 3600, q=4.0, e=1.5, t_out=4.0, t_in=21.0, t_flow=34.0, comp=60, dhw=0, defrost=1)])
     assert [b["t_out"] for b in few.extra["per_kwh"]] == [-1.0, 1.5, 8.0]
+
+
+def _lift_slots(pairs: list[tuple[float, float]], n: int = 10, t0: int = 1_800_000_000) -> tuple[list[Slot], dict[int, float], list[tuple[float, float]]]:
+    """Portioner til løft-tabellen: for hvert (løft, kW) ``n`` portioner med retur 25 °C og målet 25 + løft."""
+    slots, ret, target, t = [], {}, [], t0
+    for lift, kw in pairs:
+        target.append((t, 25.0 + lift))
+        for _ in range(n):
+            slots.append(Slot(t, kw / 12, kw / 36, 1.0, 25.0 + lift, 30.0))
+            ret[t] = 25.0
+            t += 300
+    return slots, ret, target
+
+
+def test_lift_table_is_learned_from_the_house() -> None:
+    """Løftet (fremløbsmål − retur) → effekt: median pr. hel grad, voksende, og først når nok grader er målt. En portion, hvor
+    målet blev ændret undervejs, tæller ikke, og en portion uden retur heller ikke."""
+    slots, ret, target = _lift_slots([(3, 3.2), (4, 3.6), (5, 3.5), (6, 4.3), (7, 5.2), (9, 7.0)])
+    tab = fit_lift(slots, ret, target)
+    assert [r[0] for r in tab] == [3.0, 4.0, 5.0, 6.0, 7.0, 9.0] and all(r[2] == 10 for r in tab)
+    kws = [r[1] for r in tab]
+    assert kws == sorted(kws) and kws[1] == kws[2] == 3.55  # 4 og 5 °C brød rækkefølgen: de får deres fælles effekt
+    assert kws[0] == 3.2 and kws[-1] == 7.0
+    # for få grader målt: ingen tabel (så kører alle trin som før)
+    assert fit_lift(*_lift_slots([(3, 3.2), (4, 3.6), (5, 3.9)])) == []
+    # en grad med for få portioner tæller ikke med
+    few = _lift_slots([(3, 3.2), (4, 3.6), (5, 3.9), (6, 4.3)], n=10)
+    extra = _lift_slots([(8, 6.5)], n=3, t0=1_800_100_000)
+    assert [r[0] for r in fit_lift(few[0] + extra[0], {**few[1], **extra[1]}, few[2] + extra[2])] == [3.0, 4.0, 5.0, 6.0]
+    # målet ændret midt i en portion: den portion tæller ikke
+    slots, ret, target = _lift_slots([(3, 3.2), (4, 3.6), (5, 3.9), (6, 4.3)], n=9)
+    target.insert(1, (slots[0].ts + 100, 31.0))
+    target.insert(2, (slots[1].ts, 28.0))
+    assert fit_lift(slots, ret, sorted(target))[0][2] == 8
+    # uden retur i en portion: den tæller ikke
+    del ret[slots[-1].ts]
+    assert fit_lift(slots, ret, sorted(target))[-1][2] == 8
+
+
+def test_lift_levels_follow_the_heat_pumps_calm_range() -> None:
+    """Prioritetens løft: økonomi = løftet, der giver 15 % over den laveste stabile effekt (det rolige område), balance = midt
+    imellem det og den største effekt, komfort intet loft. Hele grader; uden tabel eller uden forskel: intet."""
+    tab = [[2.0, 3.18, 10], [3.0, 3.18, 55], [4.0, 3.59, 69], [5.0, 3.74, 138], [6.0, 4.25, 112], [7.0, 5.21, 92], [8.0, 6.52, 33],
+           [9.0, 7.1, 23], [10.0, 7.6, 13], [11.0, 7.6, 10]]  # husets tabel 25/11-2026
+    assert lift_for(tab, 3.63) is not None and 4.0 < lift_for(tab, 3.63) < 4.5 and lift_for(tab, 1.0) == 2.0 and lift_for(tab, 9.0) is None
+    assert kw_at(tab, 4.0) == 3.59 and kw_at(tab, 1.0) == 3.18 and kw_at(tab, 20.0) == 7.6 and abs(kw_at(tab, 6.5) - 4.73) < 0.01
+    lv = lift_levels(tab, 3.16, 5.7)
+    assert lv["economy"] == {"løft": 4.0, "kw": 3.59} and lv["balance"] == {"løft": 6.0, "kw": 4.25}
+    assert lv["fuld"] == {"løft": 10.0, "kw": 7.6} and "comfort" not in lv
+    assert lift_levels([], 3.16, 5.7) is None and lift_levels(tab, None, 5.7) is None and lift_levels(tab, 3.16, None) is None
+    # varmepumpens laveste stabile effekt ligger over tabellens top: intet roligt område at holde den i
+    assert lift_levels(tab, 7.5, 8.0) is None
+    # en flad tabel (løftet ændrer ikke effekten): intet at styre efter
+    assert lift_levels([[3.0, 4.0, 20], [4.0, 4.0, 20], [5.0, 4.0, 20], [6.0, 4.0, 20]], 3.5, 6.0) is None
+    # balance, der falder sammen med »alt, hvad den kan«, udgår (balance kører så som komfort)
+    steep = [[3.0, 3.0, 20], [4.0, 3.7, 20], [5.0, 6.9, 20], [6.0, 7.0, 20]]
+    lv = lift_levels(steep, 3.2, 7.0)
+    assert lv["economy"]["løft"] == 4.0 and "balance" not in lv
+
+
+def test_frost_fade_shows_the_drop_towards_a_defrost() -> None:
+    """Faldet frem mod afrimningen: rå COP de første 15 min. mod de sidste 10 min., delt i husets rolige og hårde cyklusser –
+    kun i rimvejr og kun cyklusser på mindst 30 min.; først når hver gruppe har nok."""
+    def cyc(kw: float, start: float, end: float, ude: float = 1.0, minutes: int = 60) -> dict:
+        return {"t": 0, "til": minutes * 60, "min": minutes, "ude": ude, "kw": kw, "ren": 1.0, "slut": 0.9, "snit": 0.95, "n": minutes // 5,
+                "cop_ren": start, "cop_slut": end}
+    calm = [cyc(3.5, 2.9, 2.6, minutes=100) for _ in range(6)]
+    hard = [cyc(6.5, 2.6, 2.0, minutes=40) for _ in range(6)]
+    f = frost_fade(calm + hard)
+    assert f["rolig"] == {"n": 6, "kw": 3.5, "min": 100, "cop_ren": 2.9, "cop_slut": 2.6, "fald_pct": 10.3}
+    assert f["hård"]["fald_pct"] == 23.1 and f["hård"]["min"] == 40 and f["grænse_kw"] == 5.0
+    assert frost_fade(calm + hard[:5]) is None  # for få hårde
+    assert frost_fade(calm + [cyc(6.5, 2.6, 2.0, ude=5.0) for _ in range(6)]) is None  # mildt vejr tæller ikke
+    assert frost_fade(calm + [cyc(6.5, 2.6, 2.0, minutes=20) for _ in range(6)]) is None  # korte cyklusser tæller ikke
+    # frost_cycles giver de rå tal, faldet regnes af
+    slots = [Slot(1_800_000_000 + 300 * i, 0.5, 0.5 / (3.0 - 0.1 * i), 1.0, 33.0, 10.0 + 5 * i) for i in range(8)]
+    c = frost_cycles(slots, {"a": 4.0, "b": 0.1, "c": -0.03, "d": 0.0})[0]
+    assert c["cop_ren"] == 2.9 and c["cop_slut"] == 2.35

@@ -388,6 +388,62 @@ def _choice_rows(plans: list[Plan], ks: dict[str, int]) -> list[dict[str, Any]]:
     return rows
 
 
+def compare_even(rows: list[tuple[int, float, float, float]], model: SourceModel, target: float,
+                 pause: tuple[int, int] = (17, 21)) -> dict[str, Any] | None:
+    """Samme varme leveret på tre måder – hvad havde elen kostet? Til oversigten »Varmemodel mod jævn drift«.
+
+    ``rows``: døgnets timer som (lokal time 0–23, kWh varme i timen, ude °C, pris kr pr. kWh el).
+    - ``model``: husets COP-model brugt på de faktiske timer – viser, hvor godt modellen rammer det målte
+    - ``jævn``: varmen delt ligeligt på alle timerne (en varmepumpe, der bare holder temperaturen)
+    - ``pause``: jævnt på timerne uden for ``pause`` (slukket kl. 17–21, hvor tariffen typisk er højest)
+    El regnes med husets COP ved timens udetemperatur og det fremløb, effekten kræver – dog mindst varmepumpens laveste
+    effekt (under den kører den i ryk ved den effekt) – og med rimens faktor. None uden varme eller uden timer uden for
+    pausen."""
+    n = len(rows)
+    q_tot = sum(max(r[1], 0.0) for r in rows)
+    free = sum(1 for r in rows if not pause[0] <= r[0] < pause[1])
+    if not n or not free or q_tot <= 0:
+        return None
+
+    def el(p: float, t_out: float) -> float:
+        return p / (_cop(model, t_out, max(p, model.p_min), target) * frost_factor(model, t_out)) if p > 0 else 0.0
+
+    def tot(ps: list[float]) -> tuple[float, float]:
+        e = [el(p, r[2]) for p, r in zip(ps, rows)]
+        return round(sum(e), 2), round(sum(x * r[3] for x, r in zip(e, rows)), 2)
+
+    own = tot([max(r[1], 0.0) for r in rows])
+    even = tot([q_tot / n] * n)
+    off = tot([0.0 if pause[0] <= r[0] < pause[1] else q_tot / free for r in rows])
+    return {"timer": n, "varme_kwh": round(q_tot, 1), "model_el_kwh": own[0], "model_kr": own[1], "jævn_el_kwh": even[0],
+            "jævn_kr": even[1], "pause_el_kwh": off[0], "pause_kr": off[1], "pause": list(pause)}
+
+
+def merge_choices(eco: Plan, full: Plan) -> list[dict[str, Any]]:
+    """De tre trins valg, når økonomi regnes med sin egen (lavere) effekt: økonomi-rækken fra ``eco`` (planen med varmepumpens
+    rolige effekt som loft), balance og komfort fra ``full`` (planen med den fulde effekt). En plan uden egne valg (alle rum
+    holder, eller en hævning ændrer intet) giver en række af planen selv. Tom, når de to planer er ens og uden valg."""
+    if not eco.choices and not full.choices and abs(eco.cost_kr - full.cost_kr) < 0.05 and abs(eco.deficit - full.deficit) < 0.05:
+        return []
+    # Samme rum i alle tre rækker, så de kan sammenlignes: det, der afgør valget mellem balance og komfort – ellers økonomis
+    rum = next((c["rum"] for c in (full.choices or eco.choices)), None)
+    if rum is None:
+        worst = max(eco.problems + full.problems, key=lambda y: y["under"], default=None)
+        rum = worst["rum"] if worst else None
+
+    def row(p: Plan, name: str) -> dict[str, Any]:
+        r = next((x for x in p.choices if x["trin"] == name and x["rum"] == rum), None)
+        if r is not None:
+            return r
+        x = next((y for y in p.problems if y["rum"] == rum), None)
+        return {"trin": name, "hævet": int(p.flow_raise or 0), "kr": p.cost_kr, "kwh": p.heat_kwh, "el_kwh": p.el_kwh, "rum": rum,
+                "snit": round(float(x.get("gh", x["under"])) / max(1, int(x.get("timer", 1))), 2) if x else 0.0,
+                "under": x["under"] if x else 0.0, "temp": x["temp"] if x else None, "ts": x["ts"] if x else None,
+                "timer": int(x.get("timer", 1)) if x else 0}
+
+    return [row(eco, "economy"), row(full, "balance"), row(full, "comfort")]
+
+
 def _plan_once(hours: list[PlanHour], model: SourceModel, rooms: list[PlanRoom], target: float,
               max_pause: int = 0, past_q: list[float] | None = None,
               label: Callable[[int], str] | None = None, boost: float = 0.0, boost_hours: int = 0,

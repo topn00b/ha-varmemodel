@@ -95,6 +95,7 @@ CONF_BLOCK_NOW_ENTITY = "block_now_entity"  # blokering lige nu (fx et prisloft 
 CONF_BLOCK_NOW_STATES = "block_now_states"  # entitetens tilstande, der blokerer (kommasepareret)
 DEFAULT_BLOCK_NOW_STATES = "rød, red, r, on"
 CONF_BLOCK_QUARTERS_ENTITY = "block_quarters_entity"  # blokerede kvarterer (attribut »kvarterer«: liste af starttider)
+CONF_PRICE_CAP_ENTITY = "price_cap_entity"  # prisloftet (tal-hjælper, kr pr. kWh el), som de blokerede kvarterer regnes efter – vises og ændres i fanen
 BLOCK_QUARTERS_MIN = 2
 # En sådan time er delvist fri for vandbårne kilder, når de blokerede kvarterer ligger samlet i den ene ende og mindst så
 # mange kvarterer er frie: den frie del bruges som fortsættelse af nabotimen (fx rødt fra 06:30 → varme til 06:30)
@@ -204,4 +205,12 @@ SOFT_STEP_K = 2.0  # fremløbet hæves så meget pr. kvarter under blød start
 SOFT_OVER_RETURN_K = 3.0  # blød start begynder så meget over returen (brugeren: 4 var for hårdt)
 SOFT_FLOOR = 20.0  # og aldrig under dette fremløb
 SOFT_EVAL_S = 5400  # hver start vurderes over de første 90 min.  # højst så mange tænd/sluk pr. døgn (sluk i blokerede timer går altid igennem)  # højst så mange skrivninger af fremløbsmålet pr. døgn  # »jeg fryser« for luft-luft: øverste trin (powerful), også i blokerede timer, i højst »jeg fryser gælder højst« timer
+# Opvarmningen (prioriteten bestemmer, hvor hårdt varmepumpen presses på vej mod planens fremløb – se calibration.lift_levels)
+APPR_EVAL_S = 300  # mens loftet holder fremløbet nede, følges returen så tit
+APPR_TRIM_S = 840  # effekten måles over så lang tid, før løftet rettes (og så længe mellem to rettelser)
+APPR_TRIM_MAX = 2  # højst så mange grader lægges på løftet, når den målte effekt ligger under varmepumpens laveste stabile
+APPR_NEED = 1.25  # trinnets effekt skal dække husets behov nu med så meget, før loftet også gælder rummenes egne hævninger
+# Oversigten »Varmemodel mod jævn drift«
+CMP_MIN_HOURS = 18  # så mange timer af et døgn skal have pris og måling (uden varmt vand), før døgnet regnes
+CMP_KEEP_DAYS = 62  # så mange døgn gemmes
 UNCHANGED = "uændret"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from custom_components.varmemodel.planner import PlanHour, PlanRoom, SourceModel, make_plan
+from custom_components.varmemodel.planner import PlanHour, PlanRoom, SourceModel, compare_even, make_plan, merge_choices
 
 M = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, cop=(3.0, 0.15, -0.04, 0.0), emission_kw_k=0.25,
                 flow_c0=34.5, flow_slope=-0.6)
@@ -701,3 +701,58 @@ def test_frost_price_makes_cold_hours_hold_less_and_cost_more() -> None:
     ref = make_plan(hours(n=12, t_out=lambda i: 8.0), M, [], 20.5)
     on = next(i for i, x in enumerate(ref.hours) if x["heat_kw"])
     assert mild.hours[on]["cop"] > ref.hours[on]["cop"] * 1.03 and mild.el_kwh <= ref.el_kwh and mild.hours[on]["frost"] == 1.04
+
+
+def test_economy_with_its_own_calm_power_shows_next_to_the_others() -> None:
+    """Økonomi regnes med varmepumpens rolige effekt som loft, balance og komfort med den fulde: de tre rækker hentes fra hver
+    sin plan. Økonomi giver mindre varme pr. time, så rummet er længere under grænsen – for færre penge."""
+    from dataclasses import replace
+
+    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=2, emission_kw_k=0.283, flow_c0=30.0, flow_slope=-0.3)
+    hs = hours(26, price=lambda i: 2.0, t_out=lambda i: 0.0, blocked=lambda i: 9 <= i <= 22)
+    room = PlanRoom(name="Rum A", t_now=19.6, t_min=20.0, heat_now=0.04, heat_delayed=0.04, cool_per_hk=0.0067, margin=0.2)
+    kw = {"flow_margin": 0.0, "red_allowance": 1.0, "flow_raise_max": 10}
+    full = make_plan(hs, m, [room], 20.5, priority="balance", **kw)
+    eco = make_plan(hs, replace(m, p_max=2.5), [room], 20.5, priority="economy", **kw)
+    rows = merge_choices(eco, full)
+    assert [r["trin"] for r in rows] == ["economy", "balance", "comfort"] and all(r["rum"] == "Rum A" for r in rows)
+    assert rows[1] == full.choices[1] and rows[2] == full.choices[2]
+    assert rows[0]["kr"] == eco.cost_kr and rows[0]["kwh"] == eco.heat_kwh <= full.choices[0]["kwh"]
+    assert rows[0]["snit"] >= rows[1]["snit"]  # økonomi er mindst lige så langt under grænsen som balance
+    # Holder rummene i begge planer, og koster de det samme: intet at vælge imellem
+    warm = PlanRoom(name="Rum A", t_now=22.5, t_min=19.0, heat_now=0.04, heat_delayed=0.04, cool_per_hk=0.0067, margin=0.2)
+    free = hours(6, price=lambda i: 2.0, t_out=lambda i: 12.0)
+    a, b = make_plan(free, replace(m, p_max=2.5), [warm], 20.5, priority="economy", **kw), make_plan(free, m, [warm], 20.5, priority="balance", **kw)
+    if abs(a.cost_kr - b.cost_kr) < 0.05:
+        assert merge_choices(a, b) == []
+    # Kun loftet på effekten giver en forskel (ingen hævning hjælper): rækkerne laves af planerne selv
+    cold = PlanRoom(name="Rum B", t_now=19.0, t_min=20.0, heat_now=0.04, heat_delayed=0.04, cool_per_hk=0.0067, margin=0.2)
+    hs2 = hours(8, price=lambda i: 2.0, t_out=lambda i: 0.0)
+    e2 = make_plan(hs2, replace(m, p_max=2.2), [cold], 20.5, priority="economy", flow_margin=20.0, flow_raise_max=0)
+    f2 = make_plan(hs2, m, [cold], 20.5, priority="balance", flow_margin=20.0, flow_raise_max=0)
+    rows = merge_choices(e2, f2)
+    assert rows and rows[0]["kwh"] == e2.heat_kwh and rows[1]["kwh"] == f2.heat_kwh == rows[2]["kwh"] and rows[0]["rum"] == "Rum B"
+    assert rows[0]["hævet"] == 0 and rows[0]["timer"] >= rows[1]["timer"]
+
+
+def test_compare_even_prices_the_same_heat_three_ways() -> None:
+    """Oversigten: samme varme som Varmemodel leverede, lagt jævnt over døgnet og jævnt uden for kl. 17–21. Varme i de billige
+    nattetimer er billigere end jævnt, pausen sparer de dyre aftentimer, og under varmepumpens laveste effekt regnes der med den
+    effekts COP (den kører i ryk)."""
+    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=3, cop=(4.5, 0.17, -0.07, 0.0), emission_kw_k=0.29)
+    price = lambda h: 4.0 if 17 <= h < 21 else 3.0 if 6 <= h < 17 or h >= 21 else 1.5  # noqa: E731
+    night = [(h, 5.0 if h < 6 else 0.0, 0.0, price(h)) for h in range(24)]  # 30 kWh varme lagt i de seks billige timer
+    c = compare_even(night, m, 20.5)
+    assert c["timer"] == 24 and c["varme_kwh"] == 30.0 and c["pause"] == [17, 21]
+    cop_min = 4.5 - 0.07 * 31.0  # fremløbet for 3 kW: 20,5 + 3 ÷ 0,29 = 30,8 → 31,0 °C
+    assert abs(c["jævn_el_kwh"] - 30.0 / cop_min) < 0.02 and abs(c["pause_el_kwh"] - c["jævn_el_kwh"]) < 0.02
+    assert c["model_el_kwh"] > c["jævn_el_kwh"]  # 5 kW kræver højere fremløb end 1,25 kW (regnet som 3 kW)
+    assert c["model_kr"] < c["pause_kr"] < c["jævn_kr"]  # nattetimerne er billigst, pausen sparer aftenens tarif
+    assert abs(c["jævn_kr"] - sum(1.25 / cop_min * price(h) for h in range(24))) < 0.05
+    assert abs(c["pause_kr"] - sum(1.5 / cop_min * price(h) for h in range(24) if not 17 <= h < 21)) < 0.05
+    # rimvejr: timen giver mindre, end der måles – jævn drift bliver tilsvarende dyrere
+    from dataclasses import replace
+    f = compare_even(night, replace(m, frost=((0.0, 0.9), (6.0, 1.0))), 20.5)
+    assert abs(f["jævn_el_kwh"] - c["jævn_el_kwh"] / 0.9) < 0.02
+    assert compare_even([], m, 20.5) is None and compare_even([(18, 3.0, 0.0, 2.0)], m, 20.5) is None  # kun timer i pausen
+    assert compare_even([(3, 0.0, 0.0, 2.0)], m, 20.5) is None  # ingen varme

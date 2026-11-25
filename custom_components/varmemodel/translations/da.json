@@ -21,6 +21,7 @@
           "block_now_entity": "Blokering lige nu",
           "block_now_states": "Blokerende tilstande",
           "block_quarters_entity": "Blokerede kvarterer",
+          "price_cap_entity": "Prisloft (tal-hjælper)",
           "ground_temp": "Jordtemperatur"
         },
         "data_description": {
@@ -34,6 +35,7 @@
           "block_now_entity": "Entitet, der blokerer varme lige nu ud over timeplanen – fx en prisstatus, der er rød, når kvarterets pris er over dit loft. Varmepumperne slukkes/startes ikke, mens den står i en af tilstandene nedenfor.",
           "block_now_states": "Kommasepareret, fx »rød, on«.",
           "block_quarters_entity": "Sensor med attributten »kvarterer« (starttider for blokerede kvarterer, fx over et prisloft). En time med mindst 2 af dem planlægges som blokeret, så varmen lægges før.",
+          "price_cap_entity": "Tal-hjælperen med prisloftet i kr pr. kWh el, som de blokerede kvarterer regnes efter. Vælges den, vises loftet i Varmemodels fane og kan ændres dér.",
           "ground_temp": "Typisk jordtemperatur i kælderdybde (ca. 8–10 °C i Danmark)."
         }
       }
@@ -63,6 +65,7 @@
           "block_now_entity": "Blokering lige nu",
           "block_now_states": "Blokerende tilstande",
           "block_quarters_entity": "Blokerede kvarterer",
+          "price_cap_entity": "Prisloft (tal-hjælper)",
           "ground_temp": "Jordtemperatur"
         },
         "data_description": {
@@ -76,6 +79,7 @@
           "block_now_entity": "Entitet, der blokerer varme lige nu ud over timeplanen – fx en prisstatus, der er rød, når kvarterets pris er over dit loft. Varmepumperne slukkes/startes ikke, mens den står i en af tilstandene nedenfor.",
           "block_now_states": "Kommasepareret, fx »rød, on«.",
           "block_quarters_entity": "Sensor med attributten »kvarterer« (starttider for blokerede kvarterer, fx over et prisloft). En time med mindst 2 af dem planlægges som blokeret, så varmen lægges før.",
+          "price_cap_entity": "Tal-hjælperen med prisloftet i kr pr. kWh el, som de blokerede kvarterer regnes efter. Vælges den, vises loftet i Varmemodels fane og kan ændres dér.",
           "ground_temp": "Typisk jordtemperatur i kælderdybde (ca. 8–10 °C i Danmark)."
         }
       }

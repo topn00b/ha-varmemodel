@@ -782,7 +782,10 @@ def frost_cycles(slots: list[Slot], cop: dict[str, Any] | None) -> list[dict[str
         r = [(x.q / x.e) / max(1.2, a + b * x.t_out + c * x.t_flow + d * x.q * 12) for x in cur]
         out.append({"t": int(cur[0].ts - cur[0].run_min * 60), "til": int(cur[-1].ts + 300), "min": round(cur[-1].run_min + 5),
                     "ude": round(sum(x.t_out for x in cur) / len(cur), 1), "kw": round(sum(x.q for x in cur) * 12 / len(cur), 1),
-                    "ren": round(median(r[:3]), 3), "slut": round(median(r[-2:]), 3), "snit": round(median(r), 3), "n": len(cur)})
+                    "ren": round(median(r[:3]), 3), "slut": round(median(r[-2:]), 3), "snit": round(median(r), 3), "n": len(cur),
+                    # rå COP (varme ÷ el) i de første 15 og de sidste 10 min. – faldet frem mod afrimningen, som det betales
+                    "cop_ren": round(sum(x.q for x in cur[:3]) / sum(x.e for x in cur[:3]), 2),
+                    "cop_slut": round(sum(x.q for x in cur[-2:]) / sum(x.e for x in cur[-2:]), 2)})
 
     for s in rows:
         if cur and (s.ts - cur[-1].ts != 300 or s.run_min < cur[-1].run_min):
@@ -826,6 +829,134 @@ def ice_watch(cycles: list[dict[str, Any]], now: float, hold: dict[str, Any] | N
     hours = sum(c["til"] - c["t"] for c in run) / 3600  # driftstimer i løbet
     status = "ice" if len(run) >= ICE_WATCH_N and hours >= ICE_ALARM_H else "watch" if len(run) >= ICE_WATCH_N else "ok"
     out.update(status=status, low_run=len(run), low_hours=round(hours, 1), since=run[0]["t"] if run else None, bounds=bounds)
+    return out
+
+
+def frost_fade(cycles: list[dict[str, Any]], min_n: int = 6) -> dict[str, Any] | None:
+    """Faldet i ydelse frem mod afrimningen: fra de første 15 min. af en cyklus (ren flade) til de sidste 10 min. (»slut«),
+    delt i husets rolige og hårde cyklusser (under/over median-effekten) – så det kan ses, hvad hård drift koster undervejs,
+    ikke kun ved selve afrimningen. Kun cyklusser på mindst 30 min. i rimvejr (under ``FADE_T_OUT`` °C ude).
+    None, før der er ``min_n`` cyklusser i hver gruppe."""
+    cs = [c for c in cycles if c.get("min", 0) >= 30 and c.get("ude") is not None and c["ude"] < FADE_T_OUT
+          and c.get("cop_ren") and c.get("cop_slut") is not None and c.get("kw")]
+    if len(cs) < 2 * min_n:
+        return None
+    mid = median(c["kw"] for c in cs)
+    calm, hard = [c for c in cs if c["kw"] <= mid], [c for c in cs if c["kw"] > mid]
+    if len(calm) < min_n or len(hard) < min_n:
+        return None
+
+    def grp(g: list[dict[str, Any]]) -> dict[str, Any]:
+        return {"n": len(g), "kw": round(median(c["kw"] for c in g), 1), "min": round(median(c["min"] for c in g)),
+                "cop_ren": round(median(c["cop_ren"] for c in g), 2), "cop_slut": round(median(c["cop_slut"] for c in g), 2),
+                "fald_pct": round(100 * median(1 - c["cop_slut"] / c["cop_ren"] for c in g), 1)}
+
+    return {"grænse_kw": round(mid, 1), "rolig": grp(calm), "hård": grp(hard)}
+
+
+# ---------------------------------------------------------------- opvarmningen: løft → effekt
+# Varmepumpen regulerer selv fremløbet til målet. Hvor højt målet står over returen (løftet), er derfor det håndtag, der
+# bestemmer effekten: lille løft = rolig drift, stort løft = alt, hvad den kan. Sammenhængen læres af husets egne portioner.
+LIFT_MIN_N = 8  # så mange portioner skal en hel grad have, før den tæller
+LIFT_MIN_BANDS = 4  # så mange grader skal være målt, før løftet bruges
+ECO_OVER_MIN = 1.15  # det rolige område ligger lidt over den laveste effekt, varmepumpen kan holde (under den taber den)
+LIFT_FULL = 0.95  # »alt, hvad den kan«: det laveste løft, der giver så stor en del af den største målte effekt
+FADE_T_OUT = 3.0  # rimvejr: under så mange °C ude sætter rimen sig
+
+
+def _step_at(series: list[tuple[float, float]], t: float) -> float | None:
+    """Trinseriens værdi på tidspunktet ``t`` (den seneste ændring før eller på ``t``); None før den første."""
+    lo, hi = 0, len(series)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if series[mid][0] <= t:
+            lo = mid + 1
+        else:
+            hi = mid
+    return series[lo - 1][1] if lo else None
+
+
+def fit_lift(slots: list[Slot], ret: dict[int, float], target: list[tuple[float, float]],
+             min_n: int = LIFT_MIN_N, min_bands: int = LIFT_MIN_BANDS) -> list[list[float]]:
+    """Løftet → effekt: median kW varme for hver hel grad, fremløbsmålet stod over returen, i stabil drift.
+
+    ``ret``: returens 5-minutters snit {portionens start: °C}; ``target``: fremløbsmålet som trinserie [(tid, °C)], sorteret.
+    Portioner, hvor målet blev ændret undervejs, tæller ikke. Tabellen [[løft, kW, antal], …] gøres voksende – et større
+    løft giver aldrig mindre effekt; nabograder, der bryder det, får deres fælles (vægtede) effekt – så den kan læses begge
+    veje. Tom, når færre end ``min_bands`` grader er målt."""
+    by: dict[int, list[float]] = {}
+    for s in slots:
+        r, sp = ret.get(s.ts), _step_at(target, s.ts)
+        if r is None or sp is None or _step_at(target, s.ts + 299) != sp:
+            continue
+        by.setdefault(round(sp - r), []).append(s.q * 12)
+    rows = [[float(k), float(median(v)), len(v)] for k, v in sorted(by.items()) if len(v) >= min_n and k >= 1]
+    if len(rows) < min_bands:
+        return []
+    blocks = [[i, i, r[1] * r[2], r[2]] for i, r in enumerate(rows)]  # [første række, sidste række, sum, antal]
+    i = 0
+    while i < len(blocks) - 1:
+        if blocks[i][2] / blocks[i][3] > blocks[i + 1][2] / blocks[i + 1][3] + 1e-9:
+            a, b = blocks[i], blocks.pop(i + 1)
+            blocks[i] = [a[0], b[1], a[2] + b[2], a[3] + b[3]]
+            i = max(i - 1, 0)
+        else:
+            i += 1
+    out: list[list[float]] = []
+    for a, b, tot, n in blocks:
+        out += [[rows[j][0], round(tot / n, 2), int(rows[j][2])] for j in range(int(a), int(b) + 1)]
+    return out
+
+
+def lift_for(table: list[list[float]], kw: float) -> float | None:
+    """Det laveste løft, der giver ``kw`` (lineært mellem de målte grader); None, når tabellen ikke når så højt."""
+    if not table:
+        return None
+    if kw <= table[0][1]:
+        return float(table[0][0])
+    for (l0, k0, _n0), (l1, k1, _n1) in zip(table, table[1:]):
+        if k1 >= kw:
+            return float(l0 + (l1 - l0) * (kw - k0) / (k1 - k0)) if k1 > k0 else float(l1)
+    return None
+
+
+def kw_at(table: list[list[float]], lift: float) -> float | None:
+    """Effekten ved et løft (lineært mellem de målte grader, fladt uden for dem)."""
+    if not table:
+        return None
+    if lift <= table[0][0]:
+        return float(table[0][1])
+    for (l0, k0, _n0), (l1, k1, _n1) in zip(table, table[1:]):
+        if lift <= l1:
+            return float(k0 + (k1 - k0) * (lift - l0) / (l1 - l0))
+    return float(table[-1][1])
+
+
+def lift_levels(table: list[list[float]], p_min: float | None, p_max: float | None) -> dict[str, Any] | None:
+    """Prioritetens løft under opvarmning – så hårdt må varmepumpen presses på vej mod planens fremløb:
+
+    - økonomi: det rolige område – løftet, der giver ``ECO_OVER_MIN`` × den laveste effekt, varmepumpen holder stabilt
+      (``p_min``). Lavere end det taber den (og stopper/starter); højere koster mere pr. kWh varme og giver flere afrimninger.
+    - balance: midt imellem den effekt og varmepumpens største (``p_max``).
+    - komfort: intet loft – målet direkte (står ikke i svaret).
+    Løft i hele grader (varmepumpens trin). None, når tabellen ikke er lært, eller roligt og fuldt ikke kan skelnes."""
+    if not table or not p_min or not p_max:
+        return None
+    top = table[-1][1]
+    full = next(r[0] for r in table if r[1] >= LIFT_FULL * top)
+    eco_kw = p_min * ECO_OVER_MIN
+    le = lift_for(table, eco_kw)
+    if le is None:
+        return None
+    le = max(float(round(le)), table[0][0])
+    if le >= full:
+        return None
+    out: dict[str, Any] = {"economy": {"løft": le, "kw": round(kw_at(table, le) or 0.0, 2)}, "fuld": {"løft": full, "kw": round(top, 2)}}
+    lb = lift_for(table, (eco_kw + max(p_max, eco_kw)) / 2)
+    if lb is not None:
+        lb = max(float(round(lb)), le + 1)
+        if lb < full:
+            out["balance"] = {"løft": lb, "kw": round(kw_at(table, lb) or 0.0, 2)}
     return out
 
 

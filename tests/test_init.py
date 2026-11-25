@@ -2317,3 +2317,162 @@ async def test_frost_price_and_ice_watch_reach_the_plan(ha: HomeAssistant) -> No
         s.ice = {**s.ice, "status": "ok"}
         await c.async_replan()
         assert calls[-1]["flow_raise_max"] > free and "ice_hold" not in c.air[f"hydro:{s.sid}"] and math.isclose(c.air[f"hydro:{s.sid}"]["low_top"], 44.5)
+
+
+LIFT_TABLE = [[2.0, 3.18, 10], [3.0, 3.18, 55], [4.0, 3.59, 69], [5.0, 3.74, 138], [6.0, 4.25, 112], [7.0, 5.21, 92], [8.0, 6.52, 33],
+              [9.0, 7.1, 23], [10.0, 7.6, 13], [11.0, 7.6, 10]]
+
+
+@pytest.mark.parametrize("expected_lingering_timers", [True])
+async def test_heat_up_follows_the_return_by_priority(ha: HomeAssistant) -> None:
+    """Opvarmningen: på vej mod planens fremløb står målet prioritetens løft over returen og følger den op (økonomi: varmepumpens
+    rolige område, balance: midt imellem), komfort går direkte. Loftet falder ikke, når returen dykker; varmt vand flytter det
+    ikke; en målt effekt under den laveste stabile løfter 1 °C; dækker trinnets effekt ikke husets behov, bestemmer rummene; og
+    uden lært tabel er alt som før."""
+    c, s = await _lv_entry(ha, {"boost_entity": "input_boolean.fryser"})
+    s.conf.update(compressor="binary_sensor.komp", defrost="binary_sensor.afrim", dhw="binary_sensor.vv", flow_temp="sensor.frem")
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    hs = c.air.setdefault(f"hydro:{s.sid}", {})
+    for e, v in (("binary_sensor.afrim", "off"), ("binary_sensor.vv", "off"), ("sensor.frem", "26.0"), ("binary_sensor.komp", "on"),
+                 ("input_boolean.fryser", "off")):
+        ha.states.async_set(e, v)
+    ha.states.async_set("sensor.vp_varme", "100.0", {"unit_of_measurement": "kWh"})
+    calls: list = []
+    ha.services.async_register("climate", "set_temperature", lambda call: calls.append(call.data["temperature"]))
+    c._low_rooms_sync = lambda _s: []  # noqa: SLF001
+    c._comp_stops_sync = lambda _s, _since: []  # noqa: SLF001
+    now = time.time()
+    hs.update(low=24.0, low_t=now, start_t=now - 3000, comp_on_t=now - 3000, low_loft=35.0, low_top=40.0, low_raise=11.0)
+    plan = [{"flow": 35.0, "blocked": False}]
+    ha.states.async_set("climate.vp_flow", "heat", {"temperature": 24, "min_temp": 20, "max_temp": 45})
+    await c._flow_apply(s, plan, False)
+    assert calls[-1] == 35.0 and "appr" not in hs and c.flow_search(s)["opvarmning"] is None  # intet lært: direkte som før
+    hs["lift"] = {"t": now, "tabel": LIFT_TABLE}
+    s.accepted["min_power"], s.accepted["max_power"] = {"value": 3.16}, {"value": 5.7}
+    c.settings["priority"] = "economy"
+    ha.states.async_set("sensor.retur", "22.0")
+    await c._flow_apply(s, plan, False)
+    a = hs["appr"]
+    assert calls[-1] == 26.0 and a["aktiv"] and a["løft"] == 4.0 and a["kw"] == 3.59 and a["v"] == 26.0 and a["dækker"]
+    v = c.flow_search(s)
+    assert v["mål_nu"] == 26.0 and v["tekst"].startswith("Opvarmning (økonomi): fremløbet holdes 4 °C over returen – ca. 3,6 kW – og følger den op mod 35 °C. Nu 26 °C.")
+    assert "Forvarmer: 35 °C (søgningens 24 °C + 11 °C)" in v["tekst"]
+    o = v["opvarmning"]
+    assert o["aktiv"] and o["trin"] == "economy" and o["valg"]["economy"] == {"løft": 4.0, "kw": 3.59} and o["valg"]["balance"] == {"løft": 6.0, "kw": 4.25}
+    assert o["fuld"] == {"løft": 10.0, "kw": 7.6} and o["tabel"] == LIFT_TABLE and o["loft_nu"] == 26.0 and o["mål"] == 35.0
+    assert f"appr:{s.sid}" in c._hydro_pending  # noqa: SLF001 – returen følges igen om lidt
+    # gulvet bliver varmere: loftet følger returen op – og falder ikke, når returen dykker (afrimning)
+    ha.states.async_set("sensor.retur", "24.0")
+    await c._flow_apply(s, plan, False)
+    assert calls[-1] == 28.0
+    ha.states.async_set("sensor.retur", "22.5")
+    await c._flow_apply(s, plan, False)
+    assert calls[-1] == 28.0 and hs["appr"]["v"] == 28.0
+    # varmt vand: returen siger intet om gulvet – loftet flyttes ikke (heller ikke lige efter)
+    ha.states.async_set("binary_sensor.vv", "on")
+    ha.states.async_set("sensor.retur", "45.0")
+    await c._flow_apply(s, plan, False)
+    assert hs["appr"]["v"] == 28.0
+    ha.states.async_set("binary_sensor.vv", "off")
+    hs["dhw_off_t"] = time.time() - 100
+    await c._flow_apply(s, plan, False)
+    assert hs["appr"]["v"] == 28.0
+    hs["dhw_off_t"] = 0
+    ha.states.async_set("sensor.retur", "24.0")
+    # den målte effekt ligger under varmepumpens laveste stabile (pumpen kører langsomt): løftet hæves 1 °C – højst 2
+    hs["appr"]["q"] = [[time.time() - 900, 99.5]]  # 0,5 kWh varme på et kvarter = 2 kW
+    await c._flow_apply(s, plan, False)
+    assert hs["appr"]["trim"] == 1 and hs["appr"]["kw_målt"] == 2.0 and calls[-1] == 29.0
+    assert "(+1 °C, fordi den målte effekt lå under varmepumpens laveste stabile)" in c.flow_search(s)["tekst"]
+    hs["appr"]["q"] = [[time.time() - 900, 99.5]]
+    await c._flow_apply(s, plan, False)
+    assert hs["appr"]["trim"] == 1  # først igen efter et nyt kvarter
+    # balance: 6 °C over returen (+ den ene grad); komfort: målet direkte, uden loft
+    c.settings["priority"] = "balance"
+    await c._flow_apply(s, plan, False)
+    assert calls[-1] == 31.0 and hs["appr"]["løft"] == 6.0
+    c.settings["priority"] = "comfort"
+    await c._flow_apply(s, plan, False)
+    assert calls[-1] == 35.0 and "appr" not in hs and c.flow_search(s)["opvarmning"]["aktiv"] is False
+    # søgningens eget mål over loftet (rummene beder om mere): loftet gælder også det – når trinnets effekt dækker husets behov
+    c.settings["priority"] = "economy"
+    hs.update(low=31.0, low_raise=4.0, start_t=time.time() - 2000, comp_on_t=time.time() - 2000, need_kw=1.9)
+    await c._flow_apply(s, plan, False)
+    assert calls[-1] == 28.0 and hs["appr"]["dækker"] and hs["appr"]["aktiv"]
+    # … men dækker den ikke behovet med en fjerdedel i margen, bestemmer rummene selv (kun planens hævning holdes nede)
+    hs["need_kw"] = 3.2
+    await c._flow_apply(s, plan, False)
+    assert calls[-1] == 31.0 and hs["appr"]["dækker"] is False and c.flow_search(s)["opvarmning"]["rummene_bestemmer"] is True
+    # »jeg fryser«: intet loft
+    hs["need_kw"] = 1.9
+    ha.states.async_set("input_boolean.fryser", "on")
+    await c._flow_apply(s, plan, False)
+    assert calls[-1] == 35.0 and "appr" not in hs
+    ha.states.async_set("input_boolean.fryser", "off")
+    # opstartens løft tæller med i loftet, så målet ikke falder, når opstarten er slut; et stop rydder det hele
+    hs.update(low=24.0, low_raise=11.0, start_t=time.time(), comp_on_t=time.time(), start_k=5.1)
+    ha.states.async_set("sensor.retur", "21.5")
+    await c._flow_apply(s, plan, False)
+    assert calls[-1] == 27.0 and hs["guard"] == {"mål": 27.0, "grund": "opstart"} and hs["appr"]["v"] == 27.0
+    hs["comp_on_t"] = time.time() - 1500
+    ha.states.async_set("sensor.frem", "27.0")
+    await c._flow_apply(s, plan, False)
+    assert calls[-1] == 27.0 and hs["guard"] is None  # 21,5 + 4 = 25,5 ville være et fald: loftet står på opstartens 27
+
+
+async def test_economy_plans_with_the_heat_pumps_calm_power(ha: HomeAssistant) -> None:
+    """Økonomi holder varmepumpen i sit rolige område – så regner planen også kun med den effekt. Balance og komfort regner med
+    det, varmepumpen kan yde; uden lært løft er alt som før. Prisloftets hjælper står på status-føleren til fanen."""
+    c, s = await _lv_entry(ha, {"price_cap_entity": "input_number.loft", "block_quarters_entity": "sensor.kvarterer"})
+    ha.states.async_set("sensor.kvarterer", "0", {"kvarterer": []})
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    s.accepted["min_power"], s.accepted["max_power"] = {"value": 3.16}, {"value": 5.7}
+    c.settings["priority"] = "economy"
+    await c.async_replan()
+    assert c.plan_inputs[s.sid][1].p_max == 5.7 and "rolige område" not in c.plans[s.sid]["reason"]
+    c.air.setdefault(f"hydro:{s.sid}", {})["lift"] = {"t": time.time(), "tabel": LIFT_TABLE}
+    await c.async_replan()
+    assert c.plan_inputs[s.sid][1].p_max == 3.59
+    assert "økonomi: varmepumpen holdes i sit rolige område (ca. 3.6 kW)" in c.plans[s.sid]["reason"]
+    assert all(x["heat_kw"] <= 3.59 + 1e-6 for x in c.plans[s.sid]["hours"])
+    assert c.air[f"hydro:{s.sid}"]["need_kw"] > 0
+    c.settings["priority"] = "comfort"
+    await c.async_replan()
+    assert c.plan_inputs[s.sid][1].p_max == 5.7 and "rolige område" not in c.plans[s.sid]["reason"]
+    st = ha.states.get(er.async_get(ha).async_get_entity_id("sensor", DOMAIN, f"{c.entry.entry_id}_status"))
+    assert st.attributes["følere"]["prisloft"] == "input_number.loft" and st.attributes["følere"]["kvarterer_over_loft"] == "sensor.kvarterer"
+
+
+async def test_compare_with_even_operation_is_kept_per_day(ha: HomeAssistant) -> None:
+    """Oversigten »Varmemodel mod jævn drift«: for hvert afsluttet døgn med priser i planloggen gemmes én række – målt el og kr
+    mod samme varme leveret jævnt og jævnt med pause kl. 17–21; timer med varmt vand er ude for alle tre; et døgn, hvis sidste
+    time mangler i målingerne, venter; og rækken regnes kun én gang."""
+    from custom_components.varmemodel.planner import SourceModel
+
+    c, s = await _lv_entry(ha)
+    m = SourceModel(heat_loss_w_k=90, gains_w=200, p_max=6, p_min=3, cop=(4.5, 0.17, -0.07, 0.0), emission_kw_k=0.29)
+    day0 = dt_util.start_of_local_day(dt_util.now() - timedelta(days=1))
+    ts0 = int(day0.timestamp())
+    log = c.plan_log.setdefault(s.sid, {})
+    hours = []
+    for i in range(24):
+        ts = ts0 + i * 3600
+        log[str(ts)] = {"p": 0.0, "e": 0.0, "pr": 4.0 if 17 <= i < 21 else 2.0, "b": False}
+        hours.append(Hour(ts=ts, q=5.0 if i < 6 else 0.0, e=2.0 if i < 6 else 0.05, t_out=0.0, t_in=20.0, dhw=30.0 if i == 2 else 0.0))
+    s.last_hours = hours[:20]
+    c._compare_update(s, m, 20.5)  # noqa: SLF001 – døgnets sidste time er ikke målt endnu
+    assert c.compare_view(s) is None
+    s.last_hours = hours
+    c._compare_update(s, m, 20.5)  # noqa: SLF001
+    v = c.compare_view(s)
+    y = v["i_går"]
+    assert y["dato"] == day0.date().isoformat() and y["timer"] == 23 and y["varme_kwh"] == 25.0  # timen med varmt vand er ude
+    assert y["el_kwh"] == round(5 * 2.0 + 18 * 0.05, 2) and y["kr"] == round(5 * 2.0 * 2.0 + 14 * 0.05 * 2.0 + 4 * 0.05 * 4.0, 2)
+    assert y["jævn_kr"] > y["pause_kr"] > 0 and y["model_kr"] > 0 and y["ude"] == 0.0
+    assert v["uge"]["dage"] == 1 and v["uge"]["kr"] == round(y["kr"], 1) and len(v["døgn"]) == 1
+    before = dict(c.air[f"cmp:{s.sid}"])
+    log[str(ts0)]["pr"] = 9.0
+    c._compare_update(s, m, 20.5)  # noqa: SLF001 – regnet én gang: døgnet røres ikke igen
+    assert c.air[f"cmp:{s.sid}"] == before
+    st = ha.states.get(er.async_get(ha).async_get_entity_id("sensor", DOMAIN, f"{c.entry.entry_id}_{s.sid}_plan_cost"))
+    assert st is not None

@@ -21,6 +21,7 @@
           "block_now_entity": "Block right now",
           "block_now_states": "Blocking states",
           "block_quarters_entity": "Blocked quarter-hours",
+          "price_cap_entity": "Price cap (number helper)",
           "ground_temp": "Ground temperature"
         },
         "data_description": {
@@ -34,6 +35,7 @@
           "block_now_entity": "Entity that blocks heating right now on top of the hourly schedule – e.g. a price status that is red when the quarter-hour price is above your cap. Heat pumps are stopped/not started while it is in one of the states below.",
           "block_now_states": "Comma separated, e.g. “red, on”.",
           "block_quarters_entity": "Sensor with the attribute “kvarterer” (start times of blocked quarter-hours, e.g. above a price cap). An hour with at least 2 of them is planned as blocked, so heat is placed before it.",
+          "price_cap_entity": "The number helper holding the price cap in currency per kWh electricity that the blocked quarter-hours are derived from. When chosen, the cap is shown in the Varmemodel tab and can be changed there.",
           "ground_temp": "Typical ground temperature at basement depth (about 8–10 °C in Northern Europe)."
         }
       }
@@ -63,6 +65,7 @@
           "block_now_entity": "Block right now",
           "block_now_states": "Blocking states",
           "block_quarters_entity": "Blocked quarter-hours",
+          "price_cap_entity": "Price cap (number helper)",
           "ground_temp": "Ground temperature"
         },
         "data_description": {
@@ -76,6 +79,7 @@
           "block_now_entity": "Entity that blocks heating right now on top of the hourly schedule – e.g. a price status that is red when the quarter-hour price is above your cap. Heat pumps are stopped/not started while it is in one of the states below.",
           "block_now_states": "Comma separated, e.g. “red, on”.",
           "block_quarters_entity": "Sensor with the attribute “kvarterer” (start times of blocked quarter-hours, e.g. above a price cap). An hour with at least 2 of them is planned as blocked, so heat is placed before it.",
+          "price_cap_entity": "The number helper holding the price cap in currency per kWh electricity that the blocked quarter-hours are derived from. When chosen, the cap is shown in the Varmemodel tab and can be changed there.",
           "ground_temp": "Typical ground temperature at basement depth (about 8–10 °C in Northern Europe)."
         }
       }

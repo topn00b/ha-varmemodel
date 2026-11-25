@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.29.0';
+  const VERSION = '0.30.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -306,7 +306,7 @@
     const base = rows.find((x) => x.trin === 'economy');
     const tr = rows.map((x) => {
       const d = base && x !== base ? x.kr - base.kr : null;
-      const room = x.temp == null ? `${esc(x.rum)} holder sin grænse`
+      const room = x.rum == null ? 'rummene holder deres grænser' : x.temp == null ? `${esc(x.rum)} holder sin grænse`
         : `${esc(x.rum)} i snit ${fmt(x.snit, 2)} °C under grænsen i ${x.timer} t <span class="mut">(lavest ${fmt(x.temp, 1)} °C ${x.kl ? when(x.kl) : ''})</span>`;
       return `<tr><td>${x.trin === s0.state ? '<b>' : ''}${esc(OPT_NAMES[x.trin] || x.trin)}${x.trin === s0.state ? ' ◆</b>' : ''}</td><td class="n">${fmt(x.kr, 0)} kr${d === null ? '' : ` <span class="mut">(${sgn(d, 0)})</span>`}</td>`
         + `<td class="n">${x['hævet'] ? `+${x['hævet']} °C` : '–'}</td><td>${room}</td></tr>`;
@@ -315,7 +315,39 @@
       ? `<div class="wrap"><table><tr><th>trin</th><th class="n">planens pris</th><th class="n">fremløb</th><th>rummet, der afgør det</th></tr>${tr}</table></div>`
       : '<div class="sm mut">Alle tre trin giver samme plan lige nu: rummene holder deres grænser, eller et højere fremløb ændrer intet.</div>';
     return `<div class="b"><div class="pvh">Prioritet ${sel}<span class="mut sm"> · gemmes i Varmemodel</span></div>${body}`
-      + '<div class="sm mut" style="margin-top:4px">Planen regner hver gang alle hævninger af fremløbet igennem – op til det, varmepumpen kan yde. Økonomi: den billigste plan (der hæves kun, når et rum derved kan holde sin grænse). Balance: halvdelen af det, der kan hentes. Komfort: det hele. Ingen prisgrænser – forskelle under følernes 0,1 °C tæller ikke.</div></div>';
+      + '<div class="sm mut" style="margin-top:4px">Planen regner hver gang alle hævninger af fremløbet igennem – op til det, varmepumpen kan yde. Økonomi: den billigste plan (der hæves kun, når et rum derved kan holde sin grænse), og varmepumpen holdes i sit rolige område – planen regner kun med den effekt. Balance: halvdelen af det, der kan hentes. Komfort: det hele. Prioriteten bestemmer også, hvor hårdt varmepumpen presses på vej mod planens fremløb (se »Opvarmning« under fremløbet). Ingen prisgrænser – forskelle under følernes 0,1 °C tæller ikke.</div></div>';
+  }
+  // Prisloft: kvarterer, hvor elprisen (inkl. tariffer og afgifter) ligger over loftet, er blokeret – ingen varme. Loftet er
+  // husets egen tal-hjælper (valgt i opsætningen); her vises og ændres den, så tallet ikke er gemt.
+  function priceCapBox(h, vm) {
+    const f = (vm && at(h, vm.status)['følere']) || {}; const eid = f.prisloft; const s0 = st(h, eid); if (!s0) return '';
+    const cur = num(s0.state); const a = s0.attributes || {};
+    const lo = Math.max(num(a.min) ?? 0, 1), hi = Math.min(num(a.max) ?? 10, 8);
+    const vals = []; for (let v = lo; v <= hi + 1e-9; v += 0.25) vals.push(Math.round(v * 100) / 100);
+    if (cur !== null && !vals.some((v) => Math.abs(v - cur) < 0.005)) vals.push(cur);
+    vals.sort((x, y) => x - y);
+    const sel = `<select data-svc="${esc(String(eid).split('.')[0])}.set_value" data-eid="${esc(eid)}">${vals.map((v) => `<option value="${v}"${cur !== null && Math.abs(v - cur) < 0.005 ? ' selected' : ''}>${fmt(v, 2)} kr</option>`).join('')}</select>`;
+    const q = st(h, f.kvarterer_over_loft); const nq = q ? num(q.state) : null;
+    const over = nq === null ? '' : nq > 0 ? ` I dag og i morgen ligger ${fmt(nq, 0)} kvarterer (${fmt(nq / 4, 1)} timer) over loftet.` : ' Ingen kvarterer ligger over loftet i dag eller i morgen.';
+    return `<div class="b"><div class="pvh">Prisloft ${sel}<span class="mut sm"> pr. kWh el · gemmes i din egen hjælper</span></div>`
+      + `<div class="sm mut">Kvarterer, hvor elprisen inkl. tariffer og afgifter ligger over loftet, er blokeret – ingen varme, uanset prioritet.${esc(over)} Sæt loftet op, hvis høje priser bliver det normale; ellers er huset blokeret det meste af døgnet.</div></div>`;
+  }
+  // Varmemodel mod jævn drift: hvad samme varme havde kostet leveret jævnt over døgnet – og jævnt med pause kl. 17–21
+  function compareBox(h, src) {
+    const c = at(h, src.e('plan_cost')).sammenligning; if (!c) return '';
+    const m = c['måned'], u = c.uge;
+    const cols = [['i går', c['i_går']], [u ? `seneste ${u.dage} døgn` : null, u], [m && u && m.dage > u.dage ? `seneste ${m.dage} døgn` : null, m]].filter((x) => x[0] && x[1]);
+    if (!cols.length) return '';
+    const kr = (v) => (v == null ? '–' : `${fmt(v, 0)} kr`);
+    const dif = (v, b) => (v == null || !b ? '' : ` <span class="mut">(${sgn(100 * (v - b) / b, 0)} %)</span>`);
+    const row = (navn, key) => `<tr><td>${navn}</td>${cols.map(([, x]) => `<td class="n">${key === 'kr' ? `<b>${kr(x.kr)}</b>` : `${kr(x[key])}${dif(x[key], x.kr)}`}</td>`).join('')}</tr>`;
+    const x = cols[cols.length - 1][1];
+    const el = `Varme ${fmt(x.varme_kwh, 0)} kWh varme · el: målt ${fmt(x.el_kwh, 1)} kWh el, jævnt ${fmt(x['jævn_el_kwh'], 1)}, med pause ${fmt(x.pause_el_kwh, 1)} (${esc(cols[cols.length - 1][0])}).`;
+    const kontrol = x.model_kr != null && x.kr ? ` Kontrol: samme model brugt på Varmemodels egne timer giver ${fmt(x.model_kr, 0)} kr mod målt ${fmt(x.kr, 0)} kr.` : '';
+    return `<div class="b"><div class="pvh">Varmemodel mod jævn drift</div>`
+      + `<div class="wrap"><table><tr><th>samme varme leveret</th>${cols.map(([n]) => `<th class="n">${esc(n)}</th>`).join('')}</tr>`
+      + `${row('som Varmemodel kørte (målt)', 'kr')}${row('jævnt over døgnet', 'jævn_kr')}${row('jævnt, slukket kl. 17–21', 'pause_kr')}</table></div>`
+      + `<div class="sm mut" style="margin-top:4px">${esc(el)} Rumvarme i timerne uden varmt vand, timens elpris inkl. tariffer og afgifter. De to jævne er regnet med husets egen COP-model ved timens udetemperatur og det fremløb, effekten kræver (mindst varmepumpens laveste effekt).${esc(kontrol)} Jævn drift holder rummene varmere om dagen; her sammenlignes kun prisen for den samme varme.</div></div>`;
   }
   // Isvagt: varmepumpens seneste driftscyklusser mod husets egne tidligere – bliver lamelfladen ren efter afrimningen?
   // Enkelte lave cyklusser er almindelige (tung rim en fugtig aften); det usædvanlige er, at det bliver ved.
@@ -342,6 +374,13 @@
         + `${a.rim_24t_kwh_varme != null ? ` – det seneste døgn ${fmt(a.rim_24t_kwh_varme, 1)} kWh varme (${a['rim_24t_afrimninger_målt']} afrimninger)` : ''}. `
         + `<span class="mut">Varmemåleren tæller ikke baglæns, så det ses ikke i COP.${rf ? ` Planen regner med det: varmen, huset får, i forhold til gennemsnittet – ${esc(rf)}.` : ' Planen regner med det, når afrimninger pr. kWh varme er lært for udetemperaturen.'}</span>`
         + `${a['fremløb_holdes'] ? ` <span class="amber">Fremløbet hæves ikke over loftet, før fladen bliver ren igen.</span>` : ''}</div>`;
+    }
+    // Faldet i ydelse frem mod afrimningen: rå COP de første 15 min. → de sidste 10 min., rolige mod hårde cyklusser
+    const fd = a.ydelse_mod_afrimning;
+    if (fd && fd.rolig && fd['hård']) {
+      const g = (x, navn) => `${navn} (${fmt(x.kw, 1)} kW, ${x.min} min. pr. cyklus): COP ${fmt(x.cop_ren, 1)} → ${fmt(x.cop_slut, 1)} (−${fmt(x.fald_pct, 0)} %)`;
+      rim += `<div class="sm" style="margin-top:4px"><b>Ydelsen falder frem mod afrimningen:</b> ${esc(g(fd.rolig, 'rolig drift'))} · ${esc(g(fd['hård'], 'hård drift'))}. `
+        + `<span class="mut">De første 15 min. efter en afrimning mod de sidste 10 min. før den næste, i rimvejr. Hård drift begynder lavere og når bunden hurtigere – derfor holder økonomi varmepumpen i dens rolige område.</span></div>`;
     }
     const tr = (a.cyklusser || []).slice(-6).reverse().map((c) => `<tr><td>${esc(when(c.start).replace('kl. ', ''))}</td><td class="n">${c.min} min.</td><td class="n">${fmt(c.ude, 1)} °C</td><td class="n">${fmt(c.kw, 1)} kW</td>`
       + `<td class="n">${c.lav ? `<b style="color:${RE}">${p(c.ren_pct)}</b>` : p(c.ren_pct)}</td><td class="n">${p(c.slut_pct)}</td></tr>`).join('');
@@ -386,15 +425,21 @@
       const e = vm && vm.e(k); const x = st(h, e); if (!x) return '';
       const xa = x.attributes || {};
       return `<div class="sr"><span>${['Mindst', 'Normalt', 'Højt (bad nu, før lange blokeringer)'][i]}</span><span><input type="number" data-svc="number.set_value" data-eid="${esc(e)}" value="${esc(x.state)}" min="${xa.min}" max="${xa.max}" step="${xa.step}"><span class="mut sm"> °C</span></span></div>`;
-    }).join('') + ['dhw_use_start', 'dhw_use_end'].map((k, i) => {
-      const e = vm && vm.e(k); const x = st(h, e); if (!x) return '';
-      return `<div class="sr"><span>${['Varmt vand bruges fra', 'Varmt vand bruges til'][i]}${i ? ' <span class="mut sm">(ens = lær det selv)</span>' : ''}</span><span><input type="time" data-svc="time.set_value" data-eid="${esc(e)}" value="${esc(String(x.state).slice(0, 5))}"></span></div>`;
     }).join('');
+    // Brugstiden som to dropdowns (hele timer) – synlige i boksen, ikke i fold-ud: fra og til; ens = lær den af forbruget
+    const useSel = ['dhw_use_start', 'dhw_use_end'].map((k) => {
+      const e = vm && vm.e(k); const x = st(h, e); if (!x) return '';
+      const cur = String(x.state).slice(0, 5);
+      const opts = [...new Set([...Array.from({ length: 24 }, (_, n) => `${hh(n)}:00`), cur])].sort();
+      return `<select data-svc="time.set_value" data-eid="${esc(e)}">${opts.map((o) => `<option value="${o}"${o === cur ? ' selected' : ''}>kl. ${o.endsWith(':00') ? o.slice(0, 2) : o}</option>`).join('')}</select>`;
+    });
+    const useRow = useSel[0] && useSel[1]
+      ? `<div class="sr" style="margin:2px 0 6px"><span>Varmt vand bruges fra ${useSel[0]} til ${useSel[1]}</span><span class="mut sm">${a.brugstid_sat ? 'uden for det tidsrum må tanken være kold' : 'ens = lært af tankens fald'}</span></div>` : '';
     const det = `<details id="vvPlan"${open ? ' open' : ''}><summary class="sm">Plan, tank og indstillinger</summary>`
       + (runs ? `<div class="wrap"><table><tr><th>opvarmning</th><th class="n">mål</th><th class="n">varer</th><th class="n">el</th><th class="n">pris</th><th class="n">tank efter timen</th></tr>${runs}</table></div>` : '')
       + `<div class="sm mut" style="margin:4px 0">${esc(learned)}</div>${ctl ? `<div class="sg">${ctl}</div>` : ''}`
       + '<div class="sm mut" style="margin-top:4px">Planen lægger opvarmningerne i de billigste frie timer, så tanken er mindst »mindst«, når en time i brugstiden begynder – og fylder op tæt på en lang blokering. Uden for brugstiden må tanken gerne være kold, så der varmes tæt på morgenen i stedet for om aftenen. Økonomi varmer kun til »normalt«; balance må også bruge »højt«; komfort holder desuden tanken tæt på »normalt« i brugstiden og aldrig under »mindst«. Varmeplanen regner med opvarmningerne: i de timer rummer den mindre rumvarme.</div></details>';
-    return `<div class="b"><div class="pvh">Varmt vand ${chip} ${sel} ${tog}</div><div style="margin:4px 0 6px;font-size:14px">${esc(line)}</div>`
+    return `<div class="b"><div class="pvh">Varmt vand ${chip} ${sel} ${tog}</div><div style="margin:4px 0 6px;font-size:14px">${esc(line)}</div>${useRow}`
       + `<div class="sm">${under}<span class="mut">${esc(`${useTxt}. ${lo}${act}${wr}`)}${a.styrer ? '' : 'Varmemodel skriver ikke til varmepumpen, før styringen slås til.'}</span></div>${det}</div>`;
   }
   function settingsPanel(h, src, title = 'Indstillinger') {
@@ -1453,7 +1498,7 @@
     // Søg laveste fremløb: status i klart sprog, mål/målt/loft, graf, lært pr. udetemperatur og »Sådan virker det«
     flowPanel(h, main, vm) {
       if (!main) return '';
-      const set = iceBox(h, main, this._open && this._open.has('iceCy')) + priorityBox(h, vm, main) + hotWaterBox(h, vm, main, this._open && this._open.has('vvPlan')) + settingsPanel(h, main, 'Indstillinger');
+      const set = iceBox(h, main, this._open && this._open.has('iceCy')) + priorityBox(h, vm, main) + priceCapBox(h, vm) + compareBox(h, main) + hotWaterBox(h, vm, main, this._open && this._open.has('vvPlan')) + settingsPanel(h, main, 'Indstillinger');
       const ca = at(h, main.e('command')); const fs = ca.flow_search;
       if (!fs) return set ? `<div class="pv2">${set}</div>` : '';
       const f = sensorsOf(h, main);
@@ -1465,7 +1510,21 @@
       const værn = fs.værn && !fs.slukket ? `${fs.værn.grund === 'opstart' ? 'opstartsløft' : 'stopværn'} (søgning ${fmt(fs.mål, 0)})` : null;
       // Målet, der faktisk står i varmepumpen; venter et nyt (fx forvarmning, der højst ændres hvert kvarter): »→ 35 °C kl. 13:47«
       const want = fs.mål_nu ?? fs.mål, inVp = fs.mål_vp;
-      const why = værn || (fs.forvarmer ? `forvarmer +${fmt(fs.forvarmer, 0)} °C (søgning ${fmt(fs.mål, 0)})` : 'søger laveste');
+      const op = fs.opvarmning || null;
+      const opNu = op && op.aktiv && !fs.slukket ? `opvarmning (${OPT_NAMES[op.trin] || op.trin}): retur + ${fmt((op['løft'] ?? 0) + (op.trim || 0), 0)} °C` : null;
+      const why = værn || opNu || (fs.forvarmer ? `forvarmer +${fmt(fs.forvarmer, 0)} °C (søgning ${fmt(fs.mål, 0)})` : 'søger laveste');
+      // Opvarmning: prioritetens løft over returen (lært) – så hårdt presses varmepumpen på vej mod planens fremløb
+      let opBox = '';
+      if (op) {
+        const lv = (k) => { const x = (op.valg || {})[k]; const b = op.trin === k; return `${b ? '<b>' : ''}${OPT_NAMES[k]}${b ? ' ◆</b>' : ''} ${x ? `retur + ${fmt(x['løft'], 0)} °C ≈ ${fmt(x.kw, 1)} kW` : 'direkte (intet loft)'}`; };
+        const komf = `${op.trin === 'comfort' ? '<b>komfort ◆</b>' : 'komfort'} målet direkte${op.fuld ? ` (alt, hvad den kan: ≈ ${fmt(op.fuld.kw, 1)} kW fra retur + ${fmt(op.fuld['løft'], 0)} °C)` : ''}`;
+        const nu = op.aktiv && !fs.slukket ? ` Nu: loft ${fmt(op.loft_nu, 0)} °C mod ${fmt(op['mål'], 0)} °C${op.kw_målt != null ? `, målt ${fmt(op.kw_målt, 1)} kW` : ''}${op.trim ? ` (løftet hævet ${op.trim} °C: effekten lå under den laveste stabile)` : ''}.` : '';
+        const tab = (op.tabel || []).map((r) => `<tr><td class="n">+${fmt(r[0], 0)} °C</td><td class="n"><b>${fmt(r[1], 1)} kW</b></td><td class="n mut">${r[2]}</td></tr>`).join('');
+        opBox = `<div class="sm" style="margin-top:6px"><b>Opvarmning</b> – så højt står målet over returen på vej mod planens fremløb: ${lv('economy')} · ${lv('balance')} · ${komf}.${esc(nu)}`
+          + `${op.rummene_bestemmer ? ` <span class="amber">Trinnets effekt dækker ikke husets behov nu (${fmt(op.behov_kw, 1)} kW) med margen – rummene bestemmer selv.</span>` : ''}`
+          + `<details id="fsLift"${this._open && this._open.has('fsLift') ? ' open' : ''}><summary class="sm">Lært: løft → effekt</summary><div class="wrap"><table><tr><th class="n">mål over retur</th><th class="n">varme</th><th class="n">portioner</th></tr>${tab}</table></div>`
+          + `<div class="sm mut" style="margin-top:4px">Varmepumpen regulerer selv fremløbet til målet, så løftet over returen bestemmer effekten. Median af husets egne 5-minutters portioner i stabil drift${op['lært'] ? `, lært ${esc(when(op['lært']))}` : ''}. Økonomi: løftet, der giver 15 % over den laveste effekt, varmepumpen holder stabilt – lavere taber den, højere koster mere pr. kWh varme og giver flere afrimninger. Balance: midt imellem det og dens største effekt. Fremløbet følger returen op, til planens mål er nået; opstartsløft og stopværn gælder stadig.</div></details></div>`;
+      }
       const pend = !fs.slukket && inVp != null && want != null && Math.abs(want - inVp) >= 1;
       const nums = `<div class="fsr">${n3('Mål i varmepumpen', `${fmt(fs.slukket || inVp == null ? want : inVp, 0)} °C`,
         fs.slukket ? 'ved næste start' : pend ? `→ ${fmt(want, 0)} °C${fs.mål_kl ? ` kl. ${fs.mål_kl}` : ''} · ${why}` : why)}`
@@ -1473,7 +1532,7 @@
         + `${n3('Loft', `${fmt(fs.loft, 0)} °C`, fs.mål != null && fs.loft != null && fs.loft > fs.mål ? `${fmt(fs.loft - fs.mål, 0)} °C over målet` : 'det lærte fremløb + margen')}</div>`;
       const lært = Object.entries(fs.lært || {}).sort((a, b) => +a[0] - +b[0]).map(([k, v]) => `<tr><td>${String(+k).replace('-', '−')}…${String(+k + 5).replace('-', '−')} °C ude</td><td class="n"><b>${fmt(v, 0)} °C</b></td></tr>`).join('');
       const box = `<div class="b"><div class="pvh">Fremløb · søg laveste ${chip}</div>`
-        + `<div style="margin:4px 0 6px;font-size:14px">${esc(fs.tekst || '')}</div>` + nums + this.flowChart(h, main, fs, f)
+        + `<div style="margin:4px 0 6px;font-size:14px">${esc(fs.tekst || '')}</div>` + nums + this.flowChart(h, main, fs, f) + opBox
         + `<div class="sm" style="margin-top:6px"><b>Lært laveste fremløb</b> ${lært ? `<div class="wrap"><table>${lært}</table></div>` : '<span class="mut">– endnu intet (læres, når målet har holdt alle rum over gulvet i 3 timer)</span>'}</div>`
         + `<details id="fsHow"${this._open && this._open.has('fsHow') ? ' open' : ''}><summary class="sm">Sådan virker det</summary><div class="sm mut" style="margin-top:4px">`
         + `Luft-vand starter ved retur + 3 °C og holder målet lavt. Planen regner med samme mål, så forudsigelser og »ventet« passer med det, der kører, og den lægger flere timer med lavt fremløb.<br>`
@@ -1483,6 +1542,7 @@
         + `• startløftet læres af korte kørsler (stop inden for 20 min. efter en start eller afrimning): målet dengang − returen + 1 °C; en start, der kommer igennem opstarten, sænker det 0,25 °C<br>`
         + `• +1 °C pr. time, når et rum er på vej under gulvet inden for 3 timer (målt tendens over 2 timer)<br>• +2 °C pr. halve time, når et rum er under gulvet og ikke på vej op<br>`
         + `• +1 °C, når kompressoren alligevel stopper efter længere drift (målet er under varmepumpens laveste ydelse)<br>• −1 °C hver anden time, når alle rum er mindst 0,5 °C over gulvet og stabile<br>`
+        + `• opvarmning: på vej mod planens fremløb holdes målet højst prioritetens løft over returen (økonomi og balance) og følger den op, mens gulvet varmes – komfort går direkte til målet. Dækker trinnets effekt ikke husets behov med en fjerdedel i margen, bestemmer rummene selv<br>`
         + `• forvarmning: kan flere timer ved søgningens mål ikke holde rummene gennem en blokering, hæver planen fremløbet – vist som »forvarmer«. Op til loftet på alle trin; derover afgør »Prioritet«, hvor meget af det opnåelige der købes (højst det fremløb, varmepumpens største effekt giver)<br>`
         + `• søgningen går aldrig over loftet: det fremløb, huset selv brugte ved udetemperaturen. Planen hæver selv over det efter »Prioritet«, når det hjælper rummene. Timer, hvor Varmemodel selv satte fremløbet, tæller ikke med i det lærte – ellers ville loftet lære af sig selv og falde. Beder et rum om mere, mens målet står ved loftet, vises »ved loftet«<br>`
         + `• rummet, der bestemmer, er markeret med ◆ i rumlisten; pilen viser rummets tendens.</div></details></div>`;

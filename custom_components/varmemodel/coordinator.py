@@ -42,10 +42,13 @@ from .calibration import (
     fit_cop_steady,
     frost_points,
     fit_heat_loss,
+    fit_lift,
     fit_room,
     frost_cycles,
+    frost_fade,
     guard,
     ice_watch,
+    lift_levels,
     steady_slots,
     sun_factor,
     validate_room,
@@ -74,7 +77,7 @@ from .air_control import (
 )
 from .command import FLOW_HOLD, MIN_GAP, SLACK, Command, step
 from .inputs import blocked_hours, build_hours, hourly_forecast, hourly_prices, quarter_prices
-from .planner import FLOW_LOW_OPEN_S, FLOW_MAX as FLOW_MAX_C, PRIORITIES, PlanHour, PlanRoom, SourceModel, estimate_room, flow_boost_step, make_air_plan, make_plan, simulate_rooms
+from .planner import FLOW_LOW_OPEN_S, FLOW_MAX as FLOW_MAX_C, PRIORITIES, PRIORITY_NAMES, PlanHour, PlanRoom, SourceModel, compare_even, estimate_room, flow_boost_step, make_air_plan, make_plan, merge_choices, simulate_rooms
 from .const import (
     AIR_BOOST,
     AIR_SOFT_UP_EVERY,
@@ -95,6 +98,12 @@ from .const import (
     HYDRO_SWITCH,
     SOFT_EVAL_S,
     SOFT_FLOOR,
+    APPR_EVAL_S,
+    APPR_NEED,
+    APPR_TRIM_MAX,
+    APPR_TRIM_S,
+    CMP_KEEP_DAYS,
+    CMP_MIN_HOURS,
     PRIORITY,
     PRIORITY_DEFAULT,
     SOFT_OVER_RETURN_K,
@@ -910,8 +919,9 @@ class VarmemodelCoordinator:
         now = end.timestamp()
         rows = {**dict(s.slots), **new}  # øjebliksbillede af de gemte + de nye
         slots = [Slot(int(k), *v) for k, v in rows.items() if int(k) >= now - (ICE_REF_DAYS + 1) * 86400]
-        w = ice_watch(frost_cycles(slots, (s.accepted.get("cop_steady") or {}).get("extra")), now,
-                      (self.air.get(f"ice:{s.sid}") or {}).get("hold"))
+        cycles = frost_cycles(slots, (s.accepted.get("cop_steady") or {}).get("extra"))
+        w = ice_watch(cycles, now, (self.air.get(f"ice:{s.sid}") or {}).get("hold"))
+        w["fade"] = frost_fade([c for c in cycles if c["t"] >= now - ICE_REF_DAYS * 86400])
         day = [(a, b) for a, b in defrost if b >= now - 86400]
         gaps = [y[0] - x[0] for x, y in zip(day, day[1:]) if y[0] - x[0] < 4 * 3600]  # længere ophold er pauser, ikke rim
         w["defrost"] = {"n": len(day), "gap_min": round(median(gaps) / 60) if gaps else None,
@@ -1221,8 +1231,11 @@ class VarmemodelCoordinator:
                     # Timer, hvor Varmemodel selv satte fremløbet, tæller ikke med i husets eget fremløb (planens loft)
                     fits = await self.hass.async_add_executor_job(
                         partial(calibrate, hours, *self.plant(), flow_skip=self._flow_own(s)))
-                    steady, loss = await get_instance(self.hass).async_add_executor_job(self._steady_sync, s)
+                    steady, loss, lift = await get_instance(self.hass).async_add_executor_job(self._steady_sync, s)
                     fits["cop_steady"], fits["cop_loss"] = steady, loss
+                    if lift:
+                        # Opvarmningen: løftet (fremløbsmål − retur) → effekt, lært af husets egne portioner
+                        self.air.setdefault(f"hydro:{sid}", {})["lift"] = {"t": round(time.time()), "tabel": lift}
                 else:
                     fits = {}
                 results[sid] = fits
@@ -1397,20 +1410,24 @@ class VarmemodelCoordinator:
         return {sid: [h for h in hs if not ((h.q or 0) > 15 or (h.e or 0) > 8 or (h.q or 0) < -0.5)] for sid, hs in out.items()}
 
     # ------------------------------------------------------------ COP i stabil drift
-    def _steady_sync(self, s: SourceState) -> tuple[Fit, Fit]:
-        """5-minutters portioner fra de seneste 14 dage lægges til de gemte; COP regnes på alle."""
+    def _steady_sync(self, s: SourceState) -> tuple[Fit, Fit, list[list[float]]]:
+        """5-minutters portioner fra de seneste 14 dage lægges til de gemte; COP regnes på alle. Sidst i svaret: løftet
+        (fremløbsmål − retur) → effekt for de portioner, hvor returen og målet kendes (tom uden returføler eller mål)."""
         heat, el, flow, comp_id = s.eid(CONF_HEAT), s.eid(CONF_ELECTRICITY), s.eid(CONF_FLOW), s.eid(CONF_COMPRESSOR)
         out = self._id(CONF_OUTDOOR)
         if not (heat and el and out and flow and comp_id):
             note = "kræver varme, el, ude, fremløb og kompressor"
-            return Fit(None, 0, note=note), Fit(None, 0, note=note)
+            return Fit(None, 0, note=note), Fit(None, 0, note=note), []
         end = dt_util.utcnow()
         start = end - timedelta(days=BACKFILL_DAYS)
-        stats = statistics_during_period(self.hass, start, end, {heat, el, out, flow}, "5minute", {"energy": "kWh", "temperature": "°C"}, {"change", "mean"})
+        ret_id = s.eid(CONF_RETURN)
+        stats = statistics_during_period(self.hass, start, end, {heat, el, out, flow} | ({ret_id} if ret_id else set()), "5minute",
+                                         {"energy": "kWh", "temperature": "°C"}, {"change", "mean"})
         five: dict[int, dict[str, float | None]] = {}
         for stat_id, key, fld in ((heat, "q", "change"), (el, "e", "change"), (out, "t_out", "mean"), (flow, "t_flow", "mean")):
             for x in stats.get(stat_id, []):
                 five.setdefault(int(_ts(x["start"])), {})[key] = _num(x.get(fld))
+        ret5 = {int(_ts(x["start"])): v for x in (stats.get(ret_id, []) if ret_id else []) if (v := _num(x.get("mean"))) is not None}
 
         def ivs(key: str) -> list[tuple[float, float]]:
             eid = s.eid(key)
@@ -1426,7 +1443,28 @@ class VarmemodelCoordinator:
         cutoff = end.timestamp() - COLLECT_KEEP_DAYS * 86400
         s.slots = {k: v for k, v in s.slots.items() if int(k) >= cutoff}
         steady = fit_cop_steady([Slot(int(k), *v) for k, v in s.slots.items()])
-        return steady, fit_cop_loss(steady, five, comp, defrost, dhw)
+        lift: list[list[float]] = []
+        try:
+            lift = fit_lift([Slot(int(k), *v) for k, v in s.slots.items() if int(k) in ret5], ret5, self._target_series_sync(s, start, end))
+        except Exception:  # noqa: BLE001 – løftet er et tillæg; kalibreringen må ikke vælte på det
+            _LOGGER.debug("%s: løftet kunne ikke læres", s.name, exc_info=True)
+        return steady, fit_cop_loss(steady, five, comp, defrost, dhw), lift
+
+    def _target_series_sync(self, s: SourceState, start: datetime, end: datetime) -> list[tuple[float, float]]:
+        """Fremløbsmålet, som det har stået i varmepumpen: trinserie [(tid, °C)] fra historikken (climate: attributten
+        temperature; tal-entitet: tilstanden). Tom uden mål-entitet."""
+        eid = s.conf.get(CONF_FLOW_TARGET)
+        if not eid:
+            return []
+        res = history.get_significant_states(self.hass, start, end, [eid], include_start_time_state=True, significant_changes_only=False)
+        out: list[tuple[float, float]] = []
+        for x in res.get(eid, []):
+            if not isinstance(x, State) or x.state in ("unknown", "unavailable"):
+                continue
+            v = _num(x.attributes.get("temperature")) if eid.startswith("climate.") else _num(x.state)
+            if v is not None and (not out or out[-1][1] != v):
+                out.append((x.last_updated.timestamp(), float(v)))
+        return out
 
     # ------------------------------------------------------------ rum
     def _source_input(self, s: SourceState, h: Hour) -> float | None:
@@ -1717,6 +1755,59 @@ class VarmemodelCoordinator:
                 "timer": [{"t": _ts_local_iso(h.ts), "plan": x["p"], "faktisk": round(q(h), 2), "blokeret": x["b"]} for h, x in known],
             }
         return out
+
+    def _compare_update(self, s: SourceState, model: SourceModel, target: float) -> None:
+        """Oversigten »Varmemodel mod jævn drift«: for hvert afsluttet døgn med priser i planloggen regnes, hvad samme varme
+        havde kostet leveret jævnt – og jævnt med pause kl. 17–21 – mod det, Varmemodels drift faktisk kostede (målt el × timens
+        pris). Kun timer uden varmt vand, ens for alle tre. Én række pr. døgn, regnet én gang og gemt i ``CMP_KEEP_DAYS`` døgn."""
+        log = self.plan_log.get(s.sid) or {}
+        if not s.last_hours or not log:
+            return
+        store = self.air.setdefault(f"cmp:{s.sid}", {})
+        today = dt_util.now().date().isoformat()
+        days: dict[str, list[tuple[int, float, float, float, float]]] = {}
+        done: set[str] = set()  # døgn, hvis sidste time er med i målingerne (døgnet er helt)
+        for h in s.last_hours:
+            loc = dt_util.as_local(dt_util.utc_from_timestamp(h.ts))
+            d = loc.date().isoformat()
+            if d >= today or d in store:
+                continue
+            if loc.hour == 23:
+                done.add(d)
+            x = log.get(str(h.ts))
+            if x is None or h.q is None or h.e is None or h.t_out is None or (h.dhw or 0) > 0 or _num(x.get("pr")) is None:
+                continue
+            days.setdefault(d, []).append((loc.hour, max(h.q, 0.0), h.t_out, float(x["pr"]), max(h.e, 0.0)))
+        for d, rows in days.items():
+            if d not in done or len(rows) < CMP_MIN_HOURS:
+                continue
+            c = compare_even([r[:4] for r in rows], model, target)
+            if c is not None:
+                store[d] = {**c, "el_kwh": round(sum(r[4] for r in rows), 2), "kr": round(sum(r[4] * r[3] for r in rows), 2),
+                            "ude": round(sum(r[2] for r in rows) / len(rows), 1)}
+        for d in sorted(store)[:-CMP_KEEP_DAYS]:
+            del store[d]
+
+    def compare_view(self, s: SourceState) -> dict[str, Any] | None:
+        """Oversigten til visning: i går, de seneste 7 og 30 døgn (summer over de døgn, der er regnet) og døgnene enkeltvis."""
+        store = self.air.get(f"cmp:{s.sid}") or {}
+        if not store:
+            return None
+        today = dt_util.now().date()
+        keys = ("varme_kwh", "el_kwh", "kr", "model_kr", "jævn_kr", "pause_kr", "jævn_el_kwh", "pause_el_kwh")
+
+        def span(n: int) -> dict[str, Any] | None:
+            ds = [d for d in sorted(store) if d >= (today - timedelta(days=n)).isoformat()]
+            if not ds:
+                return None
+            return {"dage": len(ds), "fra": ds[0], "til": ds[-1], **{k: round(sum(float(store[d].get(k) or 0.0) for d in ds), 1) for k in keys}}
+
+        y = (today - timedelta(days=1)).isoformat()
+        return {"i_går": {"dato": y, **store[y]} if y in store else None, "uge": span(7), "måned": span(30),
+                "døgn": [{"dato": d, **{k: store[d].get(k) for k in ("timer", "ude", *keys)}} for d in sorted(store)[-14:]],
+                "metode": "samme varme (rumvarme, timer uden varmt vand) leveret på tre måder: Varmemodels faktiske drift (målt el × timens "
+                          "pris), jævnt over døgnet og jævnt med pause kl. 17–21 – de to sidste regnet med husets COP-model ved timens "
+                          "udetemperatur og det fremløb, effekten kræver; model_kr er samme model brugt på Varmemodels egne timer"}
 
     def measure_source(self, text: str) -> SourceState | None:
         """Hvilken varmekilde (etage) et tiltag gælder: kildens navn i titel/beskrivelse, ellers etage-ord, ellers den vandbårne."""
@@ -2488,8 +2579,21 @@ class VarmemodelCoordinator:
         if self.settings.get(f"{s.sid}.{SOFT_START}", "test") == "lavest" and (pre_start or st.state == "heat" or dom != "climate"):
             plan_now = want
             want = await self._low_flow(s, hs, hs.get("low_loft") or want, pre_start)
+            goal = want
             if hs.get("low_raise") and plan_now is not None:
-                want = max(want, min(plan_now, hs.get("low_top") or hs.get("low_loft") or plan_now))  # planens forvarmning går forud
+                goal = max(want, min(plan_now, hs.get("low_top") or hs.get("low_loft") or plan_now))  # planens forvarmning går forud
+            # Opvarmningen: målet nås i den takt, prioriteten giver – fremløbet følger returen op (økonomi: varmepumpens rolige
+            # område; balance: midt imellem; komfort: målet direkte). Dækker trinnets effekt ikke husets behov med god margen,
+            # bestemmer rummene (søgningen) selv – så sulter et lavt trin aldrig huset
+            lim = self._lift_cap(s, hs, goal)
+            appr = hs.get("appr")
+            if lim is not None and appr is not None:
+                held = min(goal, lim) if appr.get("dækker") else max(want, min(goal, lim))
+                appr["aktiv"] = held < goal - 0.5
+                goal = held
+            elif appr is not None:
+                appr["aktiv"] = False  # returen kendes ikke: intet loft denne gang
+            want = goal
             # Opstartsløft og stopværn: varmepumpens egen termostat må ikke nå at stoppe kompressoren (start/stop slider).
             # Søgningens mål er stadig det laveste, der holder rummene; værnet løfter kun det, der skrives – aldrig over loftet
             if pre_start:
@@ -2501,6 +2605,10 @@ class VarmemodelCoordinator:
             if g is not None and min(g, cap) > want:
                 want = min(g, cap)
                 hs["guard"] = {"mål": want, "grund": why}
+                if why == "opstart" and appr is not None and appr.get("v") is not None:
+                    appr["v"] = max(appr["v"], want)  # opstartens løft tæller med, så målet ikke falder, når opstarten er slut
+            if appr is not None and appr.get("aktiv"):
+                self._appr_later(s)  # returen stiger, mens gulvet varmes: følg den
             hs["soft"] = True
         elif hs.get("soft") and hs.get("start_t"):
             if hs.get("ramp0") is None:
@@ -2699,6 +2807,7 @@ class VarmemodelCoordinator:
                 if h.get("low") is not None:
                     h["low_last"] = h["low"]  # næste plan og start regner med det sidste fungerende mål
                 h["start_t"], h["soft"], h["soft_now"], h["low"] = None, False, None, None
+                h.pop("appr", None)
         except Exception:  # noqa: BLE001
             _LOGGER.exception("%s: kunne ikke %s varmepumpen", s.name, "tænde" if want_on else "slukke")
             if want_on:
@@ -2752,6 +2861,87 @@ class VarmemodelCoordinator:
         if hs.get("low_last") is not None:
             return float(hs["low_last"])
         return start_flow(self._state_num(s.eid(CONF_RETURN)), SOFT_OVER_RETURN_K, SOFT_OVER_RETURN_K, SOFT_FLOOR)
+
+    def _energy_kwh(self, eid: str | None) -> float | None:
+        """Energimålerens stand i kWh (Wh og MWh regnes om)."""
+        st = self.hass.states.get(eid) if eid else None
+        v = _num(st.state) if st else None
+        if st is None or v is None:
+            return None
+        unit = str(st.attributes.get("unit_of_measurement") or "kWh").lower()
+        return v / 1000 if unit == "wh" else v * 1000 if unit == "mwh" else v
+
+    def _lift_levels(self, s: SourceState) -> dict[str, Any] | None:
+        """Prioritetens løft under opvarmning (``calibration.lift_levels``) ud fra husets lærte tabel løft → effekt; None,
+        før tabellen er lært."""
+        table = ((self.air.get(f"hydro:{s.sid}") or {}).get("lift") or {}).get("tabel") or []
+        a = s.accepted
+        return lift_levels(table, _num((a.get("min_power") or {}).get("value")), _num((a.get("max_power") or {}).get("value")))
+
+    def _lift_cap(self, s: SourceState, hs: dict[str, Any], goal: float) -> float | None:
+        """Opvarmningens loft over det skrevne fremløb: returen + prioritetens løft – aldrig lavere end det loft, der allerede
+        er nået (returen dykker under en afrimning). None = intet loft: komfort, »jeg fryser«, eller løftet er ikke lært.
+
+        Tilstanden står i ``hs["appr"]``: ``v`` (loftet), ``løft``/``kw`` (trinnets), ``trim`` (ekstra grader, fordi den målte
+        effekt lå under varmepumpens laveste stabile – pumpen kan køre langsomt, så samme løft giver mindre), ``dækker``
+        (trinnets effekt dækker husets behov nu med ``APPR_NEED`` i margen – ellers bestemmer rummene) og ``aktiv``."""
+        prio = self.priority()
+        lv = (self._lift_levels(s) or {}).get(prio) if prio != "comfort" else None
+        boost = self.hass.states.get(self._id(CONF_BOOST_ENTITY) or "")
+        if lv is None or (boost is not None and boost.state == "on"):
+            hs.pop("appr", None)
+            return None
+        now = time.time()
+        a = hs.get("appr") or {}
+        if a.get("start_t") != hs.get("start_t"):
+            a = {"start_t": hs.get("start_t"), "trim": 0}  # ny start: forfra
+        ret = self._state_num(s.eid(CONF_RETURN))
+        comp = self.hass.states.get(s.eid(CONF_COMPRESSOR) or "")
+        dhw = self.hass.states.get(s.eid(CONF_DHW) or "")
+        dfs = self.hass.states.get(s.eid(CONF_DEFROST) or "")
+        # under og lige efter varmt vand og afrimning siger returen intet om gulvet
+        busy = ((dhw is not None and dhw.state == "on") or now - (_num(hs.get("dhw_off_t")) or 0) < DHW_AFTER_S
+                or (dfs is not None and dfs.state == "on") or now - (_num(hs.get("df_off_t")) or 0) < DHW_AFTER_S)
+        running = comp.state == "on" if comp is not None else True  # uden kompressorføler: regn med drift, mens der styres
+        smp = a.setdefault("q", [])
+        q = self._energy_kwh(s.eid(CONF_HEAT))
+        p_min = _num((s.accepted.get("min_power") or {}).get("value"))
+        if running and not busy and q is not None:
+            old = next((x for x in reversed(smp) if now - x[0] >= APPR_TRIM_S), None)
+            smp.append([round(now), q])
+            del smp[:-8]
+            if old is not None and q >= old[1]:
+                kw = (q - old[1]) / ((now - old[0]) / 3600)
+                a["kw_målt"] = round(kw, 2)
+                if (p_min and kw < p_min and a.get("aktiv") and a["trim"] < APPR_TRIM_MAX
+                        and now - (_num(a.get("trim_t")) or 0) >= APPR_TRIM_S):
+                    a["trim"] += 1
+                    a["trim_t"] = round(now)
+                    smp.clear()
+        else:
+            smp.clear()  # afrimning, varmt vand eller stop: målingen begynder forfra
+            a.pop("kw_målt", None)
+        v = _num(a.get("v"))
+        if ret is not None and not busy and (running or v is None):
+            cand = ret + lv["løft"] + a["trim"]
+            v = cand if v is None else max(v, cand)
+        need = _num(hs.get("need_kw"))
+        a.update(v=None if v is None else round(v, 1), løft=lv["løft"], kw=lv["kw"], trin=prio, mål=goal, retur=ret, t=round(now),
+                 dækker=need is None or lv["kw"] >= need * APPR_NEED)
+        hs["appr"] = a
+        return v
+
+    def _appr_later(self, s: SourceState) -> None:
+        """Under opvarmningen følger fremløbet returen: skriv det igen om lidt (højst ét ventende kald pr. kilde)."""
+        key = f"appr:{s.sid}"
+        if self._stopped or self._hydro_pending.get(key):
+            return
+
+        async def _again(_now: Any) -> None:
+            self._hydro_pending.pop(key, None)
+            await self._flow_refresh(s.sid)
+
+        self._hydro_pending[key] = async_call_later(self.hass, APPR_EVAL_S, _again)
 
     def _target_at(self, s: SourceState, t: float) -> float | None:
         """Fremløbsmålet, der stod i varmepumpen på tidspunktet t (Varmemodels egne skrivninger; ellers målet nu)."""
@@ -2938,9 +3128,9 @@ class VarmemodelCoordinator:
             hs.update(low=new, low_t=now, low_why=why, low_hold_since=now, low_step=new - low)  # det nye mål skal holde 3 t, før det læres
             self._low_log(hs, now, new, plan, why)
         hs["low_status"] = status
-        if hs.get("low_raise") or hs.get("guard"):
-            # Det skrevne mål ligger over søgningens (planens forvarmning eller et værn): så er det ikke søgningens mål,
-            # der holder rummene, og det må ikke læres som laveste fungerende fremløb
+        if hs.get("low_raise") or hs.get("guard") or (hs.get("appr") or {}).get("aktiv"):
+            # Det skrevne mål er ikke søgningens (planens forvarmning, et værn eller opvarmningens loft): så er det ikke
+            # søgningens mål, der holder rummene, og det må ikke læres som laveste fungerende fremløb
             hs["low_hold_since"] = now
         # Lært: målet har holdt alle rum over gulvet i 3 timer uden at hæve – laveste fungerende fremløb i dette ude-bånd
         if rooms and all(x["margen"] >= 0 for x in rooms) and now - (hs.get("low_hold_since") or now) >= LOW_LEARN_HOLD:
@@ -2994,6 +3184,12 @@ class VarmemodelCoordinator:
         # regnede (planen regner igen ved næste kvarter)
         k = max(0.0, float(round(eff - base))) if eff is not None else 0.0
         eff = eff if k else None
+        # Opvarmningen: loftet (retur + prioritetens løft) holder det skrevne mål under planens/søgningens, til gulvet er med
+        ap = hs.get("appr") if not off else None
+        ap_on = bool(ap and ap.get("aktiv") and ap.get("v") is not None)
+        goal_full = eff if eff is not None else base
+        if ap_on:
+            eff = min(float(goal_full), float(ap["v"]))
         g = hs.get("guard") if not off else None
         if g and g.get("mål") is not None:
             eff = max(eff or 0, g["mål"])
@@ -3032,8 +3228,12 @@ class VarmemodelCoordinator:
         else:
             text = f"Holder {f(low)} °C."
         if k and not off:
-            text = (f"Forvarmer: {f(eff)} °C (søgningens {f(low)} °C + {k:.0f} °C), fordi modellen forudser, at {f(low)} °C i flere timer "
+            text = (f"Forvarmer: {f(goal_full)} °C (søgningens {f(low)} °C + {k:.0f} °C), fordi modellen forudser, at {f(low)} °C i flere timer "
                     f"ikke holder rummene gennem den næste blokering. Søgningen fortsætter bagefter. ") + text
+        if ap_on:
+            trim = f" (+{ap['trim']} °C, fordi den målte effekt lå under varmepumpens laveste stabile)" if ap.get("trim") else ""
+            text = (f"Opvarmning ({PRIORITY_NAMES.get(ap.get('trin'), ap.get('trin'))}): fremløbet holdes {_k_txt(ap['løft'])} °C over "
+                    f"returen{trim} – ca. {_k_txt(ap['kw'])} kW – og følger den op mod {f(goal_full)} °C. Nu {f(ap['v'])} °C. ") + text
         if g and g.get("grund") == "opstart":
             text = (f"Opstartsløft: {f(g['mål'])} °C (søgningens {f(low)} °C) – varmepumpen kører lavt flow i opstarten, så målet "
                     f"holdes på retur + {_k_txt(sk)} °C, til flowet er oppe, og kompressoren ikke stopper af sig selv. ") + text
@@ -3061,6 +3261,21 @@ class VarmemodelCoordinator:
             "næste_start": dt_util.as_local(dt_util.utc_from_timestamp(start_at)).strftime("%H:%M") if off and start_at else None,
             "rum": [{k: x.get(k) for k in ("navn", "t", "gulv", "margen", "tendens", "om_3t")} for x in rooms],
             "lært": hs.get("low_learned") or {}, "log": (hs.get("low_log") or [])[-48:],
+            "opvarmning": self._appr_view(s, hs, ap, goal_full if ap_on else None),
+        }
+
+    def _appr_view(self, s: SourceState, hs: dict[str, Any], ap: dict[str, Any] | None, goal: float | None) -> dict[str, Any] | None:
+        """Opvarmningen til visning: prioritetens løft og effekt (lært), tabellen løft → effekt, og hvad der gælder lige nu."""
+        lv = self._lift_levels(s)
+        lift = hs.get("lift") or {}
+        if not lift.get("tabel"):
+            return None
+        return {
+            "trin": self.priority(), "lært": _ts_local_iso(lift["t"]) if lift.get("t") else None, "tabel": lift["tabel"],
+            "valg": {k: (lv or {}).get(k) for k in ("economy", "balance")}, "fuld": (lv or {}).get("fuld"),
+            "aktiv": bool(ap and ap.get("aktiv")), "loft_nu": (ap or {}).get("v"), "løft": (ap or {}).get("løft"),
+            "kw": (ap or {}).get("kw"), "trim": (ap or {}).get("trim") or 0, "kw_målt": (ap or {}).get("kw_målt"),
+            "mål": goal, "rummene_bestemmer": bool(ap and ap.get("dækker") is False), "behov_kw": hs.get("need_kw"),
         }
 
     def _soft_eval_sync(self, s: SourceState, starts: list[dict[str, Any]]) -> None:
@@ -3801,10 +4016,35 @@ class VarmemodelCoordinator:
                        "economy": self.setting(CONF_ECONOMY), "comfort": offset, "flow_margin": fm, "red_spans": self.red_spans,
                        "running": running, "priority": self.priority(), "flow_raise_free": raise_free,
                        **({"flow_raise_max": raise_max} if raise_max is not None else {}), **({"busy": busy} if busy else {})}
+            # Husets behov lige nu (til opvarmningens loft: dækker trinnets effekt ikke behovet, bestemmer rummene selv)
+            if hours:
+                hs["need_kw"] = round(max(0.0, (model.heat_loss_w_k * (target - hours[0].t_out) - model.gains_w) / 1000), 2)
+            # Opvarmningen: i økonomi holdes varmepumpen i sit rolige område – så regner planen også kun med den effekt
+            # (varmen spredes over flere timer og bliver senere færdig). Balance og komfort regner med det, den kan yde.
+            lv = self._lift_levels(s) if low_cap is not None else None
+            eco_kw = _num(((lv or {}).get("economy") or {}).get("kw"))
+            prio = self.priority()
+            model_e = (replace(model, p_max=max(model.p_min, eco_kw))
+                       if eco_kw and eco_kw < model.p_max - 0.05 and not boost else None)
+            use = model_e if model_e is not None and prio == "economy" else model
+            pause = int(self.setting(CONF_MAX_PAUSE))
+
+            def _mk(m: SourceModel, pr: str) -> Any:
+                return partial(make_plan, hh, m, rooms, target, pause, label=_clock, **{**plan_kw, "priority": pr})
+
             # Planens input gemmes (kun i hukommelsen) til diagnostikken, så planen kan genkøres uden for huset
-            self.plan_inputs[sid] = (hh, model, rooms, target, {**plan_kw, "max_pause": int(self.setting(CONF_MAX_PAUSE))})
-            p = await self.hass.async_add_executor_job(
-                partial(make_plan, hh, model, rooms, target, int(self.setting(CONF_MAX_PAUSE)), label=_clock, **plan_kw))
+            self.plan_inputs[sid] = (hh, use, rooms, target, {**plan_kw, "max_pause": pause})
+            p = await self.hass.async_add_executor_job(_mk(use, prio))
+            try:
+                self._compare_update(s, model, target)
+            except Exception:  # noqa: BLE001 – oversigten må aldrig vælte planen
+                _LOGGER.debug("%s: oversigten mod jævn drift kunne ikke regnes", s.name, exc_info=True)
+            if model_e is not None:
+                # De tre trins valg til visning: økonomi regnet med sin egen (rolige) effekt, de to andre med den fulde
+                if prio == "economy":
+                    p.choices = merge_choices(p, await self.hass.async_add_executor_job(_mk(model, "balance")))
+                else:
+                    p.choices = merge_choices(await self.hass.async_add_executor_job(_mk(model_e, "economy")), p)
             if low_cap is not None:
                 k = float(p.flow_raise or 0.0)
                 hs["low_raise"] = k
@@ -3814,6 +4054,9 @@ class VarmemodelCoordinator:
                         x["flow"] = float(round(min(low_cap + k, hs.get("low_top") or hs["low_loft"])))
                 p.reason += (f" – søger laveste fremløb: planen regner med {low_cap:.0f} °C (loft {hs['low_loft']:.0f} °C)"
                              + (f"; forvarmer +{k:.0f} °C, fordi {low_cap:.0f} °C i flere timer ikke holder rummene" if k else ""))
+                if use is model_e:
+                    p.reason += (f" – økonomi: varmepumpen holdes i sit rolige område (ca. {eco_kw:.1f} kW), så planen regner "
+                                 f"kun med den effekt")
             elif sid:
                 (self.air.get(f"hydro:{sid}") or {}).pop("low_raise", None)
             if hs.get("ice_hold"):
