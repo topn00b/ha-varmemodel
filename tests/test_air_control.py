@@ -144,3 +144,36 @@ def test_choose_step_calm_holds_when_room_rises() -> None:
     assert i == 6 and "stiger" in why and "holder" in why
     i, _c, _d, why = choose_step(6, 12, {"A": -1.0}, False, 10_000.0, 10_000.0 - 1900, None, up_every=1800, rising={"A": 0.05}, min_rise=0.2)
     assert i == 7 and "stiger kun" in why
+
+
+def test_defrosts_are_read_from_the_power_curve() -> None:
+    """Luft-luft uden afrimningsføler: en afrimning er et kort dyk midt i driften – effekten falder til under halvdelen i
+    nogle minutter, og varmepumpen kører videre. En kort slukning (helt ned på slukket-effekten), et langt stop og et dyk
+    uden drift bagefter tæller ikke; to dyk lige efter hinanden er én hændelse."""
+    from custom_components.varmemodel.air_control import power_defrosts
+
+    def run(minutes: list[tuple[int, float]]) -> list[tuple[float, float]]:
+        """(antal minutter, W) i forlængelse af hinanden → et punkt hvert 10. sekund."""
+        out, t = [], 0.0
+        for n, w in minutes:
+            for _ in range(n * 6):
+                out.append((t, w))
+                t += 10
+        return out
+
+    # 20 min. drift ved 700 W, dyk til 105 W i 3 min., videre ved 600 W og et løft til 1800 W: én afrimning
+    pts = run([(20, 700.0), (3, 105.0), (8, 600.0), (6, 1800.0), (20, 700.0)])
+    assert power_defrosts(pts, 150.0, 5.0) == [(20 * 60.0, 23 * 60.0, 105.0)]
+    assert power_defrosts(pts, 150.0) == [(20 * 60.0, 23 * 60.0, 105.0)]  # slukket-effekten er ikke kendt endnu
+    # helt ned på slukket-effekten: en kort slukning, ingen afrimning
+    assert power_defrosts(run([(20, 700.0), (4, 6.0), (20, 700.0)]), 150.0, 5.0) == []
+    # for langt (15 min.) eller ingen drift bagefter: et stop
+    assert power_defrosts(run([(20, 700.0), (15, 105.0), (20, 700.0)]), 150.0, 5.0) == []
+    assert power_defrosts(run([(20, 700.0), (3, 105.0), (30, 8.0)]), 150.0, 5.0) == []
+    # varmepumpen kørte ikke før (under »kører«): intet dyk at tale om
+    assert power_defrosts(run([(20, 100.0), (3, 20.0), (20, 100.0)]), 150.0, 5.0) == []
+    # to dyk med to minutter imellem er samme hændelse (det laveste gælder) – her ender det på slukket: ingen afrimning
+    two = run([(20, 700.0), (1, 200.0), (2, 500.0), (4, 6.0), (20, 700.0)])
+    assert power_defrosts(two, 150.0, 5.0) == [] and len(power_defrosts(two, 150.0)) == 1
+    # et enkelt udfald på 10 sekunder er ikke et dyk (der regnes på minutgennemsnit) – heller ikke uden kendt slukket-effekt
+    assert power_defrosts(run([(30, 700.0)])[:100] + [(1000.0, 0.0)] + run([(30, 700.0)])[101:], 150.0) == []

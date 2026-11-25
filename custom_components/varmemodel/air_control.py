@@ -193,3 +193,42 @@ def efficient_step(ladder_w: list[float | None], ladder_eff: list[float | None],
     need = target_w * avg
     ok = [(w, i) for i, w, e in known if w * e >= need]
     return min(ok)[1] if ok else max(known, key=lambda x: x[1] * x[2])[0]
+
+
+def power_defrosts(points: list[tuple[float, float]], run_w: float, off_w: float | None = None) -> list[tuple[float, float, float]]:
+    """Afrimninger for en luft-luft-varmepumpe uden afrimningsføler, læst af el-effekten: (start, slut, laveste W).
+
+    En afrimning ses som et kort dyk midt i driften. Varmepumpen kører (mindst ``run_w`` i de ti minutter før), effekten
+    falder til under halvdelen af det, den lige har trukket, i 1–12 minutter, og den kører videre inden for ti minutter
+    bagefter. Et stop, fordi rummet er varmt nok, varer længere eller følges ikke af drift – det tæller ikke. Falder
+    effekten helt ned til det, varmepumpen bruger slukket (``off_w``, den laveste effekt der er set), er det en kort
+    slukning og ingen afrimning; dyk lige efter hinanden regnes som ét.
+    ``points``: (tidspunkt, W) i tidsrækkefølge; regnes på minutgennemsnit, så enkelte udfald ikke bliver til dyk."""
+    mins: dict[int, list[float]] = {}
+    for t, w in points:
+        mins.setdefault(int(t // 60), []).append(w)
+    ks = sorted(mins)
+    mean = {k: sum(v) / len(v) for k, v in mins.items()}
+    low = {k: min(v) for k, v in mins.items()}
+    dips: list[list[float]] = []  # [første minut, sidste minut, laveste W]
+    i = 0
+    while i < len(ks):
+        k = ks[i]
+        before = sorted(mean[x] for x in ks[max(0, i - 10):i] if k - x <= 10)
+        base = before[len(before) // 2] if len(before) >= 5 else 0.0
+        if base < run_w or mean[k] >= 0.5 * base:
+            i += 1
+            continue
+        j = i
+        while j < len(ks) and mean[ks[j]] < 0.5 * base and ks[j] - k <= 12:
+            j += 1
+        after = [mean[x] for x in ks[j:j + 10] if x - ks[j - 1] <= 10]
+        if ks[j - 1] - k + 1 <= 12 and j < len(ks) and after and max(after) >= run_w:
+            lo = min(low[x] for x in ks[i:j])
+            if dips and k - dips[-1][1] <= 3:  # lige efter det forrige dyk: samme hændelse
+                dips[-1][1], dips[-1][2] = ks[j - 1], min(dips[-1][2], lo)
+            else:
+                dips.append([k, ks[j - 1], lo])
+        i = max(j, i + 1)
+    stop = None if off_w is None else off_w + 15.0  # så tæt på slukket-effekten er varmepumpen slukket, ikke i afrimning
+    return [(a * 60.0, (b + 1) * 60.0, lo) for a, b, lo in dips if stop is None or lo > stop]

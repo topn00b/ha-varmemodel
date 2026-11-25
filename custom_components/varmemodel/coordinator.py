@@ -63,6 +63,7 @@ from .air_control import (
     target_step,
     is_night,
     learn_w,
+    power_defrosts,
     preload_per_room,
 )
 from .command import FLOW_HOLD, MIN_GAP, SLACK, Command, step
@@ -496,6 +497,14 @@ class VarmemodelCoordinator:
         """Dagens COP for hver vandbåren kilde (5-minutters portioner siden midnat), hvert kvarter."""
         for s in self.sources.values():
             if s.kind != SOURCE_HYDRONIC:
+                # Luft-luft uden afrimningsføler: afrimningerne læses af el-effekten (til visning og isvagt)
+                if s.conf.get(CONF_EL_POWER) and not s.eid(CONF_DEFROST):
+                    try:
+                        res = await get_instance(self.hass).async_add_executor_job(self._air_defrost_sync, s)
+                        if res:
+                            self.air.setdefault(s.sid, {}).update(res)
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.exception("Afrimninger for %s kunne ikke læses", s.name)
                 continue
             try:
                 s.today = await get_instance(self.hass).async_add_executor_job(self._today_sync, s) or {}
@@ -514,6 +523,27 @@ class VarmemodelCoordinator:
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Isvagten fejlede")
         self._notify()
+
+    def _air_defrost_sync(self, s: SourceState) -> dict[str, Any] | None:
+        """Det seneste døgns afrimninger for en luft-luft-varmepumpe uden afrimningsføler, læst af el-effekten
+        (``power_defrosts``). »Kører« er halvdelen af det laveste lærte trin; slukket-effekten er den laveste, der er set."""
+        peid = s.conf.get(CONF_EL_POWER)
+        a = self.air.get(s.sid) or {}
+        end = dt_util.utcnow()
+        res = history.get_significant_states(self.hass, end - timedelta(hours=24), end, [peid], include_start_time_state=True,
+                                             significant_changes_only=False, no_attributes=True)
+        pts = [(z.last_updated.timestamp(), v) for z in res.get(peid, []) if (v := _num(z.state)) is not None]
+        if len(pts) < 60:
+            return None
+        mins: dict[int, list[float]] = {}
+        for ts, w in pts:
+            mins.setdefault(int(ts // 60), []).append(w)
+        off = min([sum(v) / len(v) for v in mins.values()] + ([float(a["p_off"])] if a.get("p_off") is not None else []))
+        learned = [float(v) for v in (a.get("w") or {}).values() if _num(v)]
+        d = power_defrosts(pts, 0.5 * min(learned) if learned else 150.0, off)
+        return {"p_off": round(off, 1),
+                "defrost": {"n": len(d), "last": round(d[-1][1]) if d else None, "t": round(end.timestamp()),
+                            "list": [[round(x), round(y), round(z)] for x, y, z in d[-12:]]}}
 
     def _ice_sync(self, s: SourceState) -> tuple[dict[str, list[float]], dict[str, Any]] | None:
         """Isvagten for en vandbåren kilde: portionerne i stabil drift fra de seneste to døgn (nye), og de seneste
@@ -1993,7 +2023,11 @@ class VarmemodelCoordinator:
                      "ventilation": None if vent is None else ("til" if vent else "fra"),
                      "ventilation_entitet": s.conf.get(CONF_ASSIST), "ventilation_hastighed_entitet": s.conf.get(CONF_ASSIST_SPEED),
                      "ventilation_virkning_pct": self._vent_effect(a.get("eff", {})),
-                     "starttrin": dict(starts), "skiftet": _ts_local_iso(changed) if changed else None}
+                     "starttrin": dict(starts), "skiftet": _ts_local_iso(changed) if changed else None,
+                     # afrimninger det seneste døgn, læst af el-effekten (ingen afrimningsføler på luft-luft)
+                     **({"afrimninger_24t": df_["n"], "seneste_afrimning": _ts_local_iso(df_["last"]) if df_.get("last") else None,
+                         "afrimninger": [{"start": _ts_local_iso(x), "min": round((y - x) / 60), "laveste_w": z} for x, y, z in df_.get("list") or []]}
+                        if (df_ := a.get("defrost")) else {})}
         out: dict[str, Any] = {"step": i}
         if a["on"] and cur is not None:
             out.update(setpoint=cur.setpoint, fan_mode=cur.fan, preset=cur.preset)

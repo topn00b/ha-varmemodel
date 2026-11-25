@@ -629,6 +629,18 @@ async def test_air_ladder_shadow_and_control(ha: HomeAssistant) -> None:
     step = next(s for s in ha.states.async_all("sensor") if s.entity_id.endswith("ladder_step") or s.entity_id.endswith("air_step"))
     assert step.state == "0" and len(step.attributes["trin_liste"]) == 1 + 3 + 6  # quiet, 3 blæsere, setpunkt 20,5–23
     assert not calls  # kun anbefaling, så længe kontakten er slået fra
+    # Afrimninger uden afrimningsføler læses af el-effekten hvert kvarter og står på trin-føleren
+    assert "afrimninger_24t" not in step.attributes
+    c.sources[air].conf = {**c.sources[air].conf, "el_power": "sensor.ll_effekt"}
+    c._air_defrost_sync = lambda _s: {"p_off": 5.0, "defrost": {"n": 2, "last": h0 - 600, "t": h0,  # noqa: SLF001
+                                                                 "list": [[h0 - 3000, h0 - 2880, 130], [h0 - 780, h0 - 600, 104]]}}
+    await c._on_today(None)  # noqa: SLF001
+    await c.async_replan()
+    await ha.async_block_till_done()
+    step = ha.states.get(step.entity_id)
+    assert step.attributes["afrimninger_24t"] == 2 and step.attributes["seneste_afrimning"].startswith("20")
+    assert step.attributes["afrimninger"][1]["min"] == 3 and step.attributes["afrimninger"][1]["laveste_w"] == 104 and c.air[air]["p_off"] == 5.0
+    assert not calls
     sel = {s.entity_id: s for s in ha.states.async_all("select")}
     day = next(s for k, s in sel.items() if k.endswith("max_fan_day"))
     assert day.state == "High" and day.attributes["options"] == ["Low", "Mid", "High"]
