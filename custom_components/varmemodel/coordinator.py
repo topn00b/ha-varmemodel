@@ -148,6 +148,7 @@ from .const import (
     DF_VALVE_S,
     RESTART_S,
     DHW_AFTER_S,
+    DHW_SHIFT_S,
     EVENT_VARSEL,
     VARSEL_CLEAR,
     VARSEL_COOLDOWN,
@@ -304,6 +305,7 @@ class VarmemodelCoordinator:
         self._hydro_pending: dict[str, Any] = {}  # ventende tjek af tænd/sluk pr. kilde (afmeldes ved stop)
         self._input_wait: Any = None
         self._refresh_pending: set[str] = set()  # vandbårne kilder, hvor fremløbet skrives om lidt (efter et skift)
+        self._short_checked: set[str] = set()  # vandbårne kilder, hvor den senest lærte korte kørsel er tjekket efter opstart
         self._air_rise: dict[str, dict[str, float]] = {}  # luft-luft: rummenes målte stigning (°C/t) seneste 30 min.  # én planlægning ad gangen (planlagt og »blokering lige nu«)
         self._build_sources()
 
@@ -2109,6 +2111,17 @@ class VarmemodelCoordinator:
             h["flips"] += 1
             h["last"] = {"t": time.time(), "on": want_on}
             h["recheck_n"] = 0
+            if blocked:
+                # Blokering: sluk ad alle veje med det samme. Reserven (fx producentens sky) viser først skiftet efter flere
+                # minutter, og tjekket om ONOFF_VERIFY_S ville skrive til den alligevel – så sent, at et sikkerhedsnet udefra
+                # (»ingen varme under en blokering i 5 min.«) kan nå at se den som tændt, når den primære svarer langsomt
+                for e in wrong:
+                    if e != eid:
+                        try:
+                            await self.hass.services.async_call("climate", "set_hvac_mode", {"entity_id": e, "hvac_mode": "off"},
+                                                                blocking=True)
+                        except Exception:  # noqa: BLE001
+                            _LOGGER.warning("%s: kunne ikke slukke via %s", s.name, e, exc_info=True)
             self._hydro_later(s, ONOFF_VERIFY_S)
             self._notify()
             if want_on:
@@ -2223,6 +2236,39 @@ class VarmemodelCoordinator:
         rows = {e: [(z.last_updated.timestamp(), z.state) for z in res.get(e, [])] for e in ids}
         return comp_stops(rows, comp, dhw, df, since, ret)
 
+    def _short_valid_sync(self, s: SourceState, t: float) -> bool | None:
+        """Er kompressorstoppet på tidspunktet ``t`` (stadig) en kort kørsel efter den gældende klassifikation? None, når
+        historikken ikke rækker så langt tilbage."""
+        comp, dhw, df = s.eid(CONF_COMPRESSOR), s.eid(CONF_DHW), s.eid(CONF_DEFROST)
+        if not comp:
+            return None
+        ids = [e for e in (comp, dhw, df) if e]
+        res = history.get_significant_states(self.hass, dt_util.utc_from_timestamp(t - 1800), dt_util.utc_from_timestamp(t + 600),
+                                             ids, include_start_time_state=True, significant_changes_only=False, no_attributes=True)
+        rows = {e: [(z.last_updated.timestamp(), z.state) for z in res.get(e, [])] for e in ids}
+        if not any(abs(x - t) < 2 and v == "off" for x, v in rows.get(comp) or []):
+            return None  # stoppet findes ikke i historikken (ryddet): intet at dømme ud fra
+        return any(abs(x["t"] - t) < 2 and x["run"] is not None and x["run"] <= START_PHASE_S
+                   for x in comp_stops(rows, comp, dhw, df, t - 60))
+
+    def _short_undo(self, s: SourceState, hs: dict[str, Any]) -> None:
+        """Den senest lærte korte kørsel var ingen kort kørsel: startløftet tilbage til det, der gjaldt før den. Før 0.25.1
+        blev løftet før ikke gemt – så læses det af søgningens log (løftet ved den seneste start); kan det ikke findes,
+        beholdes løftet (det falder af sig selv for hver start, der kommer igennem opstarten)."""
+        sl = hs.get("short_last") or {}
+        k, n = _num(sl.get("løft_før")), int(sl.get("antal") or 1)
+        if k is None and sl.get("t") is not None:
+            # Løftet ved den seneste start: alle korte kørsler siden da regnes fra
+            k = start_k_from_log(hs.get("low_log") or [], float(sl["t"]), bool(hs.get("start_ok")), SOFT_OVER_RETURN_K)
+            n = int(hs.get("start_short") or 0)
+        old = self._start_k(hs)
+        hs["short_last"] = None
+        hs["start_short"] = max(0, int(hs.get("start_short") or 0) - n)
+        if k is not None:
+            hs["start_k"] = round(min(max(k, SOFT_OVER_RETURN_K), START_K_MAX), 2)
+        _LOGGER.info("%s: den senest lærte korte kørsel tæller ikke længere som kort kørsel – startløft %s → %s °C",
+                     s.name, _k_txt(old), _k_txt(self._start_k(hs)))
+
     async def _low_flow(self, s: SourceState, hs: dict[str, Any], plan: float, pre_start: bool = False) -> float:
         """Søg laveste fremløb: start ved retur + 4 °C (mindst 20 °C) og ændr målet stille og roligt efter rummene –
         +2 K/30 min., når et rum er under gulvet og ikke på vej op; +1 K/t, når et rum er på vej under gulvet inden for
@@ -2252,30 +2298,40 @@ class VarmemodelCoordinator:
         hs["low_rooms"] = rooms
         since = now - (hs.get("low_t") or 0)
         low, step, why, status = hs["low"], 0.0, None, "holder"
+        win0 = max(now - 1800, (hs.get("start_t") or now) + 300)
         try:
-            stops = await get_instance(self.hass).async_add_executor_job(
-                self._comp_stops_sync, s, max(now - 1800, (hs.get("start_t") or now) + 300))
+            stops = await get_instance(self.hass).async_add_executor_job(self._comp_stops_sync, s, win0)
+            stops_ok = True
         except Exception:  # noqa: BLE001
             _LOGGER.debug("Søg laveste fremløb: kompressorstop kunne ikke læses", exc_info=True)
-            stops = []
+            stops, stops_ok = [], False
         short = [x for x in stops if x["run"] is not None and x["run"] <= START_PHASE_S]
         # Stop efter længere drift (ikke opstart, ikke lige efter en afrimning) siden målet sidst blev ændret: målet er under
-        # varmepumpens laveste ydelse – søgningen hæver (stopværnet skulle normalt forhindre dem)
+        # varmepumpens laveste ydelse – søgningen hæver (stopværnet skulle normalt forhindre dem). Et helt nyt stop dømmes
+        # først, når varmt vand har haft tid til at melde tændt (skiftet til varmt vand er intet stop)
         long_ = [x for x in stops if not (x["run"] is not None and x["run"] <= START_PHASE_S) and x.get("df") != "efter"
-                 and x["t"] >= (hs.get("low_t") or 0)]
+                 and x["t"] >= (hs.get("low_t") or 0) and x["t"] <= now - DHW_SHIFT_S]
         hs["low_stops"] = len(long_)
-        new = [x for x in short if x["t"] > (_num(hs.get("short_seen")) or 0)]
+        seen = _num(hs.get("short_seen")) or 0
+        if stops_ok and hs.get("short_last") and seen >= win0 and not any(abs(x["t"] - seen) < 2 for x in short):
+            # Den senest lærte korte kørsel er ingen kort kørsel alligevel (varmt vand meldte tændt lige efter stoppet):
+            # løftet tilbage til det, der gjaldt før
+            self._short_undo(s, hs)
+            k = self._start_k(hs)
+        new = [x for x in short if x["t"] > seen]
         if new:
             # Kort kørsel (stop i opstarten): opstarten skød fremløbet over målet + varmepumpens margen, før flowet var oppe –
             # lær løftet over returen ved den start (målet dengang − returen + 1 K). Opstartsløftet bruger det straks;
             # søgningens eget mål hæves ikke (det er opstarten, ikke rummene, der kræver mere)
             for x in new:
                 x["mål"] = self._target_at(s, x["t"])
+            k_before = k
             k = learn_start_k(k, new, SOFT_OVER_RETURN_K)
             last = max(new, key=lambda x: x["t"])
             hs.update(start_k=k, start_short=(hs.get("start_short") or 0) + len(new), short_seen=last["t"],
                       short_last={"t": round(last["t"]), "min": round(last["run"] / 60, 1), "mål": last.get("mål"),
-                                  "retur": last.get("ret0"), "efter_afrimning": last.get("df") == "efter"})
+                                  "retur": last.get("ret0"), "efter_afrimning": last.get("df") == "efter",
+                                  "løft_før": k_before, "antal": len(new)})
         elif (k > SOFT_OVER_RETURN_K and not hs.get("start_ok") and not hs.get("start_short") and hs.get("start_t")
               and (cs := hs.get("comp_since")) and cs >= hs["start_t"] - 60 and now - cs >= START_PHASE_S):
             # Starten kom igennem opstarten ved det lærte løft: sænk det lidt, så det prøver lavere igen (fx efter en ændring
@@ -3201,6 +3257,16 @@ class VarmemodelCoordinator:
                 hst["comp_checked"] = time.time()
             except Exception:  # noqa: BLE001
                 _LOGGER.debug("Kompressorens starttid kunne ikke læses", exc_info=True)
+            if sid not in self._short_checked:
+                # Én gang efter opstart: er den senest lærte korte kørsel stadig en kort kørsel efter den gældende
+                # klassifikation? (en ny version kan dømme anderledes – fx skiftet til varmt vand fra 0.25.1)
+                try:
+                    if hst.get("short_last") and (seen := _num(hst.get("short_seen"))):
+                        if await get_instance(self.hass).async_add_executor_job(self._short_valid_sync, s, seen) is False:
+                            self._short_undo(s, hst)
+                    self._short_checked.add(sid)
+                except Exception:  # noqa: BLE001 – prøves igen ved næste planlægning
+                    _LOGGER.debug("Tjek af den seneste korte kørsel fejlede", exc_info=True)
             if any("cop" not in x and now - x["t"] > SOFT_EVAL_S + 600 for x in hst.get("starts", [])):
                 try:
                     await get_instance(self.hass).async_add_executor_job(self._soft_eval_sync, s, hst["starts"])
@@ -3316,7 +3382,9 @@ def comp_stops(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | N
     inden for 10 min. efter en afrimning.
 
     Tæller ikke: 4-vejsventilens skift (1 min. før til 5 min. efter en afrimnings start og DF_VALVE_S efter dens slut), stop
-    under afrimning eller varmt vand og 3 min. efter varmt vand.
+    under afrimning eller varmt vand, 3 min. efter varmt vand og skiftet til varmt vand (stoppet kommer først: kompressoren
+    står nogle minutter, og varmt vand melder tændt op til DHW_SHIFT_S efter – 25/11: stoppet kl. 02:02:04, varmt vand
+    02:02:08, og otte minutter efter en afrimning blev det til en »kort kørsel«, der lærte et for højt startløft).
 
     ``rows`` er historikken pr. entitet [(tid, tilstand)] – gerne fra 30 min. før ``since``. Første række pr. entitet er
     tilstanden ved forespørgslens start (tidsstemplet = start) og er intet skift: før 0.17.3 blev en sådan »slukket« på
@@ -3339,6 +3407,7 @@ def comp_stops(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | N
     df_on = [t for t, e, p, v in ev if e == df and p is not None and v == "on"]
     df_off = [t for t, e, p, v in ev if e == df and p == "on" and v == "off"]
     dhw_off = [t for t, e, p, v in ev if e == dhw and p == "on" and v == "off"]
+    dhw_on = [t for t, e, p, v in ev if e == dhw and p is not None and v == "on"]
     rv = sorted((t, x) for t, v in (rows.get(ret) or [] if ret else []) if (x := _num(v)) is not None)
     st: dict[str, str] = {}
     on_t: float | None = None
@@ -3355,7 +3424,8 @@ def comp_stops(rows: dict[str, list[tuple[float, str]]], comp: str, dhw: str | N
             last_real, last_off = False, t
             if st.get(dhw or "") != "on" and st.get(df or "") != "on":
                 valve = any(-60 <= x - t <= 300 for x in df_on) or any(0 <= t - x <= DF_VALVE_S for x in df_off)
-                if not valve and not any(0 <= t - x <= 180 for x in dhw_off):
+                shift = any(0 <= t - x <= 180 for x in dhw_off) or any(0 <= x - t <= DHW_SHIFT_S for x in dhw_on)
+                if not valve and not shift:
                     last_real = True
                     if t >= since:
                         dfe = [x for x in df_off if x <= t]
@@ -3411,6 +3481,18 @@ def learn_start_k(k: float, short: list[dict[str, Any]], k_min: float, k_max: fl
         if x.get("mål") is not None and x.get("ret0") is not None:
             k = max(k, x["mål"] - x["ret0"] + 1.0)
     return round(min(max(k, k_min), k_max), 2)
+
+
+def start_k_from_log(log: list[Any], t: float, decayed: bool, k_default: float) -> float | None:
+    """Startløftet, der gjaldt ved den seneste start før tidspunktet ``t``, læst af søgningens log (rækker [tid, mål,
+    plan, tekst]): startlinjen nævner løftet, når det er over standarden. ``decayed``: starten er siden kommet igennem
+    opstarten, så løftet er sænket én gang. None uden en startlinje."""
+    for row in reversed(log):
+        if isinstance(row, (list, tuple)) and len(row) >= 4 and (_num(row[0]) or 0) <= t and str(row[3]).startswith("start:"):
+            m = re.search(r"opstartsløft retur \+ (\d+(?:[.,]\d+)?)", str(row[3]))
+            k = float(m.group(1).replace(",", ".")) if m else k_default
+            return round(max(k_default, k - START_K_DECAY), 2) if decayed and k > k_default else k
+    return None
 
 
 def start_flow(ret: float | None, k: float, k_default: float, floor: float) -> float | None:

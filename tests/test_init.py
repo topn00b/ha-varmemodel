@@ -1004,14 +1004,20 @@ async def test_low_flow_short_run_learns_lift_not_search(ha: HomeAssistant) -> N
     assert await c._low_flow(s, hs, 35.0) == 24.0 and hs["start_k"] == 5.5 and hs["start_short"] == 1  # samme stop én gang
     v = c.flow_search(s)
     assert v["startløft"] == 5.5 and v["korte_kørsler"] == 1 and v["sidste_korte"]["mål"] == 26.0
-    # Stop efter længere drift (efter sidste ændring af målet): venter en halv time, så +1
-    stops[:] = [{"t": time.time() + 1, "run": 3600.0, "ret0": 22.0, "df": None}]
+    # Stop efter længere drift (efter sidste ændring af målet): et helt nyt stop dømmes ikke endnu (varmt vand kan nå at
+    # melde tændt – så var det skiftet til varmt vand); derefter venter søgningen en halv time, så +1
+    short_stop = dict(stops[0])
+    stops[:] = [short_stop, {"t": time.time() - 5, "run": 3600.0, "ret0": 22.0, "df": None}]
+    hs["low_t"] = time.time() - 10
+    assert await c._low_flow(s, hs, 35.0) == 24.0 and hs["low_status"] == "holder" and hs["low_stops"] == 0
+    stops[1]["t"] = time.time() - 130
+    hs["low_t"] = time.time() - 140
     assert await c._low_flow(s, hs, 35.0) == 24.0 and hs["low_status"] == "hæver" and hs["low_stops"] == 1
     hs["low_t"] -= 1800
     assert await c._low_flow(s, hs, 35.0) == 25.0 and "længere drift" in hs["low_why"]
     # Ny start: søgningen starter ved retur + 3; løftet nævnes (det lægges på det, der skrives)
     stops[:] = []
-    hs.update(start_t=time.time() - 1500, start_short=0, start_ok=False)
+    hs.update(start_t=time.time() - 1500, start_short=0, start_ok=False, short_seen=hs["short_seen"] - 3600)  # den korte kørsel lå før denne start
     assert await c._low_flow(s, hs, 35.0, pre_start=True) == 24.0 and "opstartsløft retur + 5.5 °C" in hs["low_why"]
     hs["comp_since"] = time.time() - 1300  # kørt 21 min. siden starten uden kort kørsel
     await c._low_flow(s, hs, 35.0)
@@ -1364,10 +1370,11 @@ async def test_onoff_fallback_and_recheck(ha: HomeAssistant) -> None:
     sid = next(iter(c.sources))
     s = c.sources[sid]
     c.settings[f"{sid}.hydro_control"] = True
-    # 1) Blokeret: sluk via den primære, og et tjek er sat op
+    # 1) Blokeret: sluk ad alle veje med det samme (den primære først) – ét skift – og et tjek er sat op
     await c._hydro_apply(s, True, True, [])
-    assert calls == [("climate.vp_sky", "off")] and sid in c._hydro_pending
+    assert calls == [("climate.vp_sky", "off"), ("climate.vp_lokal", "off")] and sid in c._hydro_pending
     flips = c.air[f"hydro:{sid}"]["flips"]
+    assert flips == 1
     # 2) Skyen viser slukket, men varmepumpen kører stadig (lokalt): tjekket skriver direkte til den lokale – intet nyt skift
     ha.states.async_set("climate.vp_sky", "off", {})
     calls.clear()
@@ -1561,6 +1568,160 @@ def test_day_health_restart_after_defrost_is_not_a_start() -> None:
     h = day_health(rows, "c", "v", "d", t0, t0 + 20000)
     assert h["starter"] == 3 and h["stop"] == 1 and h["afrimninger"] == 1 and h["varmt_vand"] == 1
     assert h["drift_min"] == round((3400 + 4940 + 2400 + 4100) / 60)
+
+
+def test_comp_stops_shift_to_dhw_is_no_stop() -> None:
+    """Skiftet til varmt vand: kompressoren stopper, varmt vand melder tændt nogle sekunder efter, og kompressoren starter
+    igen efter 3–4 min. Det er hverken et stop, en kort kørsel (25/11 02:02: otte minutter efter en afrimning) eller en ny
+    start. Et stop længe før varmt vand er et rigtigt stop."""
+    from custom_components.varmemodel.coordinator import comp_stops, day_health
+
+    t0 = 1_000_000.0
+    rows = {
+        "c": [(t0 - 1800, "on"), (t0 + 7324, "off"), (t0 + 7557, "on")],   # 02:02:04 → 02:05:57
+        "d": [(t0 - 1800, "off"), (t0 + 6703, "on"), (t0 + 6860, "off")],   # afrimning 01:51:43–01:54:20
+        "v": [(t0 - 1800, "off"), (t0 + 7328, "on")],                       # varmt vand melder tændt 02:02:08
+    }
+    starts: list[float] = []
+    assert comp_stops(rows, "c", "v", "d", t0, starts=starts) == [] and starts == []
+    h = day_health(rows, "c", "v", "d", t0, t0 + 9000)
+    assert h["stop"] == 0 and h["korte_kørsler"] == 0 and h["starter"] == 0 and h["varmt_vand"] == 1
+    # Samme stop, men varmt vand først fem minutter efter: et rigtigt stop (kort kørsel efter afrimningen)
+    rows["v"][1] = (t0 + 7324 + 300, "on")
+    assert [(x["t"], round(x["run"]), x["df"]) for x in comp_stops(rows, "c", "v", "d", t0)] == [(t0 + 7324, 464, "efter")]
+    # Stop og varmt vand i samme sekund (rækkefølgen i historikken er tilfældig): intet stop
+    rows["v"][1] = (t0 + 7324, "on")
+    assert comp_stops(rows, "c", "v", "d", t0) == []
+
+
+def test_start_k_from_log() -> None:
+    """Startløftet før en kort kørsel læst af søgningens log (versioner før 0.25.1 gemte det ikke): løftet på den seneste
+    startlinje før stoppet – sænket én gang, når starten siden kom igennem opstarten."""
+    from custom_components.varmemodel.coordinator import start_k_from_log
+
+    log = [[100, 26.0, 35.0, "start: retur + 3 °C"],
+           [200, 30.0, 34.8, "kort kørsel (6 min.) – varmepumpens opstart skød fremløbet over målet; startløft nu retur + 5.1 °C"],
+           [300, 23.0, 34.7, "start: retur + 3 °C (opstartsløft retur + 5.1 °C, lært af varmepumpens opstart)"],
+           [400, 25.0, 34.8, "Gang er 0.6 °C under gulvet og ikke på vej op"]]
+    assert start_k_from_log(log, 500, True, 3.0) == 4.85 and start_k_from_log(log, 500, False, 3.0) == 5.1
+    assert start_k_from_log(log, 250, True, 3.0) == 3.0  # starten før havde intet lært løft
+    assert start_k_from_log(log, 50, True, 3.0) is None and start_k_from_log([], 500, True, 3.0) is None
+    assert start_k_from_log([[300, 23.0, 34.7, "start: retur + 3 °C (opstartsløft retur + 4,2 °C, lært …)"]], 500, False, 3.0) == 4.2
+    assert start_k_from_log([[300, 23.0, 34.7, "start: retur + 3 °C (opstartsløft retur + 6 °C, lært …)"]], 500, True, 3.0) == 5.75
+
+
+async def test_false_short_run_is_undone(ha: HomeAssistant) -> None:
+    """En kort kørsel, der viser sig ikke at være en (varmt vand meldte tændt lige efter stoppet – stoppet er væk fra de
+    rigtige stop ved næste gennemgang): startløftet går tilbage til det, der gjaldt før, og kørslen tælles ikke."""
+    c, s = await _lv_entry(ha)
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    hs = c.air.setdefault(f"hydro:{s.sid}", {})
+    c._low_rooms_sync = lambda _s: [{"navn": "Gang", "margen": 0.2, "tendens": 0.0, "om_3t": 0.2}]  # noqa: SLF001
+    stops: list = []
+    c._comp_stops_sync = lambda _s, _since: [dict(x) for x in stops]  # noqa: SLF001
+    assert await c._low_flow(s, hs, 35.0) == 24.0
+    now = time.time()
+    hs.update(start_t=now - 7200, start_k=4.85, start_ok=True)
+    c.air[f"flow:{s.sid}"] = {"hist": [[now - 3600, 35.0]]}
+    stops[:] = [{"t": now - 60, "run": 464.0, "ret0": 29.3, "df": "efter"}]
+    await c._low_flow(s, hs, 35.0)
+    assert hs["start_k"] == 6.7 and hs["start_short"] == 1 and hs["short_last"]["løft_før"] == 4.85  # 35 − 29,3 + 1
+    await c._low_flow(s, hs, 35.0)
+    assert hs["start_k"] == 6.7  # stadig en kort kørsel: intet ændret
+    stops[:] = []  # varmt vand meldte tændt: stoppet er ikke længere et rigtigt stop
+    await c._low_flow(s, hs, 35.0)
+    assert hs["start_k"] == 4.85 and hs["start_short"] == 0 and hs["short_last"] is None
+    assert c.flow_search(s)["startløft"] == 4.8 or c.flow_search(s)["startløft"] == 4.9
+    await c._low_flow(s, hs, 35.0)
+    assert hs["start_k"] == 4.85  # og den læres ikke igen
+    # Kunne stoppene ikke læses, røres løftet ikke
+    stops[:] = [{"t": time.time() - 30, "run": 300.0, "ret0": 30.0, "df": None}]
+    await c._low_flow(s, hs, 35.0)
+    assert hs["start_k"] == 6.0 and hs["short_last"]["løft_før"] == 4.85
+
+    def boom(_s, _since):
+        raise RuntimeError("ingen historik")
+
+    c._comp_stops_sync = boom  # noqa: SLF001
+    await c._low_flow(s, hs, 35.0)
+    assert hs["start_k"] == 6.0 and hs["start_short"] == 1
+
+
+async def test_last_short_run_is_rechecked_after_start(ha: HomeAssistant) -> None:
+    """Efter opstart tjekkes den senest lærte korte kørsel én gang mod den gældende klassifikation: var den skiftet til
+    varmt vand (lært af en ældre version, der ikke gemte løftet før), går startløftet tilbage til løftet ved den seneste
+    start ifølge søgningens log. En rigtig kort kørsel røres ikke."""
+    c, s = await _lv_entry(ha)
+    sid = s.sid
+    hs = c.air.setdefault(f"hydro:{sid}", {})
+    t = time.time() - 4 * 3600
+    legacy = {"start_k": 8.2, "start_short": 2, "start_ok": True, "start_t": t - 5 * 3600, "short_seen": t,  # to falske i samme kørsel
+              "short_last": {"t": round(t), "min": 7.7, "mål": 35.0, "retur": 29.3, "efter_afrimning": True},
+              "low_log": [[t - 5 * 3600, 23.0, 34.7, "start: retur + 3 °C (opstartsløft retur + 5.1 °C, lært af varmepumpens opstart)"],
+                          [t - 3600, 34.8, 34.8, "Stue er 0.4 °C under gulvet og ikke på vej op"]]}
+    asked: list = []
+
+    def valid(_s, seen):
+        asked.append(seen)
+        return True
+
+    hs.update({k: (dict(v) if isinstance(v, dict) else v) for k, v in legacy.items()})
+    c._short_checked.clear()  # noqa: SLF001
+    c._short_valid_sync = valid  # noqa: SLF001
+    await c.async_replan()
+    assert asked == [t] and hs["start_k"] == 8.2 and hs["short_last"]["min"] == 7.7 and sid in c._short_checked  # noqa: SLF001
+    await c.async_replan()
+    assert asked == [t]  # kun én gang efter opstart
+    c._short_checked.clear()  # noqa: SLF001
+    c._short_valid_sync = lambda _s, _seen: False  # noqa: SLF001
+    await c.async_replan()
+    assert hs["start_k"] == 4.85 and hs["start_short"] == 0 and hs["short_last"] is None
+    # Uden startlinje i loggen beholdes løftet (det falder af sig selv), men den falske korte kørsel vises ikke længere
+    hs.update({k: (dict(v) if isinstance(v, dict) else v) for k, v in legacy.items()})
+    hs["low_log"] = []
+    c._short_checked.clear()  # noqa: SLF001
+    await c.async_replan()
+    assert hs["start_k"] == 8.2 and hs["short_last"] is None and hs["start_short"] == 0
+    # Kunne historikken ikke læses, prøves der igen ved næste planlægning
+    hs.update({k: (dict(v) if isinstance(v, dict) else v) for k, v in legacy.items()})
+    c._short_checked.clear()  # noqa: SLF001
+
+    def boom(_s, _seen):
+        raise RuntimeError("optageren er ikke klar")
+
+    c._short_valid_sync = boom  # noqa: SLF001
+    await c.async_replan()
+    assert hs["start_k"] == 8.2 and hs["short_last"] is not None and hs["start_short"] == 2 and sid not in c._short_checked  # noqa: SLF001
+
+
+async def test_planned_stop_writes_only_the_primary(ha: HomeAssistant) -> None:
+    """Et planlagt stop (ingen blokering) skrives kun til den primære tænd/sluk-entitet – reserven får det først, hvis den
+    stadig viser det modsatte ved tjekket. Ved en blokering slukkes der ad alle veje med det samme."""
+    h0 = int(time.time() // 3600 * 3600)
+    ha.states.async_set("sensor.pris", "1.0", {"timer": _price_items(h0)})
+    ha.states.async_set("sensor.ude", "-2.0", {"state_class": "measurement"})
+    ha.states.async_set("climate.vp_lokal", "heat", {})
+    ha.states.async_set("climate.vp_sky", "heat", {})
+    e = MockConfigEntry(domain=DOMAIN, title="Hus", version=2, data={**HOUSE, "price_entity": "sensor.pris"},
+                        subentries_data=[_sub({**HYD, "onoff_target": "climate.vp_lokal", "onoff_fallback": "climate.vp_sky"}, "source")])
+    e.add_to_hass(ha)
+    calls: list = []
+    ha.services.async_register("climate", "set_hvac_mode", lambda call: calls.append((call.data["entity_id"], call.data["hvac_mode"])))
+    assert await ha.config_entries.async_setup(e.entry_id)
+    await ha.async_block_till_done()
+    c = e.runtime_data
+    sid = next(iter(c.sources))
+    s = c.sources[sid]
+    c.settings[f"{sid}.hydro_control"] = True
+    await c._hydro_apply(s, False, False, [])  # noqa: SLF001
+    assert calls == [("climate.vp_lokal", "off")]
+    c._hydro_pending.pop(sid)()  # noqa: SLF001
+    # Blokering, og reserven viser slukket i forvejen: kun den, der viser tændt, får kommandoen
+    calls.clear()
+    ha.states.async_set("climate.vp_sky", "off", {})
+    await c._hydro_apply(s, True, True, [])  # noqa: SLF001
+    assert calls == [("climate.vp_lokal", "off")]
+    c._hydro_pending.pop(sid)()  # noqa: SLF001
 
 
 async def test_partial_hour_before_block_is_planned_and_stopped_at_red(ha: HomeAssistant) -> None:
