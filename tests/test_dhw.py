@@ -120,9 +120,18 @@ def test_tank_may_be_cold_outside_the_hours_of_use() -> None:
     # uden brugstid (hele døgnet): der varmes med det samme
     allday = plan_dhw(h, 39.5, M, 40.0, 45.0, 50.0, "economy", use=[True] * 24)
     assert allday["state"] == "normal" and allday["hours"][0]["run"]
-    # komfort: aldrig under »mindst«, heller ikke om natten
+    # uden for brugstiden varmes der ikke – heller ikke i komfort – kun i timen lige før brugstiden (klar kl. 6)
     com = plan_dhw(h, 39.5, M, 40.0, 45.0, 50.0, "comfort", use=use)
-    assert com["state"] != "off" and all(x["start"] >= 40.0 for x in com["hours"])
+    assert com["state"] == "off" and not any(x["run"] for x in com["hours"][:8])
+    assert all(x["start"] >= 40.0 for x in com["hours"][9:])
+    # en lang blokering næste dag (fra kl. 7:30) flytter ikke opvarmningen til aftenen: kl. 21 er uden for brugstiden
+    blk = plan_dhw(hrs(12, start_hour=21, blocked=lambda i: i >= 10), 38.7, M, 40.0, 45.0, 50.0, "economy", use=use)
+    assert [x["ts"] for x in blk["hours"] if x["run"]][:1] == [8 * 3600] and blk["hours"][9]["start"] >= 44.0
+    # en opvarmning, varmepumpen selv er gået i gang med uden for brugstiden, regnes ikke færdig: planen siger fra
+    run = plan_dhw(h, 38.7, M, 40.0, 45.0, 50.0, "economy", use=use, running=45.0)
+    assert run["state"] == "off" and not run["hours"][0]["run"]
+    # »bad nu« varmer altid
+    assert plan_dhw(h, 38.7, M, 40.0, 45.0, 50.0, "economy", boost=True, use=use)["state"] == "high"
     # den lærte brugstid: timerne med målbart forbrug; før noget er lært: hele døgnet
     m = TankModel(draw=[0.0] * 7 + [4.0] + [0.05] * 11 + [3.0] + [0.0] * 4, hours=200)
     assert [i for i, u in enumerate(m.use()) if u] == [7, 19] and all(TankModel().use())

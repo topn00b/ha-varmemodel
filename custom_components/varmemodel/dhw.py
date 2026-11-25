@@ -193,8 +193,9 @@ def plan_dhw(hours: list[DhwHour], tank: float, m: TankModel, t_min: float, t_no
     varmepumpens startgrænse) og på ``t_min`` resten af døgnet, så der altid er varmt vand.
     ``boost``: »højt« nu, også i en blokeret time.
     ``frac0``: den del af den første time, der er tilbage.
+    Uden for brugstiden varmes der ikke, undtagen i timen lige før brugstiden begynder (og med ``boost``).
     ``running``: målet for en opvarmning, der er i gang lige nu – den regnes færdig i den første time (medmindre timen er
-    blokeret), i stedet for at planen tror, at varmepumpen ikke ville gå i gang så tæt på målet.
+    blokeret eller uden for brugstiden), i stedet for at planen tror, at varmepumpen ikke ville gå i gang så tæt på målet.
 
     Resultat: ``state`` (fra/normalt/højt nu), ``hours`` (pr. time: mål, om der varmes, minutter, kWh el, kr, tanken ved
     timens start – efter en eventuel opvarmning – og ved timens slut), næste opvarmning, tankens laveste punkt ved en
@@ -208,6 +209,9 @@ def plan_dhw(hours: list[DhwHour], tank: float, m: TankModel, t_min: float, t_no
     # Brugstiden begynder: tanken skal være klar ved timens start (før en opvarmning i timen) – ikke for den første time,
     # den er allerede i gang
     ready = [i > 0 and use[h.hour] and not use[(h.hour - 1) % 24] for i, h in enumerate(hours)]
+    # Uden for brugstiden varmes der ikke – kun i timen lige før brugstiden begynder, så tanken er klar til den, der står
+    # først op (og med »bad nu«). Ellers kunne planen varme om aftenen for at ramme varmepumpens startgrænse senere.
+    may = [use[h.hour] or use[(h.hour + 1) % 24] or not any(use) for h in hours]
     bar = t_min  # det, der står i tanken over »mindst« ved periodens slutning, har værdi
     allowed = [t_normal] if priority == "economy" else [t_normal, t_high]
     k = lambda t: int(round((min(max(t, T_LO), T_HI) - T_LO) / GRID))  # noqa: E731
@@ -223,14 +227,14 @@ def plan_dhw(hours: list[DhwHour], tank: float, m: TankModel, t_min: float, t_no
         f = frac0 if i == 0 else 1.0
         return t - f * (m.loss * max(0.0, t - m.amb) + m.draw[hours[i].hour]), mins, kwh, t
 
-    going = running is not None and bool(hours) and not hours[0].blocked and not boost  # en opvarmning i gang regnes færdig
+    going = running is not None and bool(hours) and not hours[0].blocked and may[0] and not boost  # en opvarmning i gang regnes færdig
 
     def acts(i: int) -> list[float | None]:
         if i == 0 and boost:
             return [t_high]
         if i == 0 and going:
             return [running]
-        return [None] if hours[i].blocked else [None, *allowed]
+        return [None] if hours[i].blocked or not may[i] else [None, *allowed]
 
     # Baglæns: for hver time og tanktemperatur den bedste fortsættelse – først færrest gradtimer under grænsen, så billigst
     INF = (float("inf"), float("inf"))

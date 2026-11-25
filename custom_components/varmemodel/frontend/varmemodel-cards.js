@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.31.4';
+  const VERSION = '0.31.5';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -440,7 +440,7 @@
     const det = `<details id="vvPlan"${open ? ' open' : ''}><summary class="sm">Plan, tank og indstillinger</summary>`
       + (runs ? `<div class="wrap"><table><tr><th>opvarmning</th><th class="n">mål</th><th class="n">varer</th><th class="n">el</th><th class="n">pris</th><th class="n">tank efter timen</th></tr>${runs}</table></div>` : '')
       + `<div class="sm mut" style="margin:4px 0">${esc(learned)}</div>${ctl ? `<div class="sg">${ctl}</div>` : ''}`
-      + '<div class="sm mut" style="margin-top:4px">Planen lægger opvarmningerne i de billigste frie timer, så tanken er mindst »mindst«, når en time i brugstiden begynder – og fylder op tæt på en lang blokering. Uden for brugstiden må tanken gerne være kold, så der varmes tæt på morgenen i stedet for om aftenen. Økonomi varmer kun til »normalt«; balance må også bruge »højt«; komfort holder desuden tanken tæt på »normalt« i brugstiden og aldrig under »mindst«. Varmeplanen regner med opvarmningerne: i de timer rummer den mindre rumvarme.</div></details>';
+      + '<div class="sm mut" style="margin-top:4px">Planen lægger opvarmningerne i de billigste frie timer, så tanken er mindst »mindst«, når en time i brugstiden begynder – og fylder op tæt på en lang blokering. Uden for brugstiden varmes der ikke (kun med »bad nu«) – undtagen i timen lige før brugstiden, så tanken er klar, når den begynder. Økonomi varmer kun til »normalt«; balance må også bruge »højt«; komfort holder desuden tanken tæt på »normalt« i brugstiden og aldrig under »mindst«. Varmeplanen regner med opvarmningerne: i de timer rummer den mindre rumvarme.</div></details>';
     return `<div class="b"><div class="pvh">Varmt vand ${chip} ${sel} ${tog}</div><div style="margin:4px 0 6px;font-size:14px">${esc(line)}</div>${useRow}`
       + `<div class="sm">${under}<span class="mut">${esc(`${useTxt}. ${lo}${act}${wr}`)}${a.styrer ? '' : 'Varmemodel skriver ikke til varmepumpen, før styringen slås til.'}</span></div>${det}</div>`;
   }
