@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.31.1';
+  const VERSION = '0.31.2';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -920,7 +920,7 @@
       if (cs && cs.state !== 'unknown' && (cs.state === 'heat') !== (pst === 'heat')) plan += ` · styring: ${cs.state === 'heat' ? 'varme' : 'slukket'} (${cs.attributes.reason || ''})`;
       const bg = zc || 'var(--primary-color)';
       const zone = `<div class="b zb" style="background:${bg};border-color:${bg}"><div class="z">${z ? `${ico} ${esc(z.toUpperCase())} · ` : ''}${fmt(price, 2)} kr/kWh el</div>`
-        + `<div class="sub">Plan: ${esc(plan)}${this.dry(h, vm) ? ' (styrer ikke endnu)' : air0 && st(h, air0.e('air_control')) ? ' · Varmemodel styrer' : main && (st(h, main.e('hydro_control')) || {}).state === 'on' ? ' · Varmemodel styrer varmepumpen' : main && st(h, main.e('flow_control')) ? ' · Varmemodel styrer fremløbet' : ''}${flags.length ? ' · ' + esc(flags.join(' · ')) : ''}</div></div>`;
+        + `<div class="sub">Plan: ${esc(plan)}${this.dry(h, vm) ? ' (styrer ikke endnu)' : ''}${flags.length ? ' · ' + esc(flags.join(' · ')) : ''}</div></div>`;
       const notes = (c.notes || []).map((n) => { const v = n.attribute ? at(h, n.entity)[n.attribute] : (st(h, n.entity) || {}).state; return v ? `<div>${esc(v)}</div>` : ''; }).join('');
       // Bred skærm med vandbåren kilde: knapperne står i diagrammets øverste række (se wideSvg)
       const svgActs = !!main && !(this._tall ?? ((this.clientWidth || 1000) < 700));
@@ -1081,7 +1081,8 @@
       p.balTxt = D.bal ? '✓ retvisende' : `⏸ ${D.pumpOn === false ? 'pumpen står' : !D.compOn ? 'kompressor holder pause' : D.defr ? 'afrimer' : D.dhw ? 'laver varmt vand' : 'indsvinger'}`;
       if (cfg.pump || cfg.pump_running) {
         const ps = cfg.pump ? (st(h, cfg.pump) || {}).state || '' : ''; const k = (ps.match(/(\d)/) || [])[1];
-        const txt = D.pumpOn === false ? 'står' : (D.pumpOn ? 'kører' : '') + (k ? (D.pumpOn ? ' · ' : '') + 'trin ' + k : ps ? ' ' + ps : '');
+        // pumpen er til eller fra; trinnet kun, når der ikke er en kører-føler
+        const txt = D.pumpOn === false ? 'off' : D.pumpOn ? 'on' : (k ? 'trin ' + k : ps);
         p.pump = [txt.trim() || '–', cfg.pump_running || cfg.pump, { bg: D.pumpOn ? GR : null }];
       }
       return p;
