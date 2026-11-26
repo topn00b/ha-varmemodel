@@ -2804,3 +2804,24 @@ async def test_air_start_with_all_rooms_below_the_floor_goes_straight_to_the_top
     ha.states.async_set("climate.ll", "off", {**LL_ATTRS, "current_temperature": 18.0, "temperature": 20, "fan_mode": "Mid"})
     d = c._air_step(s, "climate.ll", p, cold, True, False, time.time())  # noqa: SLF001
     assert d["fan_mode"] == "High" and not d.get("preset") and all(x["blæser"] != "powerful" for x in c.air[air]["view"]["trin_liste"])
+
+
+async def test_powerful_only_while_a_room_is_below_the_floor(ha: HomeAssistant) -> None:
+    """Står stigen på powerful, og er intet rum under gulvet, går den straks til højeste blæser på samme temperatur."""
+    from types import SimpleNamespace
+
+    from custom_components.varmemodel.planner import PlanRoom
+
+    c, s, air = await _air_ref_entry(ha)
+    c.settings[f"{air}.air_priority"] = "economy"
+    c.settings[f"{air}.air_fan_day"] = c.settings[f"{air}.air_fan_night"] = "powerful"
+    pw = {**LL_ATTRS, "preset_modes": ["none", "powerful"]}
+    p = SimpleNamespace(hours=[{"blocked": False, "t_out": 2.0, "el_kw": None} for _ in range(6)], rooms={"Loft": [18.0] * 6})
+    cold = [PlanRoom("Loft", 18.0, 19.5, 0.7, 0.0, 0.02, margin=0.3, t_max=22.5)]
+    warm = [PlanRoom("Loft", 20.0, 19.5, 0.7, 0.0, 0.02, margin=0.3, t_max=22.5)]
+    ha.states.async_set("climate.ll", "off", {**pw, "current_temperature": 18.0, "temperature": 20, "fan_mode": "Mid"})
+    t = time.time()
+    d = c._air_step(s, "climate.ll", p, cold, True, False, t)  # noqa: SLF001
+    assert d["preset"] == "powerful"
+    d = c._air_step(s, "climate.ll", p, warm, True, False, t + 60)  # noqa: SLF001
+    assert d.get("preset") != "powerful" and d["fan_mode"] == "High" and "powerful slås fra" in c.air[air]["view"]["grund"]

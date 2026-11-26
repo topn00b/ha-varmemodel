@@ -2696,6 +2696,10 @@ class VarmemodelCoordinator:
                                                             if up_every else {}))
             if not start_learned:
                 reason = reason.replace(" (lært for udetemperaturen)", "")
+            if i is not None and ladder[i].preset == POWERFUL and (not margins or min(margins.values()) >= 0):
+                # powerful kun, mens et rum er under gulvet – ellers højeste blæser på samme temperatur (det larmer)
+                i, changed = i - 1, now
+                reason = f"{reason} – ingen rum under gulvet: powerful slås fra"
             if reason.endswith("øverste trin") and sp_max >= top - 1e-6 and base + AIR_SPAN > top + 1e-6:
                 # stigen er skåret af ved brugerens højeste setpunkt: sig det, så grænsen kan findes og flyttes
                 reason += f" (stigens højeste setpunkt, {top:.1f} °C)"
