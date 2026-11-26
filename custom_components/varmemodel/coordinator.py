@@ -2687,6 +2687,9 @@ class VarmemodelCoordinator:
                     a["soft_note"] = f"rummene er under gulvet – prøver planens trin {floor_step} i 30 min."
             # En start, hvor alle rum er under gulvet (fx efter en lang blokering): direkte på højeste blæser (powerful, når den
             # er tilladt nu) på stigens laveste temperatur – ikke ét trin pr. halve time op fra midten
+            if prio == "economy" and down_ok:
+                # økonomi: er alle rum over målet, er planens el-mål ikke en bund – der prøves et trin lavere
+                tgt = None
             if prev is None and margins and all(v < 0 for v in margins.values()):
                 start = top_of(ladder, start if (start_learned and start is not None) else 0)  # (den lærte starttemperatur)
                 if up_every:

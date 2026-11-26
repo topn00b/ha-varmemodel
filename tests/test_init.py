@@ -2842,6 +2842,7 @@ async def test_economy_keeps_trying_a_lower_step(ha: HomeAssistant) -> None:
         ok = [PlanRoom("Loft", 20.0, 19.5, 0.7, 0.0, 0.02, margin=0.7, t_max=22.5)]  # 0,5 over gulvet, usikkerhed 0,7
         ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 21.0, "temperature": 20, "fan_mode": "High"})
         c._air_rise[air] = {"Loft": 0.0}  # noqa: SLF001
+        p.hours[0]["el_kw"] = 5.0  # planens el-mål: stigens top – i økonomi ingen bund, når rummene er over målet
         t = time.time()
         first = c._air_step(s, "climate.ll", p, ok, True, False, t)["step"]  # noqa: SLF001
         c.air[air]["changed"] = t - DOWN_GAP - 10
