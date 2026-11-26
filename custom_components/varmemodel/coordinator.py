@@ -2610,6 +2610,10 @@ class VarmemodelCoordinator:
                              [le[k] if k in real else None for k in range(len(ladder))], el_now * 1000 if el_now else None)
         if tgt is None:
             tgt = target_step(lw, el_now * 1000 if el_now else None)
+        if tgt is not None and ladder[tgt].preset == POWERFUL:
+            # planens mål er aldrig powerful (det larmer – det bruges kun på vej op, når et rum er under gulvet): højeste
+            # blæser på samme temperatur
+            tgt = max(0, tgt - 1)
         boost = self.air_boost_active(s)
         if boost:
             i, changed, down_since, reason = len(ladder) - 1, now, None, "jeg fryser – øverste trin"
