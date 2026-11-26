@@ -2582,6 +2582,13 @@ class VarmemodelCoordinator:
         margins = {r.name: round(r.t_now - r.t_min - pre.get(r.name, 0.0), 2) for r in meas}
         # Ned kun når alle rum er over gulv + forvarmning + rummodellens egen usikkerhed (ingen fast margen)
         down_ok = bool(meas) and all(r.t_now - r.t_min - pre.get(r.name, 0.0) >= r.margin for r in meas)
+        if prio == "economy" and meas:
+            # Økonomi prøver hele tiden et trin lavere, så længe varmepumpen skal køre: når alle rum er over målet (gulv +
+            # forvarmning) og – med den målte tendens – stadig er det om en time. Rummodellens usikkerhed som margen er for
+            # forsigtig her: et trin, der viser sig at være for lidt, gås der op fra igen (og det prøves ikke straks igen)
+            rise_ = self._air_rise.get(s.sid) or {}
+            down_ok = all((m_ := r.t_now - r.t_min - pre.get(r.name, 0.0)) >= 0 and m_ + min(0.0, rise_.get(r.name, 0.0)) >= 0
+                          for r in meas)
         t_out = p.hours[0]["t_out"] if p.hours else None
         b = band(t_out)
         starts = a.setdefault("start", {})

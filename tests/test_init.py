@@ -2825,3 +2825,27 @@ async def test_powerful_only_while_a_room_is_below_the_floor(ha: HomeAssistant) 
     assert d["preset"] == "powerful"
     d = c._air_step(s, "climate.ll", p, warm, True, False, t + 60)  # noqa: SLF001
     assert d.get("preset") != "powerful" and d["fan_mode"] == "High" and "powerful slås fra" in c.air[air]["view"]["grund"]
+
+
+async def test_economy_keeps_trying_a_lower_step(ha: HomeAssistant) -> None:
+    """Økonomi går et trin ned, når alle rum er over målet og bliver ved med at være det (målt tendens) – også selv om
+    overskuddet er mindre end rummodellens usikkerhed. Balance venter på usikkerheden."""
+    from types import SimpleNamespace
+
+    from custom_components.varmemodel.air_control import DOWN_GAP, DOWN_HOLD
+    from custom_components.varmemodel.planner import PlanRoom
+
+    for prio, goes_down in (("economy", True), ("balance", False)):
+        c, s, air = await _air_ref_entry(ha)
+        c.settings[f"{air}.air_priority"] = prio
+        p = SimpleNamespace(hours=[{"blocked": False, "t_out": 2.0, "el_kw": None} for _ in range(6)], rooms={"Loft": [20.0] * 6})
+        ok = [PlanRoom("Loft", 20.0, 19.5, 0.7, 0.0, 0.02, margin=0.7, t_max=22.5)]  # 0,5 over gulvet, usikkerhed 0,7
+        ha.states.async_set("climate.ll", "heat", {**LL_ATTRS, "current_temperature": 21.0, "temperature": 20, "fan_mode": "High"})
+        c._air_rise[air] = {"Loft": 0.0}  # noqa: SLF001
+        t = time.time()
+        first = c._air_step(s, "climate.ll", p, ok, True, False, t)["step"]  # noqa: SLF001
+        c.air[air]["changed"] = t - DOWN_GAP - 10
+        c._air_step(s, "climate.ll", p, ok, True, False, t + 1)  # noqa: SLF001
+        d = c._air_step(s, "climate.ll", p, ok, True, False, t + DOWN_HOLD + 5)  # noqa: SLF001
+        assert (d["step"] < first) is goes_down, prio
+        await ha.config_entries.async_unload(c.entry.entry_id)
