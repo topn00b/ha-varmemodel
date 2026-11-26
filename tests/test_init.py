@@ -2251,8 +2251,8 @@ async def test_air_priority_min_fan_and_shared_steps(ha: HomeAssistant) -> None:
     assert by[("High", 20.0)]["grader_pr_kwh_el"] == 0.5 and by[("High", 20.0)]["målinger"] == 12
     assert (by[("High", 20.5)]["w"], by[("High", 20.5)]["w_kilde"]) == (400, "skøn") and by[("High", 20.5)]["virkning_kilde"] == "skøn"
     assert a["starttrin"] == {"0": "Mid +1.0"}
-    if c.commands[air].get("on"):  # planen varmer (rummet er under gulvet): starter på det lærte trin
-        assert a["trin"] == next(k for k, x in enumerate(a["trin_liste"]) if (x["blæser"], x["setpunkt"]) == ("Mid", 20.5))
+    if c.commands[air].get("on"):  # planen varmer (rummet er under gulvet): starter på den lærte temperatur, højeste blæser
+        assert a["trin"] == next(k for k, x in enumerate(a["trin_liste"]) if (x["blæser"], x["setpunkt"]) == ("High", 20.5))
 
 
 @pytest.mark.parametrize("expected_lingering_timers", [True])
@@ -2778,3 +2778,29 @@ async def test_ventilation_follows_night_and_day_and_room_need(ha: HomeAssistant
     ha.states.async_set("number.vent_speed", "4", {"min": 0, "max": 10})
     v = c._vent_decide(s, c.air[air], room(19.9), {}, False, False, False, 21.0, time.time())  # noqa: SLF001
     assert v["til"] and "venter" in v["grund"]
+
+
+async def test_air_start_with_all_rooms_below_the_floor_goes_straight_to_the_top_fan(ha: HomeAssistant) -> None:
+    """Efter en lang blokering, når alle rum er under gulvet: starten går direkte på højeste blæser (powerful, når den er
+    tilladt) på stigens laveste temperatur – også i økonomi."""
+    from types import SimpleNamespace
+
+    from custom_components.varmemodel.planner import PlanRoom
+
+    c, s, air = await _air_ref_entry(ha)
+    c.settings[f"{air}.air_priority"] = "economy"
+    c.settings[f"{air}.air_fan_day"] = c.settings[f"{air}.air_fan_night"] = "powerful"
+    p = SimpleNamespace(hours=[{"blocked": False, "t_out": 2.0, "el_kw": None} for _ in range(6)], rooms={"Loft": [18.0] * 6})
+    cold = [PlanRoom("Loft", 18.0, 19.5, 0.7, 0.0, 0.02, margin=0.3, t_max=22.5)]
+    pw = {**LL_ATTRS, "preset_modes": ["none", "powerful"]}
+    ha.states.async_set("climate.ll", "off", {**pw, "current_temperature": 18.0, "temperature": 20, "fan_mode": "Mid"})
+    d = c._air_step(s, "climate.ll", p, cold, True, False, time.time())  # noqa: SLF001
+    tl = c.air[air]["view"]["trin_liste"]
+    assert d["step"] == next(k for k, x in enumerate(tl) if x["blæser"] == "powerful")
+    assert d["preset"] == "powerful" and d["setpoint"] == tl[0]["setpunkt"]
+    assert "starter på højeste blæser" in c.air[air]["view"]["grund"]
+    # uden powerful på varmepumpen: højeste blæser
+    c.air[air].update(on=False, rung=None)
+    ha.states.async_set("climate.ll", "off", {**LL_ATTRS, "current_temperature": 18.0, "temperature": 20, "fan_mode": "Mid"})
+    d = c._air_step(s, "climate.ll", p, cold, True, False, time.time())  # noqa: SLF001
+    assert d["fan_mode"] == "High" and not d.get("preset") and all(x["blæser"] != "powerful" for x in c.air[air]["view"]["trin_liste"])

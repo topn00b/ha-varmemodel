@@ -2518,6 +2518,8 @@ class VarmemodelCoordinator:
         lt = dt_util.now()
         night = is_night(lt.hour * 60 + lt.minute, str(self.air_setting(s, "air_night_start")), str(self.air_setting(s, "air_night_end")))
         cap = self.air_setting(s, "air_fan_night" if night else "air_fan_day")
+        if cap == POWERFUL and POWERFUL not in (attrs.get("preset_modes") or []):
+            cap = fans[-1] if fans else None  # varmepumpen har ikke (længere) powerful: højeste blæser
         # Stigens temperaturer måles fra føleren ved enheden: laveste trin ligger AIR_ANCHOR_BELOW under den (varmepumpens
         # laveste effekt – længere nede stopper og starter den selv), og setpunkterne følger føleren, så et trin er et
         # bestemt arbejde for varmepumpen og ikke en bestemt temperatur. Toppen er brugerens valg (standard: rummenes
@@ -2672,6 +2674,12 @@ class VarmemodelCoordinator:
                     prev = floor_step
                     a["changed"] = now
                     a["soft_note"] = f"rummene er under gulvet – prøver planens trin {floor_step} i 30 min."
+            # En start, hvor alle rum er under gulvet (fx efter en lang blokering): direkte på højeste blæser (powerful, når den
+            # er tilladt nu) på stigens laveste temperatur – ikke ét trin pr. halve time op fra midten
+            if prev is None and margins and all(v < 0 for v in margins.values()):
+                start = top_of(ladder, start if (start_learned and start is not None) else 0)  # (den lærte starttemperatur)
+                if up_every:
+                    a["soft_note"] = "alle rum er under gulvet – starter på højeste blæser"
             # Et trin, der lige har vist sig ikke at være nok (et rum under gulvet, der ikke steg), prøves ikke igen med det
             # samme: der gås først ned til det, når overskuddet har holdt dobbelt så længe
             ne = find(a.get("not_enough"))
