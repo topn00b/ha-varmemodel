@@ -886,6 +886,66 @@ async def test_low_flow_search_rules(ha: HomeAssistant) -> None:
     assert v["mål"] == 28.0 and v["status"] == "sænker" and v["log"]
 
 
+async def test_neutral_return_sets_the_floor_of_the_search(ha: HomeAssistant) -> None:
+    """Gulvenes neutrale retur: fordelerens retur efter 10 min. cirkulation uden varme (ind ≈ retur). Søgningen starter fra
+    den – ikke fra varmepumpens kolde føler efter stilstand – og går aldrig under den + 3 °C."""
+    ha.states.async_set("binary_sensor.komp", "off")
+    ha.states.async_set("binary_sensor.vv", "off")
+    ha.states.async_set("binary_sensor.p2", "on")
+    ha.states.async_set("sensor.fordeler_ind", "22.9")
+    ha.states.async_set("sensor.fordeler_retur", "22.8")
+    c, s = await _lv_entry(ha, extra_source={"compressor": "binary_sensor.komp", "dhw": "binary_sensor.vv",
+                                             "loop_supply_temp": "sensor.fordeler_ind", "loop_return_temp": "sensor.fordeler_retur",
+                                             "loop_pump": "binary_sensor.p2"})
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    hs = c.air.setdefault(f"hydro:{s.sid}", {})
+    now = time.time()
+    c._neutral_sample(s, hs, now)  # noqa: SLF001
+    assert hs.get("neutral") is None  # pumpe og stilstand er lige begyndt: ikke 10 min. endnu
+    c._neutral_sample(s, hs, now + 700)  # noqa: SLF001
+    assert hs["neutral"]["v"] == 22.8 and hs["neutral"]["via"] == "slukket"
+    assert c._neutral_floor(hs) == 26.0  # noqa: SLF001 – 22,8 + 3 → 26
+    # Varmepumpens egen retur er kold efter stilstand (stillestående vand i udedelen): starten regnes fra gulvene
+    ha.states.async_set("sensor.retur", "17.1")
+    assert c._ret_start(s, hs) == 22.8  # noqa: SLF001
+    rooms: list = []
+    c._low_rooms_sync = lambda _s: [dict(x) for x in rooms]  # noqa: SLF001
+    assert await c._low_flow(s, hs, 35.0) == 26.0
+    # Alle rum har god margen: søgningen sænker – men aldrig under bunden
+    rooms[:] = [{"navn": "Gang", "margen": 0.9, "tendens": 0.0, "om_3t": 0.9}]
+    hs["low_t"] -= 7200
+    assert await c._low_flow(s, hs, 35.0) == 26.0
+    # Et gammelt mål under bunden løftes straks
+    hs["low"], hs["low_t"] = 21.0, time.time()
+    assert await c._low_flow(s, hs, 35.0) == 26.0 and "neutrale retur" in hs["low_why"]
+    # Ind og retur langt fra hinanden (bufferen varmer gulvene): ingen ny måling
+    ha.states.async_set("sensor.fordeler_ind", "33.5")
+    c._neutral_sample(s, hs, now + 2000)  # noqa: SLF001
+    assert hs["neutral"]["t"] == round(now + 700)
+    v = c.flow_search(s)
+    assert v["bund"] == 26.0 and v["neutral_retur"]["v"] == 22.8 and v["fordeler"]["forskel"] == 10.7
+
+
+async def test_no_heat_to_floor_loop_raises_the_target(ha: HomeAssistant) -> None:
+    """Under drift: fordelerens ind − retur under 0,3 °C i 20 min. = gulvkredsen får næsten ingen varme → målet +1 °C."""
+    ha.states.async_set("binary_sensor.komp", "on")
+    ha.states.async_set("sensor.fordeler_ind", "24.4")
+    ha.states.async_set("sensor.fordeler_retur", "24.3")
+    c, s = await _lv_entry(ha, extra_source={"compressor": "binary_sensor.komp", "loop_supply_temp": "sensor.fordeler_ind",
+                                             "loop_return_temp": "sensor.fordeler_retur"})
+    c.settings[f"{s.sid}.soft_start"] = "lavest"
+    hs = c.air.setdefault(f"hydro:{s.sid}", {})
+    c._low_rooms_sync = lambda _s: [{"navn": "Gang", "margen": 0.3, "tendens": 0.0, "om_3t": 0.3}]  # noqa: SLF001
+    assert await c._low_flow(s, hs, 35.0) == 24.0
+    t0 = time.time() + 1300  # kompressoren har kørt længe nok (opstarten er forbi)
+    c._neutral_sample(s, hs, t0)  # noqa: SLF001
+    assert hs["nodelta_since"] == t0
+    hs["nodelta_since"] = time.time() - 1300
+    c._neutral_sample = lambda *_a: None  # noqa: SLF001 – testens kompressor har ikke kørt i virkeligheden
+    hs["low_t"] -= 1800
+    assert await c._low_flow(s, hs, 35.0) == 25.0 and "næsten ingen varme" in hs["low_why"]
+
+
 def test_calm_ladder_drops_untested_high_step() -> None:
     """Rolig opstart: et trin over det afprøvede (fx 11 fra før) sættes ned til midten og prøves 30 min."""
     import inspect

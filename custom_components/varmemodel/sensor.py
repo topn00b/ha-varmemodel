@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import VarmemodelConfigEntry
-from .const import CONF_COMPRESSOR, CONF_DEFROST, CONF_DHW_TEMP, FIT_KEYS, SOURCE_HYDRONIC
+from .const import CONF_COMPRESSOR, CONF_DEFROST, CONF_DHW_TEMP, CONF_LOOP_RETURN, CONF_LOOP_SUPPLY, FIT_KEYS, SOURCE_HYDRONIC
 from .coordinator import SourceState, VarmemodelCoordinator, after_red
 from .entity import VarmemodelEntity
 
@@ -36,6 +36,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: VarmemodelConfigEntry, a
                 ents.append(IceWatchSensor(c, s))
             if s.eid(CONF_DHW_TEMP):
                 ents.append(HotWaterSensor(c, s))
+            if s.eid(CONF_LOOP_SUPPLY) and s.eid(CONF_LOOP_RETURN):
+                ents.append(NeutralReturnSensor(c, s))
             ents += [PlanNowSensor(c, s), CommandSensor(c, s), PlanValueSensor(c, s, "plan_flow", "flow", "°C", 1),
                      PlanCostSensor(c, s)]
         else:
@@ -218,6 +220,41 @@ class IceWatchSensor(SourceEntity, SensorEntity):
                       "efter en afrimning eller start, slut = de sidste 10 min., snit = hele cyklussen; lav = ringere end ni ud af ti "
                       "tidligere cyklusser",
             "opdateret": _ts_local(w.get("updated")),
+        }
+
+
+class NeutralReturnSensor(SourceEntity, SensorEntity):
+    """Gulvenes neutrale retur: fordelerens retur, når gulvkredsen cirkulerer uden at få varme (ind ≈ retur). Søgningen efter
+    laveste fremløb går aldrig under den + løftet – under den køler vandet gulvene i stedet for at varme dem."""
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "°C"
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, coordinator: VarmemodelCoordinator, s: SourceState) -> None:
+        super().__init__(coordinator, s, "neutral_return")
+
+    def _hs(self) -> dict[str, Any]:
+        return self.coordinator.air.get(f"hydro:{self.src.sid}") or {}
+
+    @property
+    def native_value(self) -> float | None:
+        n = self._hs().get("neutral") or {}
+        return n.get("v")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        hs = self._hs()
+        n, loop = hs.get("neutral") or {}, hs.get("loop") or {}
+        c = self.coordinator
+        return {
+            "målt": _ts_local(n.get("t")), "via": n.get("via"), "fordeler_ind_ved_måling": n.get("ind"),
+            "gyldig": c._neutral(hs) is not None,  # noqa: SLF001
+            "bund_for_fremløb": c._neutral_floor(hs),  # noqa: SLF001
+            "fordeler_ind": loop.get("ind"), "fordeler_retur": loop.get("retur"),
+            "metode": "fordelerens retur, når gulvkredsen har cirkuleret mindst 10 min. uden varme (kompressoren står eller laver "
+                      "varmt vand) og ind og retur ligger inden for 0,3 °C; bunden for fremløbet er den + 3 °C",
         }
 
 

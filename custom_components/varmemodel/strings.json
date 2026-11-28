@@ -209,6 +209,9 @@
       },
       "air_step": {
         "name": "Ladder step"
+      },
+      "neutral_return": {
+        "name": "Neutral return of the floors"
       }
     },
     "button": {
@@ -399,7 +402,10 @@
             "electricity_backup": "Additional electricity meter (e.g. cloud)",
             "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)",
             "onoff_target": "On/off target (climate Varmemodel switches to heat / off)",
-            "onoff_fallback": "On/off fallback (another climate entity for the same heat pump)"
+            "onoff_fallback": "On/off fallback (another climate entity for the same heat pump)",
+            "loop_supply_temp": "Floor loop supply (manifold in)",
+            "loop_return_temp": "Floor loop return (manifold return)",
+            "loop_pump": "Floor loop pump running"
           },
           "data_description": {
             "heat_energy": "Without it COP, heat loss and emission cannot be calibrated.",
@@ -413,7 +419,10 @@
             "electricity_backup": "Used for hours where the main meter has no data, e.g. before it was installed. Scaled automatically to the main meter using the hours where both have data.",
             "flow_target": "Flow target (entity Varmemodel writes the flow target to, e.g. the heat pump's climate in heat mode)",
             "onoff_target": "On/off target (climate Varmemodel switches to heat / off)",
-            "onoff_fallback": "Used when the primary does not respond, or when the heat pump is not in the wanted state 90 seconds after switching – e.g. local Modbus as primary and the vendor cloud as fallback."
+            "onoff_fallback": "Used when the primary does not respond, or when the heat pump is not in the wanted state 90 seconds after switching – e.g. local Modbus as primary and the vendor cloud as fallback.",
+            "loop_supply_temp": "Optional. The water temperature going into the floor loop at the manifold. With supply and return Varmemodel learns the floors' neutral return – the return when the loop gets no heat – and never lets the flow target go below it plus the lift that gives heat.",
+            "loop_return_temp": "Optional. The water coming back from the floors. Measured inside the house, it is not cooled by water standing in the outdoor unit.",
+            "loop_pump": "Optional. On while the floor loop circulates (e.g. a second circulation pump). The neutral return is only read after it has run 10 minutes."
           }
         },
         "air_air": {

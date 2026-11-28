@@ -14,6 +14,9 @@ CONF_FLOW = "flow_temp"
 CONF_RETURN = "return_temp"
 CONF_COMPRESSOR = "compressor"
 CONF_DEFROST = "defrost"
+CONF_LOOP_SUPPLY = "loop_supply_temp"  # gulvkredsens fremløb ved fordeleren (valgfri) – til gulvenes neutrale retur
+CONF_LOOP_RETURN = "loop_return_temp"  # gulvkredsens retur ved fordeleren (valgfri)
+CONF_LOOP_PUMP = "loop_pump"  # gulvkredsens pumpe kører (valgfri)
 CONF_DHW = "dhw"
 CONF_DHW_TEMP = "dhw_temp"  # varmtvandstankens temperatur (°C) – med den lærer Varmemodel tanken og lægger en plan for varmt vand
 CONF_DHW_SWITCH = "dhw_switch"  # varmt vand til/fra på varmepumpen (til sammenligning med planen)
@@ -218,6 +221,13 @@ SOFT_OPTIONS = ("fra", "til", "test", "lavest")  # lavest: start lavt og søg de
 SOFT_STEP_K = 2.0  # fremløbet hæves så meget pr. kvarter under blød start
 SOFT_OVER_RETURN_K = 3.0  # blød start begynder så meget over returen (brugeren: 4 var for hårdt)
 SOFT_FLOOR = 20.0  # og aldrig under dette fremløb
+# Gulvenes neutrale retur: returen ved fordeleren, når gulvkredsen cirkulerer uden at få varme (kompressoren står eller laver
+# varmt vand) og ind og retur er ens. Søgningens mål går aldrig under den + SOFT_OVER_RETURN_K – under den køler vandet gulvene
+NEUTRAL_SETTLE_S = 600  # gulvkredsen skal have cirkuleret så længe uden varme, før returen er gulvenes egen
+NEUTRAL_BAND_K = 0.3  # fordelerens ind og retur skal ligge så tæt (vandet hverken giver eller tager varme)
+NEUTRAL_MAX_AGE = 24 * 3600  # så længe bruges den seneste gode måling
+NODELTA_K = 0.3  # under drift: fordelerens ind − retur under dette …
+NODELTA_S = 1200  # … så længe = gulvkredsen får næsten ingen varme – målet hæves 1 °C
 SOFT_EVAL_S = 5400  # hver start vurderes over de første 90 min.  # højst så mange tænd/sluk pr. døgn (sluk i blokerede timer går altid igennem)  # højst så mange skrivninger af fremløbsmålet pr. døgn  # »jeg fryser« for luft-luft: øverste trin (powerful), også i blokerede timer, i højst »jeg fryser gælder højst« timer
 # Opvarmningen (prioriteten bestemmer, hvor hårdt varmepumpen presses på vej mod planens fremløb – se calibration.lift_levels)
 APPR_EVAL_S = 300  # mens loftet holder fremløbet nede, følges returen så tit

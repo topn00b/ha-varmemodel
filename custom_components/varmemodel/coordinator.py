@@ -116,6 +116,11 @@ from .const import (
     HYDRO_SWITCH,
     SOFT_EVAL_S,
     SOFT_FLOOR,
+    NEUTRAL_BAND_K,
+    NEUTRAL_MAX_AGE,
+    NEUTRAL_SETTLE_S,
+    NODELTA_K,
+    NODELTA_S,
     APPR_EVAL_S,
     APPR_NEED,
     APPR_TRIM_MAX,
@@ -157,6 +162,9 @@ from .const import (
     CONF_MIGRATED_SOURCE,
     CONF_OUTDOOR,
     CONF_RETURN,
+    CONF_LOOP_PUMP,
+    CONF_LOOP_RETURN,
+    CONF_LOOP_SUPPLY,
     CONF_ROOM_ALWAYS_OPEN,
     CONF_ROOM_IN_PLAN,
     CONF_ROOM_MIN,
@@ -477,7 +485,8 @@ class VarmemodelCoordinator:
             # Blokering lige nu (fx prisloft pr. kvarter): planlæg straks, når den skifter, så varmepumperne følger med
             self._unsubs.append(async_track_state_change_event(self.hass, [beid], self._on_block_now))
         hyd_ids = sorted({e for s in self.sources.values() if s.conf.get(CONF_FLOW_TARGET)
-                          for e in (s.eid(CONF_COMPRESSOR), s.eid(CONF_DEFROST), s.eid(CONF_DHW), s.eid(CONF_FLOW)) if e})
+                          for e in (s.eid(CONF_COMPRESSOR), s.eid(CONF_DEFROST), s.eid(CONF_DHW), s.eid(CONF_FLOW),
+                                    s.eid(CONF_LOOP_SUPPLY), s.eid(CONF_LOOP_RETURN), s.eid(CONF_LOOP_PUMP)) if e})
         if hyd_ids:
             # Opstart, afrimning og stop: skriv fremløbsmålet straks (før varmepumpen genstarter) – ikke først ved næste kvarter
             self._unsubs.append(async_track_state_change_event(self.hass, hyd_ids, self._on_hydro_state))
@@ -1956,6 +1965,9 @@ class VarmemodelCoordinator:
                 continue
             hs = self.air.setdefault(f"hydro:{s.sid}", {})
             kick = False
+            self._neutral_sample(s, hs, now)
+            if eid in (s.eid(CONF_LOOP_SUPPLY), s.eid(CONF_LOOP_RETURN), s.eid(CONF_LOOP_PUMP)):
+                continue
             if eid == s.eid(CONF_COMPRESSOR):
                 hs["comp_on_t" if new.state == "on" else "comp_off_t"] = now
                 kick = True
@@ -2173,7 +2185,7 @@ class VarmemodelCoordinator:
         on_t = max(_num(hs.get("comp_on_t")) or 0, _num(hs.get("comp_since")) or 0) if on else 0
         start = (not on) or now - on_t < START_PHASE_S or df_on or df_age < START_PHASE_S
         vals: list[tuple[float, str]] = []
-        if start and (v := start_flow(self._state_num(s.eid(CONF_RETURN)), self._start_k(hs), SOFT_OVER_RETURN_K, SOFT_FLOOR)) is not None:
+        if start and (v := start_flow(self._ret_start(s, hs), self._start_k(hs), SOFT_OVER_RETURN_K, SOFT_FLOOR)) is not None:
             vals.append((v, "opstart"))
         if on and not df_on and df_age >= 300 and (out := self._state_num(s.eid(CONF_FLOW))) is not None:
             vals.append((float(ceil(out - ANTI_STOP_GAP - 1e-9)), "stopværn"))
@@ -2904,7 +2916,7 @@ class VarmemodelCoordinator:
             # Opstartsløft og stopværn: varmepumpens egen termostat må ikke nå at stoppe kompressoren (start/stop slider).
             # Søgningens mål er stadig det laveste, der holder rummene; værnet løfter kun det, der skrives – aldrig over loftet
             if pre_start:
-                g, why = start_flow(self._state_num(s.eid(CONF_RETURN)), self._start_k(hs), SOFT_OVER_RETURN_K, SOFT_FLOOR), "opstart"
+                g, why = start_flow(self._ret_start(s, hs), self._start_k(hs), SOFT_OVER_RETURN_K, SOFT_FLOOR), "opstart"
             else:
                 g, why = self._guard_value(s, hs)
             hs["guard"] = None
@@ -2922,7 +2934,7 @@ class VarmemodelCoordinator:
             hs["soft"] = True
         elif hs.get("soft") and hs.get("start_t"):
             if hs.get("ramp0") is None:
-                ret = self._state_num(s.eid(CONF_RETURN))
+                ret = self._ret_start(s, hs)
                 hs["ramp0"] = max((ret + SOFT_OVER_RETURN_K) if ret is not None else want - 3 * SOFT_STEP_K, SOFT_FLOOR)
             ramp = hs["ramp0"] + SOFT_STEP_K * int((time.time() - hs["start_t"]) // 900)
             if ramp < want:
@@ -3161,16 +3173,80 @@ class VarmemodelCoordinator:
             x["om_3t"] = round(x["margen"] + 3 * x["tendens"], 2)
         return rooms
 
+    def _neutral_sample(self, s: SourceState, hs: dict[str, Any], now: float) -> None:
+        """Gulvenes neutrale retur: fordelerens retur, når gulvkredsen har cirkuleret mindst NEUTRAL_SETTLE_S uden at få varme
+        (kompressoren står, eller den laver varmt vand) og ind og retur ligger inden for NEUTRAL_BAND_K – så hverken giver eller
+        tager vandet varme. Under drift noteres også, hvornår gulvkredsen næsten ingen varme får (ind − retur < NODELTA_K)."""
+        sup, ret = self._state_num(s.eid(CONF_LOOP_SUPPLY)), self._state_num(s.eid(CONF_LOOP_RETURN))
+        if sup is None or ret is None:
+            hs.pop("nodelta_since", None)
+            return
+        hs["loop"] = {"ind": round(sup, 2), "retur": round(ret, 2), "t": round(now)}
+        pump_t = 0.0
+        if pe := s.eid(CONF_LOOP_PUMP):
+            ps = self.hass.states.get(pe)
+            if ps is None or ps.state != "on":
+                hs.pop("nodelta_since", None)
+                return
+            pump_t = ps.last_changed.timestamp()
+        comp = self.hass.states.get(s.eid(CONF_COMPRESSOR) or "")
+        dhw = self.hass.states.get(s.eid(CONF_DHW) or "")
+        dfs = self.hass.states.get(s.eid(CONF_DEFROST) or "")
+        comp_on = comp is not None and comp.state == "on"
+        dhw_on = dhw is not None and dhw.state == "on"
+        df_on = dfs is not None and dfs.state == "on"
+        if dhw_on:
+            free_t: float | None = dhw.last_changed.timestamp()
+        elif comp is not None and comp.state == "off":
+            free_t = comp.last_changed.timestamp()
+        else:
+            free_t = None
+        if free_t is not None and not df_on and now - max(free_t, pump_t) >= NEUTRAL_SETTLE_S and abs(sup - ret) <= NEUTRAL_BAND_K:
+            hs["neutral"] = {"v": round(ret, 1), "t": round(now), "via": "varmt vand" if dhw_on else "slukket", "ind": round(sup, 1)}
+            lg = hs.setdefault("neutral_log", [])
+            if not lg or now - lg[-1][0] >= 900:
+                lg.append([round(now), round(ret, 1)])
+                hs["neutral_log"] = lg[-96:]
+        if comp_on and not dhw_on and not df_on and now - comp.last_changed.timestamp() >= START_PHASE_S and sup - ret < NODELTA_K:
+            hs.setdefault("nodelta_since", now)
+            hs["nodelta_k"] = round(sup - ret, 2)
+        else:
+            hs.pop("nodelta_since", None)
+
+    @staticmethod
+    def _neutral(hs: dict[str, Any], now: float | None = None) -> float | None:
+        """Den seneste gode måling af gulvenes neutrale retur (højst NEUTRAL_MAX_AGE gammel)."""
+        n = hs.get("neutral") or {}
+        if n.get("v") is None or (now or time.time()) - (_num(n.get("t")) or 0) > NEUTRAL_MAX_AGE:
+            return None
+        return float(n["v"])
+
+    def _neutral_floor(self, hs: dict[str, Any]) -> float | None:
+        """Søgningens bund: gulvenes neutrale retur + løftet (SOFT_OVER_RETURN_K) – under det køler vandet gulvene."""
+        n = self._neutral(hs)
+        return None if n is None else float(round(n + SOFT_OVER_RETURN_K))
+
+    def _ret_start(self, s: SourceState, hs: dict[str, Any]) -> float | None:
+        """Returen, en start regnes fra: varmepumpens retur – men aldrig under gulvenes neutrale retur. Efter stilstand har
+        vandet i udedelen og rørene udenfor kølet sig, så varmepumpens egen føler viser langt under det, gulvene giver."""
+        r, n = self._state_num(s.eid(CONF_RETURN)), self._neutral(hs)
+        if r is None:
+            return n
+        return max(r, n) if n is not None else r
+
     def _low_cap(self, s: SourceState, hs: dict[str, Any], t_out: float | None) -> float | None:
         """Fremløbet, planen skal regne med under »søg laveste«: målet nu; ellers lært laveste for udetemperaturen, det sidste
         mål eller retur + SOFT_OVER_RETURN_K (det, næste start begynder ved)."""
+        b = self._neutral_floor(hs)
+        lift = (lambda v: max(v, b) if b is not None else v)  # noqa: E731 – aldrig under gulvenes neutrale retur + løftet
         if hs.get("low") is not None:
             return float(hs["low"])
         if (lr := (hs.get("low_learned") or {}).get(band(t_out) or "?")) is not None:
-            return float(lr)
+            return lift(float(lr))
         if hs.get("low_last") is not None:
-            return float(hs["low_last"])
-        return start_flow(self._state_num(s.eid(CONF_RETURN)), SOFT_OVER_RETURN_K, SOFT_OVER_RETURN_K, SOFT_FLOOR)
+            return lift(float(hs["low_last"]))
+        v = start_flow(self._ret_start(s, hs), SOFT_OVER_RETURN_K, SOFT_OVER_RETURN_K, SOFT_FLOOR)
+        return lift(v) if v is not None else b
 
     def _energy_kwh(self, eid: str | None) -> float | None:
         """Energimålerens stand i kWh (Wh og MWh regnes om)."""
@@ -3339,18 +3415,23 @@ class VarmemodelCoordinator:
         +2 K/30 min., når et rum er under gulvet og ikke på vej op; +1 K/t, når et rum er på vej under gulvet inden for
         3 timer; −1 K hver 2. time, når alle rum er mindst 0,5 °C over gulvet og stabile. Aldrig over planens fremløb."""
         now = time.time()
+        self._neutral_sample(s, hs, now)
         t_out = self._state_num(self._id(CONF_OUTDOOR))
         bk = band(t_out) or "?"
         learned = (hs.get("low_learned") or {}).get(bk)
         k = self._start_k(hs)
         if hs.get("low") is None or pre_start:
             # Søgningen starter lavt (retur + 3 °C); opstartsløftet (det lærte) lægges kun på det, der skrives i opstarten
-            ret = self._state_num(s.eid(CONF_RETURN))
+            ret = self._ret_start(s, hs)
             v = start_flow(ret, SOFT_OVER_RETURN_K, SOFT_OVER_RETURN_K, SOFT_FLOOR)
             if v is None:
                 v = float(round(max(plan - 3 * SOFT_STEP_K, SOFT_FLOOR)))
+            nr = self._neutral(hs)
+            if (b := self._neutral_floor(hs)) is not None and v < b:
+                v = b
             hs.update(low=v, low_t=now, low_hold_since=now, start_t=hs.get("start_t") or now, low_step=0.0,
                       low_status="start", low_why=f"start: retur + {SOFT_OVER_RETURN_K:.0f} °C"
+                      + (f" (gulvenes neutrale retur {_k_txt(nr)} °C)" if nr is not None else "")
                       + (f" (opstartsløft retur + {_k_txt(k)} °C, lært af varmepumpens opstart)" if k > SOFT_OVER_RETURN_K else "")
                       + (f" (lært laveste ved {_band_txt(bk)} ude: {learned:.0f} °C – løftes 2 °C pr. kvarter derop)" if learned else ""))
             self._low_log(hs, now, hs["low"], plan, hs["low_why"])
@@ -3424,11 +3505,21 @@ class VarmemodelCoordinator:
             status = "hæver"
             if since >= LOW_UP_HOLD:
                 step, why = 1.0, f"{x['navn']} er på vej under gulvet (om 3 t ca. {x['om_3t']:+.1f} °C)"
+        elif (nd := _num(hs.get("nodelta_since"))) is not None and now - nd >= NODELTA_S:
+            status = "hæver"
+            if since >= LOW_URGENT_HOLD:
+                step, why = 1.0, (f"gulvkredsen får næsten ingen varme (fordeler ind − retur {_k_txt(hs.get('nodelta_k') or 0)} °C i "
+                                  f"{round((now - nd) / 60)} min.)")
         elif rooms and all(x["margen"] >= LOW_DOWN_MARGIN and x["tendens"] >= -0.02 for x in rooms):
             status = "sænker"
             if since >= LOW_DOWN_HOLD:
                 step, why = -1.0, f"alle rum mindst {LOW_DOWN_MARGIN:.1f} °C over gulvet og stabile"
-        new = min(max(low + step, SOFT_FLOOR), plan)
+        bund = self._neutral_floor(hs)
+        if bund is not None and low + step < bund - 0.05:
+            # Under gulvenes neutrale retur + løftet køler vandet gulvene i stedet for at varme dem: målet løftes straks dertil
+            step, status = bund - low, "hæver"
+            why = f"under gulvenes neutrale retur ({_k_txt(self._neutral(hs))} °C) + {SOFT_OVER_RETURN_K:.0f} °C"
+        new = min(max(low + step, SOFT_FLOOR, bund if bund is not None else SOFT_FLOOR), plan)
         hs["low_step"] = 0.0
         if step and new != low:
             if step > 0 and new < low:
@@ -3560,7 +3651,23 @@ class VarmemodelCoordinator:
             t_ok = now if (g and g.get("mål") is not None and g["mål"] >= float(want_now)) else max(
                 now, float(c.get("since_flow") or 0) + FLOW_HOLD - SLACK, float(c.get("last_change") or 0) + MIN_GAP - SLACK)
             when_txt = dt_util.as_local(dt_util.utc_from_timestamp(_next_replan(t_ok))).strftime("%H:%M")
+        # Gulvenes neutrale retur og søgningens bund (neutral retur + løftet)
+        nr_raw = hs.get("neutral") or {}
+        nr = self._neutral(hs, now)
+        bund = self._neutral_floor(hs)
+        if bund is not None and low is not None and not off and low <= bund + 0.05 and not (k or ap_on or g):
+            text = f"{text} Målet står ved bunden: gulvenes neutrale retur {_k_txt(nr)} °C + {SOFT_OVER_RETURN_K:.0f} °C."
+        loop = hs.get("loop") or {}
+        nd = _num(hs.get("nodelta_since"))
+        neutral_view = {"v": nr, "målt": _ts_local_iso(nr_raw["t"]) if nr_raw.get("t") else None,
+                        "via": nr_raw.get("via"), "alder_min": round((now - nr_raw["t"]) / 60) if nr_raw.get("t") else None,
+                        "for_gammel": nr is None and nr_raw.get("v") is not None, "seneste": nr_raw.get("v"),
+                        "log": (hs.get("neutral_log") or [])[-48:]} if (s.eid(CONF_LOOP_SUPPLY) and s.eid(CONF_LOOP_RETURN)) else None
         return {
+            "neutral_retur": neutral_view, "bund": bund,
+            "fordeler": ({"ind": loop.get("ind"), "retur": loop.get("retur"),
+                          "forskel": round(loop["ind"] - loop["retur"], 2) if loop.get("ind") is not None and loop.get("retur") is not None else None,
+                          "uden_varme_min": round((now - nd) / 60) if nd is not None else None} if loop else None),
             "aktiv": low is not None and bool(hs.get("start_t")) and not off,
             "slukket": off, "mål": low if low is not None else cap, "loft": hs.get("low_loft"), "forvarmer": k or None, "mål_nu": eff,
             "plan": (self.commands.get(s.sid) or {}).get("flow"), "status": "slukket" if off else status,

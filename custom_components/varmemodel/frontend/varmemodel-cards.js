@@ -15,7 +15,7 @@
  */
 (() => {
   'use strict';
-  const VERSION = '0.34.5';
+  const VERSION = '0.35.0';
 
   // ------------------------------------------------------------------ hjælpere
   const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
@@ -831,7 +831,7 @@
   .tg2{font:inherit;font-size:13px;font-weight:600;border-radius:12px;padding:3px 14px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color);cursor:pointer}
   .tg2.on{background:${OR};border-color:${OR};color:#fff}
   .ax{font-size:11px;fill:var(--secondary-text-color,#999)}
-  .fsr{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.fsc{border:1px solid var(--divider-color);border-radius:8px;padding:4px 8px}.fsv{font-size:18px;font-weight:600}
+  .fsr{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px}.fsc{border:1px solid var(--divider-color);border-radius:8px;padding:4px 8px}.fsv{font-size:18px;font-weight:600}
   .pv2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:8px;margin-top:10px;align-items:start}
   .bento{display:grid;gap:8px}
   .bt{position:relative;border-radius:12px;padding:10px 12px;background:color-mix(in srgb,var(--c) 16%,var(--card-background-color));border:1px solid color-mix(in srgb,var(--c) 45%,transparent);border-left:5px solid var(--c);min-height:118px;display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -1480,7 +1480,7 @@
       const past = (pa.history || []).map((x) => ({ t: Date.parse(x.t), b: !!x.blocked }));
       // Røde perioder med kvarterer (fx 06:30–10:15); ældre versioner har kun timerne
       const reds = (pa['røde_perioder'] || []).map((x) => [Date.parse(x.fra), Date.parse(x.til)]).filter((x) => !isNaN(x[0]) && !isNaN(x[1]));
-      const vals = [...ud, ...ind, ...tg].map((x) => x.v).concat(fut.map((x) => x.v), [fs.loft, fs.mål]).filter((x) => x !== null && x !== undefined);
+      const vals = [...ud, ...ind, ...tg].map((x) => x.v).concat(fut.map((x) => x.v), [fs.loft, fs.mål, fs.bund]).filter((x) => x !== null && x !== undefined);
       const lo = Math.floor(Math.min(20, ...vals) / 2) * 2, hi = Math.ceil(Math.max(34, ...vals) / 2) * 2;
       const W = 640, H = 190, L = 30, R = 10, T = 8, B = 30;
       const X = (t) => L + ((Math.min(Math.max(t, t0), t1) - t0) / (t1 - t0)) * (W - L - R), Y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
@@ -1503,11 +1503,13 @@
       // Planens timer frem (fremløb i varmetimerne)
       let fp = ''; for (const x of fut) if (x.v !== null && x.t + 3600000 > now) fp += `<line x1="${X(Math.max(x.t, now))}" x2="${X(x.t + 3600000)}" y1="${Y(x.v)}" y2="${Y(x.v)}" stroke="var(--secondary-text-color,#999)" stroke-width="2.2" stroke-dasharray="4 3"/>`;
       g += fp;
+      // Bunden: gulvenes neutrale retur + løftet – søgningen går aldrig under den (under den køler vandet gulvene)
+      if (fs.bund != null) g += `<line x1="${L}" x2="${W - R}" y1="${Y(fs.bund)}" y2="${Y(fs.bund)}" stroke="#2e9e5b" stroke-width="1" stroke-dasharray="4 3"/><text x="${L + 4}" y="${Y(fs.bund) + 11}" class="ax" style="fill:#2e9e5b">bund ${fmt(fs.bund, 0)} (gulve ${fmt((fs.neutral_retur || {}).v, 1)} + 3)</text>`;
       if (fs.loft != null) g += `<line x1="${L}" x2="${W - R}" y1="${Y(fs.loft)}" y2="${Y(fs.loft)}" stroke="var(--secondary-text-color,#999)" stroke-width="1" stroke-dasharray="1 3"/><text x="${W - R - 2}" y="${Y(fs.loft) - 3}" text-anchor="end" class="ax">loft ${fmt(fs.loft, 0)}</text>`;
       g += `<line x1="${X(now)}" x2="${X(now)}" y1="${T}" y2="${H - B}" stroke="var(--primary-text-color,#ddd)" stroke-width="1" stroke-dasharray="2 2"/><text x="${X(now) + 3}" y="${T + 10}" class="ax">nu</text>`;
       const loading = !Object.keys(hist).length;
       return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;margin-top:6px" role="img" aria-label="Fremløb: målt, mål og planens timer 12 timer tilbage og frem">${g}</svg>`
-        + `<div class="sm mut">${loading ? 'henter historik … · ' : ''}<span style="color:${OR}">━</span> målt fremløb (ud) · <span style="color:${BL}">━</span> retur (ind) · <b>━</b> mål i varmepumpen · ╌ planens timer frem · ┄ loft · <span style="color:${OR}">▬</span> kompressor kører · <span style="color:#d6453d">▮</span> blokeret</div>`;
+        + `<div class="sm mut">${loading ? 'henter historik … · ' : ''}<span style="color:${OR}">━</span> målt fremløb (ud) · <span style="color:${BL}">━</span> retur (ind) · <b>━</b> mål i varmepumpen · ╌ planens timer frem · ┄ loft · <span style="color:#2e9e5b">╌</span> bund (gulvenes neutrale retur + 3) · <span style="color:${OR}">▬</span> kompressor kører · <span style="color:#d6453d">▮</span> blokeret</div>`;
     }
     // Søg laveste fremløb: status i klart sprog, mål/målt/loft, graf, lært pr. udetemperatur og »Sådan virker det«
     flowPanel(h, main, vm) {
@@ -1540,10 +1542,17 @@
           + `<div class="sm mut" style="margin-top:4px">Varmepumpen regulerer selv fremløbet til målet, så løftet over returen bestemmer effekten. Median af husets egne 5-minutters portioner i stabil drift${op['lært'] ? `, lært ${esc(when(op['lært']))}` : ''}. Økonomi: løftet, der giver 15 % over den laveste effekt, varmepumpen holder stabilt – lavere taber den, højere koster mere pr. kWh varme og giver flere afrimninger. Balance: midt imellem det og dens største effekt. Fremløbet følger returen op, til planens mål er nået; opstartsløft og stopværn gælder stadig.</div></details></div>`;
       }
       const pend = !fs.slukket && inVp != null && want != null && Math.abs(want - inVp) >= 1;
+      // Gulvenes neutrale retur: returen ved fordeleren, når gulvkredsen cirkulerer uden varme – bunden for målet er den + 3 °C
+      const nr = fs.neutral_retur, fd = fs.fordeler;
+      const nrSub = nr ? (nr.v != null ? `bund ${fmt(fs.bund, 0)} °C · målt ${esc(when(nr['målt']))}${nr.via ? ' (' + esc(nr.via) + ')' : ''}`
+        : nr.for_gammel ? `seneste ${fmt(nr.seneste, 1)} °C er over et døgn gammel – venter på en ny måling` : 'måles, når gulvkredsen har cirkuleret 10 min. uden varme') : '';
+      const fdTxt = fd && fd.ind != null ? `<br>fordeler ind / retur ${fmt(fd.ind, 1)} / ${fmt(fd.retur, 1)} °C${fd.uden_varme_min != null ? ` · <span class="amber">næsten ingen varme til gulvene i ${fd.uden_varme_min} min.</span>` : ''}` : '';
+      const nrBox = nr ? n3('Gulvenes neutrale retur', `${nr.v != null ? fmt(nr.v, 1) : '–'} °C`, nrSub + fdTxt) : '';
       const nums = `<div class="fsr">${n3('Mål i varmepumpen', `${fmt(fs.slukket || inVp == null ? want : inVp, 0)} °C`,
         fs.slukket ? 'ved næste start' : pend ? `→ ${fmt(want, 0)} °C${fs.mål_kl ? ` kl. ${fs.mål_kl}` : ''} · ${why}` : why)}`
         + `${n3('Målt ud / ind', `${fmt(ud, 1)} / ${fmt(ind, 1)} °C`, ud !== null && ind !== null ? `ΔT ${fmt(ud - ind, 1)} K` : '')}`
-        + `${n3('Loft', `${fmt(fs.loft, 0)} °C`, fs.mål != null && fs.loft != null && fs.loft > fs.mål ? `${fmt(fs.loft - fs.mål, 0)} °C over målet` : 'det lærte fremløb + margen')}</div>`;
+        + `${n3('Loft', `${fmt(fs.loft, 0)} °C`, fs.mål != null && fs.loft != null && fs.loft > fs.mål ? `${fmt(fs.loft - fs.mål, 0)} °C over målet` : 'det lærte fremløb + margen')}`
+        + `${nrBox}</div>`;
       const lært = Object.entries(fs.lært || {}).sort((a, b) => +a[0] - +b[0]).map(([k, v]) => `<tr><td>${String(+k).replace('-', '−')}…${String(+k + 5).replace('-', '−')} °C ude</td><td class="n"><b>${fmt(v, 0)} °C</b></td></tr>`).join('');
       const box = `<div class="b"><div class="pvh">Fremløb · søg laveste ${chip}</div>`
         + `<div style="margin:4px 0 6px;font-size:14px">${esc(fs.tekst || '')}</div>` + nums + this.flowChart(h, main, fs, f) + opBox
@@ -1559,6 +1568,8 @@
         + `• opvarmning: på vej mod planens fremløb holdes målet højst prioritetens løft over returen (økonomi og balance) og følger den op, mens gulvet varmes – komfort går direkte til målet. Dækker trinnets effekt ikke husets behov med en fjerdedel i margen, bestemmer rummene selv<br>`
         + `• forvarmning: kan flere timer ved søgningens mål ikke holde rummene gennem en blokering, hæver planen fremløbet – vist som »forvarmer«. Op til loftet på alle trin; derover afgør »Prioritet«, hvor meget af det opnåelige der købes (højst det fremløb, varmepumpens største effekt giver)<br>`
         + `• søgningen går aldrig over loftet: det fremløb, huset selv brugte ved udetemperaturen. Planen hæver selv over det efter »Prioritet«, når det hjælper rummene. Timer, hvor Varmemodel selv satte fremløbet, tæller ikke med i det lærte – ellers ville loftet lære af sig selv og falde. Beder et rum om mere, mens målet står ved loftet, vises »ved loftet«<br>`
+        + `• bund: målet går aldrig under gulvenes neutrale retur + 3 °C. Den neutrale retur er fordelerens retur, når gulvkredsen har cirkuleret mindst 10 min. uden at få varme (kompressoren står eller laver varmt vand) og ind og retur ligger inden for 0,3 °C – så er det gulvenes egen varme, der kommer tilbage. Under den køler vandet gulvene i stedet for at varme dem. Starten regnes også fra den, ikke fra varmepumpens egen føler, der efter stilstand viser vandet, der har stået koldt i udedelen<br>`
+        + `• +1 °C, når fordelerens ind − retur er under 0,3 °C i 20 min. under drift: gulvkredsen får næsten ingen varme<br>`
         + `• rummet, der bestemmer, er markeret med ◆ i rumlisten; pilen viser rummets tendens.</div></details></div>`;
       return `<div class="pv2">${box}${set}</div>`;
     }
